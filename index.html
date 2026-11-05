@@ -1,0 +1,3942 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Madyan | محرك بناء العادات المؤسسية</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Cairo (Arabic) & Plus Jakarta Sans (Bold Sans-Serif for Madyan Logo) -->
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@800;900&display=swap" rel="stylesheet">
+  <!-- React 18 & Babel Standalone -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Supabase JS Client v2 (Real PostgreSQL + Realtime Sync) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    body {
+      font-family: 'Cairo', sans-serif;
+      background-color: #F7F7F5;
+      color: #1C1917;
+      -webkit-font-smoothing: antialiased;
+    }
+    .madyan-logo {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .madyan-gradient {
+      background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%);
+    }
+    .timeline-line {
+      position: absolute;
+      right: 19px;
+      top: 32px;
+      bottom: -28px;
+      width: 2px;
+      border-right: 2px dashed #D6D3D1;
+      z-index: 0;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // ============================================================================
+    // 1. CONSTANTS & INITIAL DATABASE SEED
+    // ============================================================================
+    const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+    const SYSTEM_ANCHOR_DATE = new Date().getTime();
+
+    const INITIAL_STATE = {
+      systemConfig: {
+        availableCurriculumWeeks: [1, 2, 3, 4, 5, 6, 7, 8],
+        quotes: [
+          { id: 1, text: "الانضباط المؤسسي ليس قيداً، بل هو الجسر الذي يحول الأهداف الاستراتيجية إلى واقع يومي ملموس.", author: "منهجية Madyan" },
+          { id: 2, text: "التحضير الجيد قبل الاجتماع بـ 24 ساعة يختصر نصف وقت النقاش ويضاعف جودة القرار.", author: "إدارة العمليات" }
+        ],
+        taskDefinitions: {
+          lecture: {
+            title: "المحاضرة الأسبوعية (تعلم واختبر)",
+            subtitle: "مشاهدة المادة المعرفية المقررة وحل الاختبار القصير",
+            instructions: "شاهد الفيديو المسجل بالكامل بتركيز، ثم أجب عن الأسئلة بالأسفل. بمجرد اعتماد إجاباتك تُقفل المحاولة وتُرصد الدرجة.",
+            durationMinutes: 25,
+            badge: "تعلم مستمر"
+          },
+          agenda: {
+            title: "إرسال أجندة اللقاء",
+            subtitle: "تأطير وإرسال بنود الاجتماع قبل الموعد بـ 24 ساعة",
+            instructions: "جهّز النقاط الأربع الأساسية (التحديثات الإدارية، متابعة التوصيات، تسليم المهمات، البند الاستراتيجي) وأرسلها قبل الموعد بـ 24 ساعة.",
+            durationMinutes: 15,
+            badge: "قبل اللقاء بـ 24 ساعة"
+          },
+          attendance: {
+            title: "حضور اللقاء الأسبوعي",
+            subtitle: "الانضباط في الموعد المحدد والمشاركة الفعالة",
+            instructions: "التواجد في تمام الساعة المحددة لاجتماعك الأسبوعي وتأكيد البصمة الزمنية للحضور.",
+            durationMinutes: 90,
+            badge: "اللقاء الأسبوعي"
+          },
+          minutes: {
+            title: "توثيق محضر اللقاء",
+            subtitle: "اعتماد المخرجات والإسنادات خلال 24 ساعة من انتهاء الاجتماع",
+            instructions: "دوّن أهم القرارات المعتمدة والمهام المسندة مع مواعيد تسليمها خلال 24 ساعة كحد أقصى من انتهاء اللقاء.",
+            durationMinutes: 20,
+            badge: "خلال 24 ساعة بعد اللقاء"
+          }
+        }
+      },
+
+      bulletins: [
+        {
+          id: "bul_1",
+          title: "اعتماد سياسة تأطير أجندة الاجتماعات الأسبوعية",
+          content: "يرجى من كافة الكوادر الالتزام بإرسال أجندة اللقاء قبل 24 ساعة من الموعد المحدد لضمان كفاءة النقاش وجودة القرارات.",
+          category: "سياسة جديدة",
+          senderName: "د. طارق المنصور",
+          senderRole: "عضو المكتب التنفيذي",
+          createdAt: "منذ يومين • 10:30 صباحاً",
+          targetType: "all",
+          recipientIds: [],
+          acknowledgedBy: { "u_2": "أمس 04:15 مساءً" }
+        },
+        {
+          id: "bul_2",
+          title: "إطلاق المرحلة الثانية من مشروع التحول المؤسسي",
+          content: "تم اعتماد الخطة التنفيذية للربع القادم لوحدة التخطيط الاستراتيجي، ويرجى مراجعة مؤشرات الأداء المحدثة قبل اجتماع الثلاثاء.",
+          category: "تعميم مشروع",
+          senderName: "د. طارق المنصور",
+          senderRole: "عضو المكتب التنفيذي",
+          createdAt: "اليوم • 09:00 صباحاً",
+          targetType: "custom",
+          recipientIds: ["u_1"],
+          acknowledgedBy: {}
+        }
+      ],
+
+      weeklyCurriculums: {
+        default: {
+          lectureTitle: "منهجية التخطيط الأسبوعي وإدارة الأولويات",
+          lectureDesc: "كيف تبني إيقاع عمل مؤسسي مستدام يمنع تراكم المهام ويرفع كفاءة الاجتماعات.",
+          videoType: "mp4",
+          videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+          questions: [
+            {
+              id: "q1",
+              text: "ما هو التوقيت المعياري لإرسال أجندة اللقاء الأسبوعي قبل موعد الاجتماع؟",
+              options: ["قبل الاجتماع بساعة واحدة", "قبل الاجتماع بـ 24 ساعة على الأقل", "أثناء انعقاد الاجتماع", "بعد انتهاء الاجتماع"],
+              correctIndex: 1
+            },
+            {
+              id: "q2",
+              text: "ما الهدف الأساسي من توثيق محضر الاجتماع خلال 24 ساعة؟",
+              options: ["حفظ الأرشيف فقط", "تثبيت المخرجات المعتمدة والإسنادات الزمنية بوضوح", "زيادة عدد التقارير الورقية", "إلغاء الاجتماع القادم"],
+              correctIndex: 1
+            },
+            {
+              id: "q3",
+              text: "عند إنجاز محاضرة أسبوع سابق بعد انتهاء أسبوعها، كيف يتعامل النظام معها؟",
+              options: ["يرفض النظام فتحها نهائياً", "تُحتسب مكتملة في الموعد بـ 100%", "تُوسم كمكتملة متأخراً وتأخذ نصف السكور (50%)", "تحذف جميع نقاط الكادر"],
+              correctIndex: 2
+            }
+          ]
+        }
+      },
+
+      users: [
+        {
+          id: "u_admin",
+          username: "admin",
+          password: "admin123",
+          roleType: "admin",
+          name: "مدير النظام والـ HR",
+          jobTitle: "المدير التنفيذي للموارد البشرية",
+          unit: "الإدارة العليا"
+        },
+        {
+          id: "u_exec",
+          username: "exec",
+          password: "1234",
+          roleType: "executive",
+          name: "د. طارق المنصور",
+          jobTitle: "عضو المكتب التنفيذي",
+          unit: "المكتب التنفيذي"
+        },
+        {
+          id: "u_1",
+          username: "madyan",
+          password: "1234",
+          roleType: "cadre",
+          onboarded: true,
+          joinedAt: SYSTEM_ANCHOR_DATE - (4 * MS_PER_WEEK) - (2 * 24 * 3600 * 1000),
+          name: "أحمد المنصور",
+          jobTitle: "منسق وحدة التطوير",
+          unit: "وحدة التخطيط الاستراتيجي",
+          defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
+          weekOverrides: {},
+          tasksRecord: {
+            1: {
+              lecture: { status: "on_time", completedAt: "الأحد 08:30 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
+              agenda: { status: "on_time", completedAt: "الاثنين 06:15 مساءً", note: "تم إرسال الأجندة للمجموعة" },
+              attendance: { status: "on_time", completedAt: "الثلاثاء 07:05 مساءً" },
+              minutes: { status: "on_time", completedAt: "الأربعاء 03:20 مساءً" }
+            },
+            2: {
+              lecture: { status: "on_time", completedAt: "الاثنين 09:00 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
+              agenda: { status: "on_time", completedAt: "الاثنين 05:40 مساءً" },
+              attendance: { status: "on_time", completedAt: "الثلاثاء 07:00 مساءً" },
+              minutes: { status: "pending" }
+            },
+            3: {
+              lecture: { status: "late", completedAt: "الأسبوع 4 (متأخر)", quizSubmission: { score: 2, total: 3, answers: [1, 1, 1] } },
+              agenda: { status: "on_time", completedAt: "الاثنين 06:00 مساءً" },
+              attendance: { status: "on_time", completedAt: "الثلاثاء 07:02 مساءً" },
+              minutes: { status: "on_time", completedAt: "الأربعاء 04:10 مساءً" }
+            },
+            4: {
+              lecture: { status: "pending" },
+              agenda: { status: "on_time", completedAt: "الاثنين 06:30 مساءً" },
+              attendance: { status: "on_time", completedAt: "الثلاثاء 07:00 مساءً" },
+              minutes: { status: "pending" }
+            },
+            5: {
+              lecture: { status: "pending" },
+              agenda: { status: "on_time", completedAt: "الاثنين 06:45 مساءً" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            }
+          }
+        },
+        {
+          id: "u_2",
+          username: "sara",
+          password: "1234",
+          roleType: "cadre",
+          onboarded: false,
+          joinedAt: SYSTEM_ANCHOR_DATE - (2 * MS_PER_WEEK) - (1 * 24 * 3600 * 1000),
+          name: "سارة العتيبي",
+          jobTitle: "مسؤولة العمليات والجودة",
+          unit: "وحدة المتابعة والتنسيق",
+          defaultSchedule: { meetDay: 0, meetTime: "16:00", meetDuration: 60 },
+          weekOverrides: {},
+          tasksRecord: {
+            1: {
+              lecture: { status: "on_time", completedAt: "الأحد 02:00 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
+              agenda: { status: "on_time", completedAt: "السبت 03:30 مساءً" },
+              attendance: { status: "on_time", completedAt: "الأحد 04:00 مساءً" },
+              minutes: { status: "on_time", completedAt: "الاثنين 01:15 مساءً" }
+            },
+            2: {
+              lecture: { status: "on_time", completedAt: "الاثنين 07:00 مساءً", quizSubmission: { score: 2, total: 3, answers: [1, 0, 2] } },
+              agenda: { status: "on_time", completedAt: "السبت 03:00 مساءً" },
+              attendance: { status: "on_time", completedAt: "الأحد 04:05 مساءً" },
+              minutes: { status: "on_time", completedAt: "الاثنين 12:30 مساءً" }
+            },
+            3: {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            }
+          }
+        }
+      ]
+    };
+
+    // ============================================================================
+    // 2. HELPER & SCORING ENGINE FUNCTIONS
+    // ============================================================================
+    function calculateWeeksSinceJoin(joinedAtTimestamp) {
+      if (!joinedAtTimestamp) return 1;
+      const diffMs = Math.max(0, Date.now() - joinedAtTimestamp);
+      return Math.max(1, Math.ceil(diffMs / MS_PER_WEEK));
+    }
+
+    function formatDateAr(timestamp) {
+      const d = new Date(timestamp);
+      return `${d.getDate()} ${MONTHS_AR[d.getMonth()]} ${d.getFullYear()}`;
+    }
+
+    function getWeekDateRangeLabel(weekIndex, totalWeeks) {
+      const today = new Date();
+      const weeksAgo = totalWeeks - weekIndex;
+      const endOfWeek = new Date(today);
+      endOfWeek.setDate(today.getDate() - (weeksAgo * 7));
+      const startOfWeek = new Date(endOfWeek);
+      startOfWeek.setDate(endOfWeek.getDate() - 6);
+
+      const sDay = startOfWeek.getDate();
+      const eDay = endOfWeek.getDate();
+      const sMonth = MONTHS_AR[startOfWeek.getMonth()];
+      const eMonth = MONTHS_AR[endOfWeek.getMonth()];
+      return sMonth === eMonth ? `${sDay} - ${eDay} ${sMonth}` : `${sDay} ${sMonth} - ${eDay} ${eMonth}`;
+    }
+
+    function formatTimeAr(timeStr = "19:00") {
+      const [hStr, mStr] = timeStr.split(':');
+      let h = parseInt(hStr, 10);
+      const period = h >= 12 ? 'مساءً' : 'صباحاً';
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      return `${String(h12).padStart(2, '0')}:${mStr} ${period}`;
+    }
+
+    function computeWeekSchedule(sched, taskDefs) {
+      const meetDay = parseInt(sched.meetDay, 10);
+      const duration = parseInt(sched.meetDuration, 10);
+      const [h, m] = (sched.meetTime || "19:00").split(':').map(Number);
+      const agendaDay = (meetDay + 6) % 7;
+
+      const totalMinutes = h * 60 + m + duration;
+      const endDayOffset = Math.floor(totalMinutes / (24 * 60));
+      const endH = Math.floor((totalMinutes % (24 * 60)) / 60);
+      const endM = totalMinutes % 60;
+      const endTimeStr = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+      const minutesDay = (meetDay + endDayOffset + 1) % 7;
+
+      return {
+        lecture: {
+          dayName: 'طوال الأسبوع',
+          timeLabel: 'مرن حسب وقتك',
+          durationMinutes: taskDefs.lecture.durationMinutes,
+          badge: taskDefs.lecture.badge
+        },
+        agenda: {
+          dayName: DAYS_AR[agendaDay],
+          timeLabel: `قبل ${formatTimeAr(sched.meetTime)}`,
+          durationMinutes: taskDefs.agenda.durationMinutes,
+          badge: taskDefs.agenda.badge
+        },
+        attendance: {
+          dayName: DAYS_AR[meetDay],
+          timeLabel: `${formatTimeAr(sched.meetTime)} - ${formatTimeAr(endTimeStr)}`,
+          durationMinutes: duration || taskDefs.attendance.durationMinutes,
+          badge: taskDefs.attendance.badge
+        },
+        minutes: {
+          dayName: DAYS_AR[minutesDay],
+          timeLabel: `حتى ${formatTimeAr(endTimeStr)}`,
+          durationMinutes: taskDefs.minutes.durationMinutes,
+          badge: taskDefs.minutes.badge
+        }
+      };
+    }
+
+    function getTaskScorePoints(taskObj) {
+      if (!taskObj || taskObj.status === 'pending') return 0;
+      if (taskObj.status === 'on_time') return 100;
+      if (taskObj.status === 'late') return 50;
+      return 0;
+    }
+
+    function computeCadreMetrics(user) {
+      const totalWeeks = calculateWeeksSinceJoin(user.joinedAt);
+      let totalPossiblePoints = totalWeeks * 4 * 100;
+      let earnedPoints = 0;
+      let onTimeCount = 0;
+      let lateCount = 0;
+      let pendingCount = 0;
+      let quizScores = [];
+
+      const byTaskKey = {
+        lecture: { onTime: 0, late: 0, pending: 0 },
+        agenda: { onTime: 0, late: 0, pending: 0 },
+        attendance: { onTime: 0, late: 0, pending: 0 },
+        minutes: { onTime: 0, late: 0, pending: 0 }
+      };
+
+      for (let w = 1; w <= totalWeeks; w++) {
+        const wRec = (user.tasksRecord && user.tasksRecord[w]) || {};
+        ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
+          const t = wRec[k] || { status: 'pending' };
+          earnedPoints += getTaskScorePoints(t);
+          if (t.status === 'on_time') {
+            onTimeCount++;
+            byTaskKey[k].onTime++;
+          } else if (t.status === 'late') {
+            lateCount++;
+            byTaskKey[k].late++;
+          } else {
+            pendingCount++;
+            byTaskKey[k].pending++;
+          }
+          if (k === 'lecture' && t.quizSubmission) {
+            const qPct = Math.round((t.quizSubmission.score / t.quizSubmission.total) * 100);
+            quizScores.push(qPct);
+          }
+        });
+      }
+
+      const overallScorePct = totalPossiblePoints > 0 ? Math.round((earnedPoints / totalPossiblePoints) * 100) : 0;
+      const avgQuizPct = quizScores.length > 0 ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null;
+
+      return {
+        totalWeeks,
+        overallScorePct,
+        onTimeCount,
+        lateCount,
+        pendingCount,
+        totalTasksCount: totalWeeks * 4,
+        avgQuizPct,
+        byTaskKey
+      };
+    }
+
+    function getYoutubeEmbedUrl(url) {
+      if (!url) return "";
+      const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+      const match = url.match(regExp);
+      return (match && match[2].length === 11) ? `https://www.youtube.com/embed/${match[2]}` : url;
+    }
+
+    // ============================================================================
+    // 3. SHARED UI COMPONENTS & ERROR BOUNDARY
+    // ============================================================================
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, errorMsg: "" };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, errorMsg: error ? String(error.message || error) : "خطأ غير متوقع" };
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="min-h-screen flex items-center justify-center p-4 bg-[#F7F7F5]" dir="rtl">
+              <div className="bg-white rounded-3xl max-w-md w-full p-7 shadow-xl border border-stone-200 text-center space-y-4">
+                <div className="text-3xl">🛠️</div>
+                <h2 className="text-lg font-black text-stone-900">تم رصد تعارض في البيانات المخزنة</h2>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  حدث تعارض بسيط مع نسخة سابقة محفوظة في المتصفح. اضغط الزر بالأسفل لتحديث الذاكرة وتشغيل المنصة فوراً:
+                </p>
+                <button
+                  onClick={() => {
+                    localStorage.removeItem("MADYAN_DB_V6_SAFE");
+                    window.location.reload();
+                  }}
+                  className="w-full py-3 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+                >
+                  إعادة تهيئة البيانات وإصلاح الصفحة فوراً ↻
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    function normalizeDb(raw) {
+      if (!raw || typeof raw !== "object") return INITIAL_STATE;
+      const safeSystemConfig = {
+        ...INITIAL_STATE.systemConfig,
+        ...(raw.systemConfig || {}),
+        availableCurriculumWeeks: Array.isArray(raw.systemConfig?.availableCurriculumWeeks)
+          ? raw.systemConfig.availableCurriculumWeeks
+          : INITIAL_STATE.systemConfig.availableCurriculumWeeks,
+        quotes: Array.isArray(raw.systemConfig?.quotes)
+          ? raw.systemConfig.quotes
+          : INITIAL_STATE.systemConfig.quotes,
+        taskDefinitions: {
+          ...INITIAL_STATE.systemConfig.taskDefinitions,
+          ...(raw.systemConfig?.taskDefinitions || {})
+        }
+      };
+
+      const safeBulletins = Array.isArray(raw.bulletins) ? raw.bulletins : INITIAL_STATE.bulletins;
+      const safeCurriculums = {
+        ...INITIAL_STATE.weeklyCurriculums,
+        ...(raw.weeklyCurriculums || {})
+      };
+
+      const rawUsers = Array.isArray(raw.users) && raw.users.length > 0 ? raw.users : INITIAL_STATE.users;
+      const hasExec = rawUsers.some(u => u.roleType === "executive");
+      const mergedUsers = hasExec
+        ? rawUsers
+        : [...rawUsers, INITIAL_STATE.users.find(u => u.roleType === "executive")].filter(Boolean);
+
+      const safeUsers = mergedUsers.map(u => {
+        if (u.roleType !== "cadre") return u;
+        return {
+          ...u,
+          joinedAt: u.joinedAt || Date.now(),
+          defaultSchedule: {
+            meetDay: u.defaultSchedule?.meetDay ?? 2,
+            meetTime: u.defaultSchedule?.meetTime || "19:00",
+            meetDuration: u.defaultSchedule?.meetDuration || 90
+          },
+          weekOverrides: u.weekOverrides || {},
+          tasksRecord: u.tasksRecord || {}
+        };
+      });
+
+      return {
+        systemConfig: safeSystemConfig,
+        bulletins: safeBulletins,
+        weeklyCurriculums: safeCurriculums,
+        users: safeUsers
+      };
+    }
+
+    function MadyanWordmark({ size = "text-3xl" }) {
+      return (
+        <div className="flex items-center gap-2 select-none" dir="ltr">
+          <span className={`madyan-logo ${size} tracking-tight`}>Madyan</span>
+        </div>
+      );
+    }
+
+    function ModalContainer({ isOpen, onClose, badge, title, children, maxWidth = "max-w-lg" }) {
+      if (!isOpen) return null;
+      return (
+        <div className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`bg-white rounded-[32px] ${maxWidth} w-full p-6 sm:p-7 shadow-2xl border border-stone-100 max-h-[92vh] overflow-y-auto relative`}>
+            <div className="flex items-center justify-between pb-4 mb-4 border-b border-stone-100">
+              <div>
+                {badge && <span className="text-xs font-bold text-orange-600 block">{badge}</span>}
+                <h3 className="text-lg font-black text-stone-900">{title}</h3>
+              </div>
+              <button
+                onClick={onClose}
+                title="إغلاق"
+                className="w-9 h-9 rounded-full bg-stone-100 text-stone-600 flex items-center justify-center font-bold hover:bg-stone-200 transition"
+              >
+                ✕
+              </button>
+            </div>
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 3.5 SUPABASE & NETLIFY CLOUD SYNC ENGINE
+    // ============================================================================
+    const CLOUD_CONFIG_KEY = "MADYAN_SUPABASE_CLOUD_CONFIG_V1";
+    const SQL_SCHEMA_SNIPPET = `-- شغل هذا الكود في Supabase -> SQL Editor -> New Query
+CREATE TABLE IF NOT EXISTS public.madyan_app_state (
+  id TEXT PRIMARY KEY DEFAULT 'global',
+  state_data JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by TEXT DEFAULT 'system'
+);
+ALTER TABLE public.madyan_app_state ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read/write on madyan_app_state" ON public.madyan_app_state;
+CREATE POLICY "Allow public read/write on madyan_app_state"
+  ON public.madyan_app_state FOR ALL USING (true) WITH CHECK (true);`;
+
+    function loadCloudConfig() {
+      try {
+        const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.supabaseUrl && parsed.supabaseAnonKey) return parsed;
+        }
+      } catch (e) {}
+      return { supabaseUrl: "", supabaseAnonKey: "" };
+    }
+
+    function saveCloudConfigToStorage(url, key) {
+      const cfg = {
+        supabaseUrl: (url || "").trim().replace(/\/$/, ""),
+        supabaseAnonKey: (key || "").trim()
+      };
+      localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(cfg));
+      return cfg;
+    }
+
+    // ============================================================================
+    // 4. MAIN APPLICATION COMPONENT
+    // ============================================================================
+    function App() {
+      const [db, setDb] = useState(() => {
+        try {
+          const saved = localStorage.getItem("MADYAN_DB_V6_SAFE");
+          if (saved) return normalizeDb(JSON.parse(saved));
+        } catch (e) {}
+        return normalizeDb(INITIAL_STATE);
+      });
+
+      const [currentUserId, setCurrentUserId] = useState(null);
+      const [toastMsg, setToastMsg] = useState(null);
+      const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
+      const [cloudStatus, setCloudStatus] = useState("checking"); // 'checking' | 'connected' | 'local_only' | 'error'
+      const [cloudError, setCloudError] = useState("");
+      const [lastSyncAt, setLastSyncAt] = useState(null);
+      const [cloudModalOpen, setCloudModalOpen] = useState(false);
+      const isRemoteUpdateRef = React.useRef(false);
+      const supabaseClientRef = React.useRef(null);
+      const initialPullDoneRef = React.useRef(false);
+
+      // تلقائياً: فحص إعدادات Netlify Serverless API (/api/config) عند فتح الموقع
+      useEffect(() => {
+        let cancelled = false;
+        async function discoverServerlessConfig() {
+          try {
+            const res = await fetch("/api/config", { method: "GET" });
+            if (res.ok) {
+              const data = await res.json();
+              if (!cancelled && data && data.configured && data.supabaseUrl && data.supabaseAnonKey) {
+                const merged = saveCloudConfigToStorage(data.supabaseUrl, data.supabaseAnonKey);
+                setCloudConfig(merged);
+              }
+            }
+          } catch (e) {}
+        }
+        discoverServerlessConfig();
+        return () => { cancelled = true; };
+      }, []);
+
+      // الاتصال بـ Supabase PostgreSQL ومزامنة البيانات + Realtime WebSocket
+      useEffect(() => {
+        if (!cloudConfig.supabaseUrl || !cloudConfig.supabaseAnonKey || !window.supabase) {
+          setCloudStatus("local_only");
+          return;
+        }
+
+        let channel = null;
+        let active = true;
+        setCloudStatus("checking");
+        setCloudError("");
+
+        try {
+          const client = window.supabase.createClient(cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey);
+          supabaseClientRef.current = client;
+
+          async function initSync() {
+            const { data, error } = await client
+              .from("madyan_app_state")
+              .select("*")
+              .eq("id", "global")
+              .maybeSingle();
+
+            if (!active) return;
+
+            if (error) {
+              setCloudStatus("error");
+              setCloudError(error.message || "تعذر القراءة من جدول madyan_app_state. تأكد من تشغيل ملف schema.sql في Supabase.");
+              return;
+            }
+
+            if (data && data.state_data) {
+              isRemoteUpdateRef.current = true;
+              setDb(normalizeDb(data.state_data));
+              setLastSyncAt(new Date().toLocaleTimeString("ar-EG"));
+              initialPullDoneRef.current = true;
+              setCloudStatus("connected");
+            } else {
+              // الجدول فارغ: نرفع البيانات الابتدائية لقاعدة البيانات
+              const { error: upsertErr } = await client
+                .from("madyan_app_state")
+                .upsert({
+                  id: "global",
+                  state_data: db,
+                  updated_at: new Date().toISOString(),
+                  updated_by: "initial_seed"
+                });
+              if (upsertErr) {
+                setCloudStatus("error");
+                setCloudError(upsertErr.message);
+                return;
+              }
+              initialPullDoneRef.current = true;
+              setLastSyncAt(new Date().toLocaleTimeString("ar-EG"));
+              setCloudStatus("connected");
+            }
+          }
+
+          initSync();
+
+          // الاشتراك اللحظي (Supabase Realtime)
+          channel = client
+            .channel("madyan_global_sync")
+            .on(
+              "postgres_changes",
+              { event: "*", schema: "public", table: "madyan_app_state", filter: "id=eq.global" },
+              (payload) => {
+                if (payload.new && payload.new.state_data) {
+                  isRemoteUpdateRef.current = true;
+                  setDb(normalizeDb(payload.new.state_data));
+                  setLastSyncAt(new Date().toLocaleTimeString("ar-EG"));
+                }
+              }
+            )
+            .subscribe();
+        } catch (err) {
+          setCloudStatus("error");
+          setCloudError(String(err.message || err));
+        }
+
+        return () => {
+          active = false;
+          if (channel && supabaseClientRef.current) {
+            supabaseClientRef.current.removeChannel(channel);
+          }
+        };
+      }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey]);
+
+      // حفظ أي تعديل في localStorage + دفعه تلقائياً إلى Supabase PostgreSQL و Netlify API
+      useEffect(() => {
+        try {
+          localStorage.setItem("MADYAN_DB_V6_SAFE", JSON.stringify(db));
+        } catch (e) {}
+
+        if (isRemoteUpdateRef.current) {
+          isRemoteUpdateRef.current = false;
+          return;
+        }
+
+        if (cloudStatus === "connected" && supabaseClientRef.current && initialPullDoneRef.current) {
+          const timer = setTimeout(async () => {
+            try {
+              const { error } = await supabaseClientRef.current
+                .from("madyan_app_state")
+                .upsert({
+                  id: "global",
+                  state_data: db,
+                  updated_at: new Date().toISOString(),
+                  updated_by: currentUserId || "anonymous"
+                });
+              if (!error) {
+                setLastSyncAt(new Date().toLocaleTimeString("ar-EG"));
+              }
+            } catch (e) {}
+          }, 250);
+          return () => clearTimeout(timer);
+        }
+      }, [db, cloudStatus, currentUserId]);
+
+      const showToast = (msg) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(null), 3200);
+      };
+
+      const currentUser = useMemo(() => {
+        return db.users.find(u => u.id === currentUserId) || null;
+      }, [db.users, currentUserId]);
+
+      const updateUserRecord = (userId, updaterFn) => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => u.id === userId ? updaterFn(u) : u)
+        }));
+      };
+
+      const isUsernameTaken = (newUsername, ignoreUserId) => {
+        const clean = newUsername.trim().toLowerCase();
+        return db.users.some(u => u.id !== ignoreUserId && u.username.toLowerCase() === clean);
+      };
+
+      // تأكيد استيعاب وقراءة التعميم الإداري (One-Way Acknowledgment)
+      const acknowledgeBulletin = (bulletinId, userId) => {
+        const now = new Date();
+        const stamp = `اليوم ${formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`)}`;
+        setDb(prev => ({
+          ...prev,
+          bulletins: (prev.bulletins || []).map(b => {
+            if (b.id !== bulletinId) return b;
+            return {
+              ...b,
+              acknowledgedBy: {
+                ...(b.acknowledgedBy || {}),
+                [userId]: stamp
+              }
+            };
+          })
+        }));
+        showToast("تم تسجيل الاطلاع والاستيعاب للتعميم الإداري ✓");
+      };
+
+      const resetDemoData = () => {
+        localStorage.removeItem("MADYAN_DB_V6_SAFE");
+        setDb(normalizeDb(INITIAL_STATE));
+        setCurrentUserId(null);
+        showToast("تمت استعادة البيانات الافتراضية للنظام بنجاح");
+      };
+
+      return (
+        <div className="min-h-screen pb-20">
+          {toastMsg && (
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-stone-900 text-white text-xs font-bold px-5 py-3 rounded-2xl shadow-xl border border-stone-700 animate-bounce">
+              {toastMsg}
+            </div>
+          )}
+
+          {!currentUser ? (
+            <LoginView
+              users={db.users}
+              onLoginSuccess={(user) => setCurrentUserId(user.id)}
+              onResetDemo={resetDemoData}
+            />
+          ) : currentUser.roleType === "admin" ? (
+            <AdminPortal
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+            />
+          ) : currentUser.roleType === "executive" ? (
+            <ExecutivePortal
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+            />
+          ) : (
+            <CadrePortal
+              db={db}
+              currentUser={currentUser}
+              updateUserRecord={updateUserRecord}
+              isUsernameTaken={isUsernameTaken}
+              onAcknowledgeBulletin={acknowledgeBulletin}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+            />
+          )}
+
+          {/* شريط الحالة السحابية العائم (Supabase + Netlify Full-Stack Status) */}
+          <div className="fixed bottom-4 left-4 z-40 flex items-center gap-2">
+            <button
+              onClick={() => setCloudModalOpen(true)}
+              className={`px-3.5 py-2 rounded-2xl text-xs font-black shadow-lg border flex items-center gap-2 transition ${
+                cloudStatus === "connected"
+                  ? "bg-emerald-950/95 text-emerald-100 border-emerald-700 hover:bg-emerald-900"
+                  : cloudStatus === "error"
+                  ? "bg-rose-950/95 text-rose-100 border-rose-700 hover:bg-rose-900"
+                  : "bg-stone-900/95 text-white border-stone-700 hover:bg-stone-800"
+              }`}
+            >
+              <span className={`w-2.5 h-2.5 rounded-full ${
+                cloudStatus === "connected"
+                  ? "bg-emerald-400 animate-pulse"
+                  : cloudStatus === "error"
+                  ? "bg-rose-400"
+                  : "bg-amber-400"
+              }`} />
+              <span>
+                {cloudStatus === "connected"
+                  ? `☁️ متصل بـ Supabase لحظياً ${lastSyncAt ? `(${lastSyncAt})` : ""}`
+                  : cloudStatus === "error"
+                  ? "⚠️ تنبيه اتصال Supabase (اضغط للإصلاح)"
+                  : "☁️ إعداد الربط السحابي (Supabase / Netlify)"}
+              </span>
+            </button>
+          </div>
+
+          <CloudSetupModal
+            isOpen={cloudModalOpen}
+            onClose={() => setCloudModalOpen(false)}
+            cloudConfig={cloudConfig}
+            cloudStatus={cloudStatus}
+            cloudError={cloudError}
+            lastSyncAt={lastSyncAt}
+            onSaveConfig={(url, key) => {
+              const saved = saveCloudConfigToStorage(url, key);
+              initialPullDoneRef.current = false;
+              setCloudConfig(saved);
+              showToast("تم حفظ بيانات الاتصال بـ Supabase وجاري المزامنة ☁️");
+            }}
+            onDisconnect={() => {
+              localStorage.removeItem(CLOUD_CONFIG_KEY);
+              supabaseClientRef.current = null;
+              initialPullDoneRef.current = false;
+              setCloudConfig({ supabaseUrl: "", supabaseAnonKey: "" });
+              setCloudStatus("local_only");
+              showToast("تم فصل الاتصال السحابي والعودة للوضع المحلي");
+            }}
+            showToast={showToast}
+          />
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 5. LOGIN SCREEN
+    // ============================================================================
+    function LoginView({ users, onLoginSuccess, onResetDemo }) {
+      const [username, setUsername] = useState("madyan");
+      const [password, setPassword] = useState("1234");
+      const [error, setError] = useState("");
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        const found = users.find(
+          u => u.username.toLowerCase() === username.trim().toLowerCase() && u.password === password.trim()
+        );
+        if (!found) {
+          setError("اسم المستخدم أو كلمة المرور غير صحيحة. (الحسابات تُمنح حصرياً من إدارة Madyan)");
+          return;
+        }
+        setError("");
+        onLoginSuccess(found);
+      };
+
+      const quickFill = (u, p) => {
+        setUsername(u);
+        setPassword(p);
+        const found = users.find(
+          item => item.username.toLowerCase() === u.toLowerCase() && item.password === p
+        );
+        if (found) onLoginSuccess(found);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 bg-[#F7F7F5]">
+          <div className="bg-white rounded-[32px] max-w-md w-full p-7 sm:p-9 shadow-xl border border-stone-200/80">
+            <div className="flex flex-col items-center text-center mb-7">
+              <MadyanWordmark size="text-4xl sm:text-5xl" />
+              <span className="text-[11px] font-bold tracking-widest text-stone-400 uppercase mt-1">
+                Habit-Building Engine
+              </span>
+              <p className="text-xs text-stone-500 mt-2">
+                منصة بناء العادات المؤسسية • الدخول حصري للحسابات المعتمدة
+              </p>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1.5">اسم المستخدم (Username)</label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1.5">كلمة المرور (Password)</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
+                  required
+                />
+              </div>
+
+              {error && (
+                <div className="text-xs font-bold text-rose-600 bg-rose-50 px-3.5 py-2.5 rounded-xl border border-rose-200">
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-sm font-black shadow-lg shadow-orange-500/20 hover:opacity-95 transition"
+              >
+                تسجيل الدخول ←
+              </button>
+            </form>
+
+            <div className="mt-6 pt-5 border-t border-stone-100 space-y-2.5">
+              <div className="text-[11px] font-bold text-stone-400 text-center">
+                بوابات تجريبية سريعة (اضغط للدخول المباشر):
+              </div>
+
+              <button
+                onClick={() => quickFill("exec", "1234")}
+                className="w-full p-3 rounded-2xl bg-gradient-to-l from-orange-600 to-amber-500 text-white hover:opacity-95 text-right transition flex items-center justify-between shadow-md shadow-orange-500/15"
+              >
+                <div>
+                  <div className="text-xs font-black">🏛️ بوابة عضو المكتب التنفيذي (exec)</div>
+                  <div className="text-[10px] text-orange-50 mt-0.5">إصدار التعميمات والنشرة الإدارية • تحديد المستلمين • متابعة الاستيعاب</div>
+                </div>
+                <span className="text-xs font-black bg-white/20 px-2.5 py-1 rounded-lg">دخول تنفيذي</span>
+              </button>
+
+              <button
+                onClick={() => quickFill("admin", "admin123")}
+                className="w-full p-3 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 text-right transition flex items-center justify-between"
+              >
+                <div>
+                  <div className="text-xs font-black">🛡️ بوابة المدير والـ HR (admin)</div>
+                  <div className="text-[10px] text-stone-300 mt-0.5">إعداد المحاضرات والاختبارات • توليد اليوزرات • الداشبورد</div>
+                </div>
+                <span className="text-xs font-bold bg-white/10 px-2.5 py-1 rounded-lg">دخول كمدير</span>
+              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => quickFill("madyan", "1234")}
+                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 hover:border-orange-300 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-800">👤 كادر: madyan</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">لديه تعميمات + 5 أسابيع</div>
+                </button>
+                <button
+                  onClick={() => quickFill("sara", "1234")}
+                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 hover:border-orange-300 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-800">👤 كادر جديد: sara</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">أون بوردينج + 3 أسابيع</div>
+                </button>
+              </div>
+
+              <div className="pt-2 text-center">
+                <button onClick={onResetDemo} className="text-[11px] text-stone-400 hover:text-stone-600 underline">
+                  إعادة ضبط بيانات المحاكاة لحالتها الأصلية
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 6. CADRE PORTAL COMPONENT (With Administrative Bulletin Feed & Archive)
+    // ============================================================================
+    function CadrePortal({ db, currentUser, updateUserRecord, isUsernameTaken, onAcknowledgeBulletin, onLogout, showToast }) {
+      const totalWeeks = useMemo(() => calculateWeeksSinceJoin(currentUser.joinedAt), [currentUser.joinedAt]);
+      const [selectedWeek, setSelectedWeek] = useState(totalWeeks);
+      const [showOnboarding, setShowOnboarding] = useState(!currentUser.onboarded);
+      const [settingsModalScope, setSettingsModalScope] = useState(null);
+      const [lectureModalOpen, setLectureModalOpen] = useState(false);
+      const [noteModalTaskKey, setNoteModalTaskKey] = useState(null);
+      const [bulletinArchiveOpen, setBulletinArchiveOpen] = useState(false);
+
+      useEffect(() => {
+        let needsInit = false;
+        const currentRec = currentUser.tasksRecord || {};
+        const updatedRec = { ...currentRec };
+        for (let w = 1; w <= totalWeeks; w++) {
+          if (!updatedRec[w]) {
+            needsInit = true;
+            updatedRec[w] = {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            };
+          }
+        }
+        if (needsInit) {
+          updateUserRecord(currentUser.id, u => ({ ...u, tasksRecord: updatedRec }));
+        }
+      }, [totalWeeks, currentUser.id]);
+
+      // فلترة النشرة الإدارية بحيث يرى الكادر فقط الرسائل الموجهة للجميع أو الموجهة له شخصياً
+      const myBulletins = useMemo(() => {
+        const list = db.bulletins || [];
+        return list.filter(b => b.targetType === "all" || (b.recipientIds || []).includes(currentUser.id));
+      }, [db.bulletins, currentUser.id]);
+
+      const unreadBulletins = useMemo(() => {
+        return myBulletins.filter(b => !(b.acknowledgedBy && b.acknowledgedBy[currentUser.id]));
+      }, [myBulletins, currentUser.id]);
+
+      const isPastWeek = selectedWeek < totalWeeks;
+      const activeSched = (currentUser.weekOverrides && currentUser.weekOverrides[selectedWeek]) || currentUser.defaultSchedule;
+      const computedSched = computeWeekSchedule(activeSched, db.systemConfig.taskDefinitions);
+      const weekRecord = (currentUser.tasksRecord && currentUser.tasksRecord[selectedWeek]) || {
+        lecture: { status: "pending" },
+        agenda: { status: "pending" },
+        attendance: { status: "pending" },
+        minutes: { status: "pending" }
+      };
+
+      const metrics = useMemo(() => computeCadreMetrics(currentUser), [currentUser]);
+      const activeCurriculum = db.weeklyCurriculums[selectedWeek] || db.weeklyCurriculums.default;
+      const randomQuote = db.systemConfig.quotes[selectedWeek % Math.max(1, db.systemConfig.quotes.length)] || db.systemConfig.quotes[0];
+
+      const handleTaskAction = (taskKey) => {
+        if (taskKey === "lecture") {
+          setLectureModalOpen(true);
+          return;
+        }
+        if (isPastWeek) {
+          showToast("🔒 لا يمكن تعديل حالة هذه المهمة لأن الأسبوع قد انتهى بالفعل.");
+          return;
+        }
+
+        const currentStatus = weekRecord[taskKey]?.status || "pending";
+        const nextStatus = currentStatus === "pending" ? "on_time" : "pending";
+        const now = new Date();
+        const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+
+        updateUserRecord(currentUser.id, u => ({
+          ...u,
+          tasksRecord: {
+            ...u.tasksRecord,
+            [selectedWeek]: {
+              ...u.tasksRecord[selectedWeek],
+              [taskKey]: {
+                ...u.tasksRecord[selectedWeek][taskKey],
+                status: nextStatus,
+                completedAt: nextStatus === "on_time" ? `اليوم ${timeFormatted}` : null
+              }
+            }
+          }
+        }));
+      };
+
+      const weekStats = useMemo(() => {
+        let completedCount = 0;
+        let weekPoints = 0;
+        ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
+          const st = weekRecord[k]?.status || 'pending';
+          if (st !== 'pending') completedCount++;
+          weekPoints += getTaskScorePoints(weekRecord[k]);
+        });
+        return {
+          completedCount,
+          weekScorePct: Math.round((weekPoints / 400) * 100)
+        };
+      }, [weekRecord]);
+
+      const getCategoryBadgeStyle = (cat) => {
+        switch (cat) {
+          case "توجيه عاجل": return "bg-rose-100 text-rose-800 border-rose-200";
+          case "سياسة جديدة": return "bg-orange-100 text-orange-800 border-orange-200";
+          case "تعميم مشروع": return "bg-amber-100 text-amber-800 border-amber-200";
+          default: return "bg-sky-100 text-sky-800 border-sky-200";
+        }
+      };
+
+      return (
+        <div>
+          <header className="bg-white/90 backdrop-blur-md border-b border-stone-200/80 sticky top-0 z-30">
+            <div className="max-w-2xl mx-auto px-4 py-3.5 flex items-center justify-between">
+              <MadyanWordmark size="text-2xl sm:text-3xl" />
+
+              <div className="flex items-center gap-2">
+                {/* زر سريع لفتح سجل النشرة الإدارية */}
+                <button
+                  onClick={() => setBulletinArchiveOpen(true)}
+                  className="relative p-2.5 rounded-2xl bg-orange-50 text-orange-800 hover:bg-orange-100 border border-orange-200/80 transition flex items-center gap-1.5 text-xs font-black"
+                >
+                  <span>📢</span>
+                  <span className="hidden sm:inline">النشرة الإدارية</span>
+                  {unreadBulletins.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse">
+                      {unreadBulletins.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setSettingsModalScope("global")}
+                  className="p-2.5 rounded-2xl bg-stone-100 text-stone-700 hover:bg-stone-200 transition flex items-center gap-1.5 text-xs font-bold"
+                >
+                  <span>⚙️</span>
+                  <span className="hidden sm:inline">الإعدادات</span>
+                </button>
+                <button
+                  onClick={onLogout}
+                  className="p-2.5 rounded-2xl bg-stone-100 text-stone-500 hover:bg-rose-50 hover:text-rose-600 transition text-xs font-bold"
+                >
+                  خروج
+                </button>
+                <div className="flex items-center gap-2.5 pr-2 border-r border-stone-200">
+                  <div className="text-left hidden sm:block">
+                    <div className="text-sm font-bold text-stone-800">{currentUser.name}</div>
+                    <div className="text-[11px] text-stone-500">@{currentUser.username} • {currentUser.jobTitle}</div>
+                  </div>
+                  <div className="w-10 h-10 rounded-full madyan-gradient text-white font-black flex items-center justify-center text-sm shadow-sm">
+                    {currentUser.name.slice(0, 2)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-2xl mx-auto px-4 pt-6 space-y-5">
+
+            {/* ==================================================================== */}
+            {/* قسم النشرة الإدارية (One-Way Administrative Bulletin Widget) */}
+            {/* ==================================================================== */}
+            <div className={`rounded-3xl p-5 shadow-sm border transition space-y-3.5 ${
+              unreadBulletins.length > 0
+                ? "bg-gradient-to-br from-orange-50/90 via-white to-amber-50/60 border-orange-300 ring-2 ring-orange-100"
+                : "bg-white border-stone-200/80"
+            }`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-9 h-9 rounded-2xl madyan-gradient text-white flex items-center justify-center text-base shadow-sm">
+                    📢
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm sm:text-base font-black text-stone-900">النشرة الإدارية والتعميمات</h2>
+                      {unreadBulletins.length > 0 ? (
+                        <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-rose-600 text-white">
+                          {unreadBulletins.length} جديد مطلوب استيعابه
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          ✓ تم استيعاب كافة التعميمات
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-stone-500">
+                      تعميمات المكتب التنفيذي والسياسات اللحظية الموجهة لك (اتجاه واحد • One-Way)
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setBulletinArchiveOpen(true)}
+                  className="text-xs font-bold px-3.5 py-2 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 transition flex items-center gap-1.5"
+                >
+                  <span>📂</span>
+                  <span>سجل الرسائل السابقة ({myBulletins.length})</span>
+                </button>
+              </div>
+
+              {/* عرض التعميمات غير المقروءة بشكل بارز أو آخر تعميم تم استيعابه */}
+              {unreadBulletins.length > 0 ? (
+                <div className="space-y-3 pt-1">
+                  {unreadBulletins.map(bul => (
+                    <div
+                      key={bul.id}
+                      className="p-4 rounded-2xl bg-white border-2 border-orange-300/90 shadow-sm space-y-2.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`}>
+                            {bul.category}
+                          </span>
+                          <span className="text-[11px] font-bold text-stone-600">
+                            🏛️ {bul.senderName} ({bul.senderRole})
+                          </span>
+                          {bul.targetType === "custom" && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                              🎯 موجه لك بشكل مخصص
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-semibold text-stone-400">{bul.createdAt}</span>
+                      </div>
+
+                      <h3 className="text-sm sm:text-base font-black text-stone-900">{bul.title}</h3>
+                      <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">{bul.content}</p>
+
+                      <div className="pt-1 flex items-center justify-between gap-2 border-t border-stone-100">
+                        <span className="text-[10px] font-bold text-orange-700">
+                          ⚡ يرجى قراءة التعميم بدقة وتأكيد الاستيعاب
+                        </span>
+                        <button
+                          onClick={() => onAcknowledgeBulletin(bul.id, currentUser.id)}
+                          className="px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95 transition"
+                        >
+                          تم الاطلاع والاستيعاب ✓
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : myBulletins.length > 0 ? (
+                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-emerald-600 font-black">✓</span>
+                    <span className="text-stone-500">آخر تعميم مستوعب:</span>
+                    <strong className="text-stone-800">{myBulletins[0].title}</strong>
+                    <span className="text-[11px] text-stone-400">({myBulletins[0].createdAt})</span>
+                  </div>
+                  <button
+                    onClick={() => setBulletinArchiveOpen(true)}
+                    className="text-orange-600 font-bold hover:underline text-[11px]"
+                  >
+                    قراءة التفاصيل ←
+                  </button>
+                </div>
+              ) : (
+                <div className="text-xs text-stone-400 text-center py-2">
+                  لا توجد تعميمات إدارية موجهة لك حالياً.
+                </div>
+              )}
+            </div>
+
+            {/* بطاقة البروفايل والملخص الزمني */}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200/60">
+                      {currentUser.unit}
+                    </span>
+                    <span className="text-[11px] font-bold text-stone-400 bg-stone-100 px-2.5 py-0.5 rounded-full">
+                      ⚡ مسجل تلقائياً منذ: {formatDateAr(currentUser.joinedAt)} ({totalWeeks} أسابيع)
+                    </span>
+                    {currentUser.weekOverrides?.[selectedWeek] && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                        جدول مخصص لهذا الأسبوع
+                      </span>
+                    )}
+                  </div>
+                  <h1 className="text-xl font-black text-stone-800 mt-2">مهماتك الأسبوعية</h1>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    اجتماع الأسبوع {selectedWeek}: يوم {DAYS_AR[activeSched.meetDay]} الساعة {formatTimeAr(activeSched.meetTime)} ({activeSched.meetDuration} دقيقة)
+                  </p>
+                </div>
+
+                {!isPastWeek && (
+                  <button
+                    onClick={() => setSettingsModalScope("week")}
+                    className="text-xs font-bold px-3.5 py-2.5 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 transition flex items-center gap-1.5"
+                  >
+                    <span>📅</span>
+                    <span>تخصيص مواعيد الأسبوع {selectedWeek}</span>
+                  </button>
+                )}
+              </div>
+
+              {isPastWeek && (
+                <div className="rounded-2xl bg-amber-50 border border-amber-200/90 px-4 py-3 text-xs text-amber-900 flex items-center justify-between gap-2">
+                  <div>
+                    <strong>🔒 أسبوع منتهٍ (الأسبوع {selectedWeek}):</strong> تم إغلاق تعديل مهمات هذا الأسبوع، باستثناء <strong>المحاضرة الأسبوعية</strong> في حال لم تنجزها بعد (تُحتسب متأخرة بـ 50% من السكور).
+                  </div>
+                  <button
+                    onClick={() => setSelectedWeek(totalWeeks)}
+                    className="flex-shrink-0 px-3 py-1.5 rounded-xl bg-amber-900 text-white font-bold text-[11px]"
+                  >
+                    الأسبوع الحالي ↩
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+              <div className="sm:col-span-7 bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs text-stone-400 font-semibold">
+                  <span>{isPastWeek ? `سكور الأسبوع ${selectedWeek} (مغلق)` : `سكور الأسبوع الحالي (${selectedWeek})`}</span>
+                  <span className="text-stone-700 font-bold">{weekStats.completedCount}/4 مكتمل</span>
+                </div>
+                <div className="flex items-center justify-between mt-4">
+                  <div className="text-5xl sm:text-6xl font-black tracking-tight text-stone-900">
+                    {weekStats.weekScorePct}%
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <div className="grid grid-cols-4 gap-2">
+                      {Array.from({ length: Math.min(4, totalWeeks) }, (_, idx) => {
+                        const wNum = totalWeeks - Math.min(4, totalWeeks) + 1 + idx;
+                        const wRec = currentUser.tasksRecord?.[wNum] || {};
+                        return ['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                          const st = wRec[k]?.status || 'pending';
+                          return (
+                            <div
+                              key={`${wNum}_${k}`}
+                              title={`الأسبوع ${wNum} - ${st === 'on_time' ? 'في الموعد' : st === 'late' ? 'متأخر' : 'غير منجز'}`}
+                              className={`w-4 h-4 rounded-full ${
+                                st === 'on_time'
+                                  ? 'bg-emerald-600'
+                                  : st === 'late'
+                                  ? 'bg-amber-500'
+                                  : wNum === selectedWeek
+                                  ? 'bg-orange-100 border border-orange-400'
+                                  : 'bg-stone-200'
+                              }`}
+                            />
+                          );
+                        });
+                      })}
+                    </div>
+                    <span className="text-[10px] text-stone-400 font-semibold">أخضر: بالوقت • برتقالي: متأخر</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="sm:col-span-5 bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex items-center gap-4">
+                <div className="relative w-20 h-20 flex-shrink-0 flex items-center justify-center">
+                  <svg className="w-20 h-20 -rotate-90" viewBox="0 0 80 80">
+                    <circle cx="40" cy="40" r="32" stroke="#F3F4F6" strokeWidth="7" fill="none" />
+                    <circle
+                      cx="40"
+                      cy="40"
+                      r="32"
+                      stroke="#EA580C"
+                      strokeWidth="7"
+                      fill="none"
+                      strokeDasharray="201"
+                      strokeDashoffset={201 - (metrics.overallScorePct / 100) * 201}
+                      strokeLinecap="round"
+                      className="transition-all duration-500"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+                    <span className="text-base font-black text-stone-800">{metrics.overallScorePct}%</span>
+                    <span className="text-[9px] text-stone-400 font-bold mt-0.5">سكور عام</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-bold text-stone-400">مؤشر الانضباط التراكمي</div>
+                  <div className="text-base font-black text-stone-800 mt-0.5">
+                    {metrics.overallScorePct >= 85 ? "انضباط ممتاز!" : "واصل التقدم!"}
+                  </div>
+                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">
+                    في الوقت: <strong className="text-emerald-700">{metrics.onTimeCount}</strong> • متأخر: <strong className="text-amber-600">{metrics.lateCount}</strong>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl p-3.5 shadow-sm border border-stone-200/70 space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-extrabold text-stone-700">سجل الأسابيع منذ انضمامك ({totalWeeks} أسابيع)</span>
+                {selectedWeek !== totalWeeks && (
+                  <button
+                    onClick={() => setSelectedWeek(totalWeeks)}
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-orange-50 text-orange-700 hover:bg-orange-100 transition"
+                  >
+                    العودة للأسبوع الحالي ({totalWeeks}) ↩
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+                {Array.from({ length: totalWeeks }, (_, idx) => {
+                  const w = idx + 1;
+                  const active = w === selectedWeek;
+                  const isCurrent = w === totalWeeks;
+                  const wRec = currentUser.tasksRecord?.[w] || {};
+                  const doneCount = ['lecture', 'agenda', 'attendance', 'minutes'].filter(
+                    k => wRec[k]?.status && wRec[k]?.status !== 'pending'
+                  ).length;
+
+                  return (
+                    <button
+                      key={w}
+                      onClick={() => setSelectedWeek(w)}
+                      className={`flex-shrink-0 min-w-[135px] px-3.5 py-2.5 rounded-2xl border text-center transition ${
+                        active
+                          ? 'bg-stone-900 text-white border-stone-900 shadow-sm'
+                          : 'bg-stone-50 text-stone-600 border-stone-200/80 hover:bg-stone-100'
+                      }`}
+                    >
+                      <div className="text-xs font-black flex items-center justify-center gap-1">
+                        <span>{isCurrent ? `الأسبوع الحالي (${w})` : `الأسبوع ${w}`}</span>
+                        {!isCurrent && <span className="text-[10px] opacity-75">🔒</span>}
+                      </div>
+                      <div className={`text-[10px] mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>
+                        {getWeekDateRangeLabel(w, totalWeeks)} • ({doneCount}/4)
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-4 relative">
+              {['lecture', 'agenda', 'attendance', 'minutes'].map((taskKey, idx) => {
+                const def = db.systemConfig.taskDefinitions[taskKey];
+                const sched = computedSched[taskKey];
+                const rec = weekRecord[taskKey] || { status: "pending" };
+                const status = rec.status;
+                const isLast = idx === 3;
+
+                const isLockedByPastWeek = isPastWeek && (taskKey !== 'lecture' || status !== 'pending');
+                const icons = { lecture: "🎓", agenda: "📋", attendance: "🤝", minutes: "📝" };
+
+                return (
+                  <div key={taskKey} className="relative flex items-stretch gap-3 sm:gap-4">
+                    <div className="relative flex flex-col items-center pt-7 w-10 flex-shrink-0">
+                      {!isLast && <div className="timeline-line"></div>}
+                      <div
+                        className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center transition-all ${
+                          status === "on_time"
+                            ? "bg-emerald-600 ring-4 ring-emerald-100"
+                            : status === "late"
+                            ? "bg-amber-500 ring-4 ring-amber-100"
+                            : "bg-white border-2 border-orange-500 ring-4 ring-orange-50"
+                        }`}
+                      >
+                        {status !== "pending" && <span className="w-2 h-2 rounded-full bg-white"></span>}
+                      </div>
+                    </div>
+
+                    <div
+                      className={`flex-1 bg-white rounded-3xl p-5 shadow-sm border transition flex items-center justify-between gap-4 ${
+                        status === "on_time"
+                          ? "border-emerald-200/90 bg-emerald-50/15"
+                          : status === "late"
+                          ? "border-amber-300/90 bg-amber-50/20"
+                          : "border-stone-200/80"
+                      }`}
+                    >
+                      <div className="space-y-2 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-orange-100/80 text-orange-800">
+                            {sched.badge}
+                          </span>
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600">
+                            ⏱ {sched.durationMinutes} دقيقة
+                          </span>
+                          <span className="text-[11px] font-bold text-stone-400">
+                            📅 {sched.dayName} • {sched.timeLabel}
+                          </span>
+                          {status === "late" && (
+                            <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                              ⚠️ أُنجز متأخراً (50% سكور)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-start gap-3 pt-0.5">
+                          <div className="w-11 h-11 rounded-2xl bg-stone-100 flex items-center justify-center text-lg flex-shrink-0">
+                            {icons[taskKey]}
+                          </div>
+                          <div>
+                            <h3 className={`text-base sm:text-lg font-black ${status !== "pending" ? "line-through text-stone-400" : "text-stone-900"}`}>
+                              {def.title}
+                            </h3>
+                            <p className="text-xs text-stone-500">{def.subtitle}</p>
+                            <p className="text-[11px] text-stone-400 mt-1 bg-stone-50 px-2.5 py-1.5 rounded-xl border border-stone-100">
+                              💡 {def.instructions}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          {taskKey === "lecture" && (
+                            <button
+                              onClick={() => setLectureModalOpen(true)}
+                              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
+                            >
+                              🎬 {status === "pending" ? "مشاهدة المحاضرة وحل الاختبار" : "مراجعة الفيديو ونتيجة الاختبار"}
+                            </button>
+                          )}
+
+                          {rec.quizSubmission && (
+                            <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              📝 درجة الاختبار: {rec.quizSubmission.score}/{rec.quizSubmission.total}
+                            </span>
+                          )}
+
+                          <button
+                            onClick={() => setNoteModalTaskKey(taskKey)}
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-stone-100 text-stone-600 hover:bg-stone-200 transition"
+                          >
+                            📌 {rec.note ? "تعديل المسودة" : "مسودة خاصة"}
+                          </button>
+
+                          {rec.completedAt && (
+                            <span className="text-[10px] font-bold text-stone-500">
+                              ✓ {rec.completedAt}
+                            </span>
+                          )}
+                        </div>
+
+                        {rec.note && (
+                          <div className="text-xs bg-amber-50/70 border border-amber-200/70 text-stone-700 rounded-xl px-3 py-2">
+                            <strong className="text-amber-800">مسودتك:</strong> {rec.note}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => handleTaskAction(taskKey)}
+                        disabled={isLockedByPastWeek && taskKey !== "lecture"}
+                        className={`w-16 h-16 sm:w-[72px] sm:h-[72px] rounded-full flex-shrink-0 flex flex-col items-center justify-center font-bold text-xs shadow-sm transition ${
+                          status === "on_time"
+                            ? "bg-emerald-600 text-white"
+                            : status === "late"
+                            ? "bg-amber-500 text-white"
+                            : isLockedByPastWeek
+                            ? "bg-stone-200 text-stone-400 cursor-not-allowed"
+                            : "bg-stone-900 text-white hover:bg-orange-600"
+                        }`}
+                      >
+                        {status === "on_time" ? (
+                          <>
+                            <span className="text-xl leading-none">✓</span>
+                            <span className="text-[10px] mt-0.5">مكتمل</span>
+                          </>
+                        ) : status === "late" ? (
+                          <>
+                            <span className="text-base leading-none">⚠️</span>
+                            <span className="text-[10px] mt-0.5">متأخر</span>
+                          </>
+                        ) : isLockedByPastWeek ? (
+                          <>
+                            <span className="text-base leading-none">🔒</span>
+                            <span className="text-[10px] mt-0.5">مغلق</span>
+                          </>
+                        ) : taskKey === "lecture" ? (
+                          <>
+                            <span className="text-sm leading-none">▶</span>
+                            <span className="text-[10px] mt-0.5">{isPastWeek ? "حل متأخر" : "الاختبار"}</span>
+                          </>
+                        ) : (
+                          <span>إنجاز</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {randomQuote && (
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <span className="text-2xl text-orange-500 font-black leading-none">“</span>
+                  <p className="text-sm font-bold text-stone-800 leading-relaxed">
+                    {randomQuote.text}
+                  </p>
+                  <p className="text-xs text-stone-400 font-semibold">— {randomQuote.author}</p>
+                </div>
+                <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl flex-shrink-0">
+                  🌱
+                </div>
+              </div>
+            )}
+          </main>
+
+          <LectureQuizModal
+            isOpen={lectureModalOpen}
+            onClose={() => setLectureModalOpen(false)}
+            weekNumber={selectedWeek}
+            isPastWeek={isPastWeek}
+            curriculum={activeCurriculum}
+            lectureRecord={weekRecord.lecture}
+            onSubmitQuiz={(submission) => {
+              const now = new Date();
+              const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+              const finalStatus = isPastWeek ? "late" : "on_time";
+              updateUserRecord(currentUser.id, u => ({
+                ...u,
+                tasksRecord: {
+                  ...u.tasksRecord,
+                  [selectedWeek]: {
+                    ...u.tasksRecord[selectedWeek],
+                    lecture: {
+                      ...u.tasksRecord[selectedWeek].lecture,
+                      status: finalStatus,
+                      completedAt: isPastWeek ? `أُنجز متأخراً (${timeFormatted})` : `اليوم ${timeFormatted}`,
+                      quizSubmission: submission
+                    }
+                  }
+                }
+              }));
+              showToast(
+                isPastWeek
+                  ? "تم اعتماد إجاباتك! نظراً لانتهاء الأسبوع، تم رصد المحاضرة كمكتملة متأخراً (50% سكور)."
+                  : "تم اعتماد إجابات الاختبار وتسجيل إنجاز المحاضرة بالعلامة الكاملة ✓"
+              );
+            }}
+          />
+
+          <OnboardingModal
+            isOpen={showOnboarding}
+            onClose={() => {
+              updateUserRecord(currentUser.id, u => ({ ...u, onboarded: true }));
+              setShowOnboarding(false);
+            }}
+            currentUser={currentUser}
+            taskDefs={db.systemConfig.taskDefinitions}
+            isUsernameTaken={isUsernameTaken}
+            onSaveOnboarding={(updatedFields) => {
+              updateUserRecord(currentUser.id, u => ({
+                ...u,
+                ...updatedFields,
+                onboarded: true
+              }));
+              setShowOnboarding(false);
+              showToast("تم حفظ إعداداتك وبيانات دخولك بنجاح ✓");
+            }}
+          />
+
+          <CadreSettingsModal
+            scope={settingsModalScope}
+            onClose={() => setSettingsModalScope(null)}
+            currentUser={currentUser}
+            selectedWeek={selectedWeek}
+            isPastWeek={isPastWeek}
+            isUsernameTaken={isUsernameTaken}
+            onSaveSettings={(updater) => {
+              updateUserRecord(currentUser.id, updater);
+              setSettingsModalScope(null);
+              showToast("تم حفظ الإعدادات بنجاح ✓");
+            }}
+          />
+
+          <TaskNoteModal
+            isOpen={Boolean(noteModalTaskKey)}
+            onClose={() => setNoteModalTaskKey(null)}
+            initialNote={noteModalTaskKey ? (weekRecord[noteModalTaskKey]?.note || "") : ""}
+            onSaveNote={(val) => {
+              updateUserRecord(currentUser.id, u => ({
+                ...u,
+                tasksRecord: {
+                  ...u.tasksRecord,
+                  [selectedWeek]: {
+                    ...u.tasksRecord[selectedWeek],
+                    [noteModalTaskKey]: {
+                      ...u.tasksRecord[selectedWeek][noteModalTaskKey],
+                      note: val
+                    }
+                  }
+                }
+              }));
+              setNoteModalTaskKey(null);
+              showToast("تم حفظ المسودة الشخصية ✓");
+            }}
+          />
+
+          {/* نافذة أرشيف وسجل النشرة الإدارية للكادر (كل الرسائل السابقة) */}
+          <CadreBulletinArchiveModal
+            isOpen={bulletinArchiveOpen}
+            onClose={() => setBulletinArchiveOpen(false)}
+            bulletins={myBulletins}
+            currentUserId={currentUser.id}
+            onAcknowledge={onAcknowledgeBulletin}
+          />
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 6.1 CADRE BULLETIN ARCHIVE MODAL (سجل النشرة الإدارية وجميع الرسائل السابقة)
+    // ============================================================================
+    function CadreBulletinArchiveModal({ isOpen, onClose, bulletins, currentUserId, onAcknowledge }) {
+      const [filterCategory, setFilterCategory] = useState("all");
+      const [searchQuery, setSearchQuery] = useState("");
+
+      if (!isOpen) return null;
+
+      const filtered = bulletins.filter(b => {
+        const matchesCat = filterCategory === "all" || b.category === filterCategory;
+        const matchesSearch = !searchQuery.trim() ||
+          b.title.includes(searchQuery.trim()) ||
+          b.content.includes(searchQuery.trim());
+        return matchesCat && matchesSearch;
+      });
+
+      const getCategoryBadgeStyle = (cat) => {
+        switch (cat) {
+          case "توجيه عاجل": return "bg-rose-100 text-rose-800 border-rose-200";
+          case "سياسة جديدة": return "bg-orange-100 text-orange-800 border-orange-200";
+          case "تعميم مشروع": return "bg-amber-100 text-amber-800 border-amber-200";
+          default: return "bg-sky-100 text-sky-800 border-sky-200";
+        }
+      };
+
+      return (
+        <ModalContainer
+          isOpen={isOpen}
+          onClose={onClose}
+          badge="سجل النشرة الإدارية والتعميمات (One-Way Archive)"
+          title={`جميع الرسائل والتعميمات الواردة (${bulletins.length})`}
+          maxWidth="max-w-2xl"
+        >
+          <div className="space-y-4">
+            {/* شريط البحث والفلترة حسب نوع التعميم */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-stone-50 p-3 rounded-2xl border border-stone-200/80">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="ابحث في عنوان أو نص التعميمات السابقة..."
+                className="flex-1 min-w-[180px] rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold focus:outline-none focus:border-orange-500"
+              />
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700"
+              >
+                <option value="all">كل التصنيفات ({bulletins.length})</option>
+                <option value="سياسة جديدة">سياسة جديدة</option>
+                <option value="تعميم مشروع">تعميم مشروع</option>
+                <option value="توجيه عاجل">توجيه عاجل</option>
+                <option value="معلومة إدارية">معلومة إدارية</option>
+              </select>
+            </div>
+
+            {/* قائمة الرسائل الحالية والسابقة */}
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              {filtered.length === 0 ? (
+                <div className="text-center py-8 text-xs text-stone-400 font-bold">
+                  لا توجد رسائل مطابقة للبحث في سجلك.
+                </div>
+              ) : (
+                filtered.map(bul => {
+                  const ackTime = bul.acknowledgedBy?.[currentUserId];
+                  return (
+                    <div
+                      key={bul.id}
+                      className={`p-4 rounded-2xl border transition space-y-2.5 ${
+                        ackTime
+                          ? "bg-stone-50/70 border-stone-200/90"
+                          : "bg-orange-50/40 border-2 border-orange-300 shadow-sm"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`}>
+                            {bul.category}
+                          </span>
+                          <span className="text-[11px] font-bold text-stone-700">
+                            🏛️ {bul.senderName} ({bul.senderRole})
+                          </span>
+                          {bul.targetType === "custom" ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                              🎯 تعميم مخصص
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-600">
+                              🌐 تعميم عام
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-semibold text-stone-400">{bul.createdAt}</span>
+                      </div>
+
+                      <h4 className="text-sm font-black text-stone-900">{bul.title}</h4>
+                      <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">{bul.content}</p>
+
+                      <div className="pt-2 border-t border-stone-200/60 flex items-center justify-between">
+                        {ackTime ? (
+                          <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                            <span>✓ تم الاطلاع والاستيعاب</span>
+                            <span className="text-stone-400 font-normal">({ackTime})</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold text-rose-600">
+                            ⏳ لم يتم تأكيد الاستيعاب بعد
+                          </span>
+                        )}
+
+                        {!ackTime && (
+                          <button
+                            onClick={() => onAcknowledge(bul.id, currentUserId)}
+                            className="px-4 py-1.5 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm"
+                          >
+                            تأكيد الاستيعاب الآن ✓
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-stone-100">
+              <button
+                onClick={onClose}
+                className="px-6 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold"
+              >
+                إغلاق السجل
+              </button>
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 7. LECTURE VIDEO & LOCKED QUIZ MODAL
+    // ============================================================================
+    function LectureQuizModal({ isOpen, onClose, weekNumber, isPastWeek, curriculum, lectureRecord, onSubmitQuiz }) {
+      const existingSubmission = lectureRecord?.quizSubmission || null;
+      const [selectedAnswers, setSelectedAnswers] = useState({});
+      const [errorMsg, setErrorMsg] = useState("");
+
+      useEffect(() => {
+        if (existingSubmission && existingSubmission.answers) {
+          const map = {};
+          existingSubmission.answers.forEach((ans, i) => { map[i] = ans; });
+          setSelectedAnswers(map);
+        } else {
+          setSelectedAnswers({});
+        }
+        setErrorMsg("");
+      }, [isOpen, existingSubmission]);
+
+      if (!isOpen) return null;
+
+      const safeCurr = curriculum || INITIAL_STATE.weeklyCurriculums.default;
+      const questions = safeCurr.questions || [];
+
+      const handleFinalSubmit = () => {
+        if (existingSubmission) return;
+        for (let i = 0; i < questions.length; i++) {
+          if (selectedAnswers[i] === undefined) {
+            setErrorMsg(`يرجى الإجابة على السؤال رقم ${i + 1} قبل الاعتماد النهائي.`);
+            return;
+          }
+        }
+        let correctCount = 0;
+        const answersArray = questions.map((q, idx) => {
+          const ans = selectedAnswers[idx];
+          if (ans === q.correctIndex) correctCount++;
+          return ans;
+        });
+
+        onSubmitQuiz({
+          score: correctCount,
+          total: questions.length,
+          answers: answersArray,
+          submittedAt: new Date().toLocaleString("ar-EG")
+        });
+      };
+
+      return (
+        <ModalContainer
+          isOpen={isOpen}
+          onClose={onClose}
+          badge={`المحاضرة الأسبوعية • الأسبوع ${weekNumber}`}
+          title={safeCurr.lectureTitle}
+          maxWidth="max-w-2xl"
+        >
+          <div className="space-y-5">
+            {isPastWeek && !existingSubmission && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-bold">
+                ⚠️ تنبيه: هذا الأسبوع قد انتهى بالفعل. يمكنك مشاهدة المحاضرة وحل الاختبار الآن، ولكن ستُسجل المهمة «مكتمل متأخر» بنصف النقاط (50%).
+              </div>
+            )}
+
+            <p className="text-xs text-stone-500 leading-relaxed">{safeCurr.lectureDesc}</p>
+
+            <div className="rounded-2xl overflow-hidden bg-stone-950 border border-stone-800 aspect-video relative">
+              {safeCurr.videoType === "youtube" ? (
+                <iframe
+                  src={getYoutubeEmbedUrl(safeCurr.videoUrl)}
+                  title={safeCurr.lectureTitle}
+                  className="w-full h-full"
+                  allowFullScreen
+                />
+              ) : (
+                <video
+                  src={safeCurr.videoUrl}
+                  controls
+                  className="w-full h-full object-contain"
+                />
+              )}
+            </div>
+
+            <div className="space-y-4 pt-2 border-t border-stone-100">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-black text-stone-900">
+                  📝 اختبار استيعاب المحاضرة ({questions.length} أسئلة)
+                </h4>
+                {existingSubmission ? (
+                  <span className="text-xs font-black px-3 py-1 rounded-full bg-emerald-100 text-emerald-800">
+                    🔒 تم الاعتماد النهائي • النتيجة: {existingSubmission.score}/{existingSubmission.total}
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-bold text-stone-400">
+                    تنبيه: لا يمكن تعديل الإجابات بعد الضغط على اعتماد
+                  </span>
+                )}
+              </div>
+
+              {questions.map((q, qIdx) => {
+                const userChoice = selectedAnswers[qIdx];
+                return (
+                  <div key={q.id || qIdx} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-2.5">
+                    <div className="text-xs font-black text-stone-800">
+                      {qIdx + 1}. {q.text}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {(q.options || []).map((opt, optIdx) => {
+                        const isSelected = userChoice === optIdx;
+                        const isCorrect = q.correctIndex === optIdx;
+
+                        let btnStyle = "bg-white border-stone-200 text-stone-700 hover:border-orange-400";
+                        if (existingSubmission) {
+                          if (isCorrect) {
+                            btnStyle = "bg-emerald-50 border-emerald-500 text-emerald-900 font-black";
+                          } else if (isSelected && !isCorrect) {
+                            btnStyle = "bg-rose-50 border-rose-400 text-rose-800 line-through";
+                          } else {
+                            btnStyle = "bg-white border-stone-200 text-stone-400 opacity-70";
+                          }
+                        } else if (isSelected) {
+                          btnStyle = "bg-orange-50 border-orange-500 text-orange-900 font-black ring-2 ring-orange-200";
+                        }
+
+                        return (
+                          <button
+                            key={optIdx}
+                            type="button"
+                            disabled={Boolean(existingSubmission)}
+                            onClick={() => setSelectedAnswers(prev => ({ ...prev, [qIdx]: optIdx }))}
+                            className={`text-right text-xs p-3 rounded-xl border transition flex items-center justify-between gap-2 ${btnStyle}`}
+                          >
+                            <span>{opt}</span>
+                            {existingSubmission && isCorrect && <span>✅</span>}
+                            {existingSubmission && isSelected && !isCorrect && <span>❌</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {errorMsg && (
+                <div className="text-xs font-bold text-rose-600 bg-rose-50 p-3 rounded-xl border border-rose-200">
+                  {errorMsg}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={onClose}
+                  className="px-5 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+                >
+                  إغلاق
+                </button>
+                {!existingSubmission && (
+                  <button
+                    onClick={handleFinalSubmit}
+                    className="px-6 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md hover:opacity-95"
+                  >
+                    اعتماد الإجابات النهائي ورصد الدرجة ✓
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 8. ONBOARDING MODAL
+    // ============================================================================
+    function OnboardingModal({ isOpen, onClose, currentUser, taskDefs, isUsernameTaken, onSaveOnboarding }) {
+      const [step, setStep] = useState(1);
+      const [name, setName] = useState(currentUser.name || "");
+      const [jobTitle, setJobTitle] = useState(currentUser.jobTitle || "");
+      const [unit, setUnit] = useState(currentUser.unit || "");
+      const [username, setUsername] = useState(currentUser.username || "");
+      const [password, setPassword] = useState(currentUser.password || "");
+      const [meetDay, setMeetDay] = useState(currentUser.defaultSchedule?.meetDay ?? 2);
+      const [meetTime, setMeetTime] = useState(currentUser.defaultSchedule?.meetTime || "19:00");
+      const [meetDuration, setMeetDuration] = useState(currentUser.defaultSchedule?.meetDuration || 90);
+      const [err, setErr] = useState("");
+
+      if (!isOpen) return null;
+
+      const previewSched = computeWeekSchedule({ meetDay, meetTime, meetDuration }, taskDefs);
+
+      const handleNextStep1 = () => {
+        if (!username.trim() || !password.trim()) {
+          setErr("اسم المستخدم وكلمة المرور مطلوبان.");
+          return;
+        }
+        if (isUsernameTaken(username, currentUser.id)) {
+          setErr("اسم المستخدم هذا مستخدم بالفعل، اختر اسماً آخر.");
+          return;
+        }
+        setErr("");
+        setStep(2);
+      };
+
+      const handleFinish = () => {
+        onSaveOnboarding({
+          name: name.trim() || currentUser.name,
+          jobTitle: jobTitle.trim() || currentUser.jobTitle,
+          unit: unit.trim() || currentUser.unit,
+          username: username.trim(),
+          password: password.trim(),
+          defaultSchedule: {
+            meetDay: parseInt(meetDay, 10),
+            meetTime,
+            meetDuration: parseInt(meetDuration, 10)
+          }
+        });
+      };
+
+      return (
+        <ModalContainer
+          isOpen={isOpen}
+          onClose={onClose}
+          badge="تهيئة الحساب عند الدخول الأول"
+          title="ضبط ملفك الإداري ومواعيدك الأسبوعية"
+        >
+          {step === 1 && (
+            <div className="space-y-4">
+              <p className="text-xs text-stone-500 leading-relaxed">
+                مرحباً بك في <strong>Madyan</strong>. يمكنك مراجعة بياناتك الإدارية، كما يمكنك <strong>اختيارياً</strong> تعديل اسم المستخدم وكلمة المرور الخاصة بك:
+              </p>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                <input value={name} onChange={e => setName(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
+                  <input value={jobTitle} onChange={e => setJobTitle(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الإدارية</label>
+                  <input value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-orange-50/70 border border-orange-200/80 space-y-3">
+                <div className="text-xs font-black text-orange-900">🔐 بيانات تسجيل الدخول (اختياري: يمكنك تغييرها الآن)</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم (Username)</label>
+                    <input value={username} onChange={e => setUsername(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور (Password)</label>
+                    <input type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                  </div>
+                </div>
+              </div>
+
+              {err && <div className="text-xs font-bold text-rose-600">{err}</div>}
+
+              <div className="flex justify-end pt-2">
+                <button onClick={handleNextStep1} className="px-7 py-3 rounded-2xl bg-stone-900 text-white text-xs font-bold">
+                  التالي: تحديد موعد الاجتماع ←
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-4">
+              <p className="text-xs text-stone-500">
+                حدّد موعد اجتماعك الأسبوعي وعدد ساعاته ليقوم النظام بحساب موعد الأجندة (قبل 24 ساعة) والمحضر (بعد 24 ساعة):
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">يوم الاجتماع الأسبوعي</label>
+                  <select value={meetDay} onChange={e => setMeetDay(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                    {DAYS_AR.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">ساعة بدء الاجتماع</label>
+                  <input type="time" value={meetTime} onChange={e => setMeetTime(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">مدة الاجتماع</label>
+                <select value={meetDuration} onChange={e => setMeetDuration(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                  <option value="60">ساعة واحدة (60 دقيقة)</option>
+                  <option value="90">ساعة ونصف (90 دقيقة)</option>
+                  <option value="120">ساعتان (120 دقيقة)</option>
+                  <option value="180">3 ساعات (180 دقيقة)</option>
+                </select>
+              </div>
+
+              <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 text-xs space-y-1.5">
+                <div className="font-black text-stone-800 mb-1">المعاينة الذكية لمواعيدك:</div>
+                <div>📋 <strong>إرسال الأجندة:</strong> يوم {previewSched.agenda.dayName} ({previewSched.agenda.timeLabel})</div>
+                <div>🤝 <strong>حضور اللقاء:</strong> يوم {previewSched.attendance.dayName} ({previewSched.attendance.timeLabel})</div>
+                <div>📝 <strong>توثيق المحضر:</strong> يوم {previewSched.minutes.dayName} ({previewSched.minutes.timeLabel})</div>
+              </div>
+
+              <div className="flex justify-between pt-2">
+                <button onClick={() => setStep(1)} className="px-5 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold">السابق</button>
+                <button onClick={handleFinish} className="px-7 py-3 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md">
+                  اعتماد والبدء الآن ✓
+                </button>
+              </div>
+            </div>
+          )}
+        </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 9. CADRE SETTINGS MODAL & NOTE MODAL
+    // ============================================================================
+    function CadreSettingsModal({ scope, onClose, currentUser, selectedWeek, isPastWeek, isUsernameTaken, onSaveSettings }) {
+      const [activeTab, setActiveTab] = useState(scope || "global");
+      const [meetDay, setMeetDay] = useState(currentUser.defaultSchedule?.meetDay ?? 2);
+      const [meetTime, setMeetTime] = useState(currentUser.defaultSchedule?.meetTime || "19:00");
+      const [meetDuration, setMeetDuration] = useState(currentUser.defaultSchedule?.meetDuration || 90);
+
+      const [name, setName] = useState(currentUser.name || "");
+      const [jobTitle, setJobTitle] = useState(currentUser.jobTitle || "");
+      const [unit, setUnit] = useState(currentUser.unit || "");
+      const [username, setUsername] = useState(currentUser.username || "");
+      const [password, setPassword] = useState(currentUser.password || "");
+      const [err, setErr] = useState("");
+
+      useEffect(() => {
+        if (!scope) return;
+        const targetTab = (scope === "week" && isPastWeek) ? "global" : scope;
+        setActiveTab(targetTab);
+        const sched = targetTab === "week"
+          ? (currentUser.weekOverrides?.[selectedWeek] || currentUser.defaultSchedule)
+          : currentUser.defaultSchedule;
+        setMeetDay(sched?.meetDay ?? 2);
+        setMeetTime(sched?.meetTime || "19:00");
+        setMeetDuration(sched?.meetDuration || 90);
+        setName(currentUser.name || "");
+        setJobTitle(currentUser.jobTitle || "");
+        setUnit(currentUser.unit || "");
+        setUsername(currentUser.username || "");
+        setPassword(currentUser.password || "");
+        setErr("");
+      }, [scope, currentUser, selectedWeek, isPastWeek]);
+
+      if (!scope) return null;
+
+      const switchTab = (t) => {
+        setActiveTab(t);
+        const sched = t === "week"
+          ? (currentUser.weekOverrides?.[selectedWeek] || currentUser.defaultSchedule)
+          : currentUser.defaultSchedule;
+        setMeetDay(sched?.meetDay ?? 2);
+        setMeetTime(sched?.meetTime || "19:00");
+        setMeetDuration(sched?.meetDuration || 90);
+        setErr("");
+      };
+
+      const handleSave = () => {
+        if (activeTab === "account") {
+          if (!username.trim() || !password.trim()) {
+            setErr("اسم المستخدم وكلمة المرور لا يمكن أن يكونا فارغين.");
+            return;
+          }
+          if (isUsernameTaken(username, currentUser.id)) {
+            setErr("اسم المستخدم محجوز لكادر آخر.");
+            return;
+          }
+          onSaveSettings(u => ({
+            ...u,
+            name: name.trim() || u.name,
+            jobTitle: jobTitle.trim() || u.jobTitle,
+            unit: unit.trim() || u.unit,
+            username: username.trim(),
+            password: password.trim()
+          }));
+        } else if (activeTab === "week") {
+          onSaveSettings(u => ({
+            ...u,
+            weekOverrides: {
+              ...(u.weekOverrides || {}),
+              [selectedWeek]: {
+                meetDay: parseInt(meetDay, 10),
+                meetTime,
+                meetDuration: parseInt(meetDuration, 10)
+              }
+            }
+          }));
+        } else {
+          onSaveSettings(u => ({
+            ...u,
+            defaultSchedule: {
+              meetDay: parseInt(meetDay, 10),
+              meetTime,
+              meetDuration: parseInt(meetDuration, 10)
+            }
+          }));
+        }
+      };
+
+      return (
+        <ModalContainer
+          isOpen={Boolean(scope)}
+          onClose={onClose}
+          badge="إعدادات الكادر الإداري"
+          title="تخصيص المواعيد وبيانات الحساب"
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-stone-100 rounded-2xl text-xs font-bold">
+              <button
+                disabled={isPastWeek}
+                onClick={() => switchTab("week")}
+                className={`py-2.5 px-2 rounded-xl transition ${
+                  activeTab === "week" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 disabled:opacity-40"
+                }`}
+              >
+                الأسبوع الحالي ({selectedWeek})
+              </button>
+              <button
+                onClick={() => switchTab("global")}
+                className={`py-2.5 px-2 rounded-xl transition ${
+                  activeTab === "global" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500"
+                }`}
+              >
+                المواعيد العامة
+              </button>
+              <button
+                onClick={() => switchTab("account")}
+                className={`py-2.5 px-2 rounded-xl transition ${
+                  activeTab === "account" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500"
+                }`}
+              >
+                بياناتي والدخول
+              </button>
+            </div>
+
+            {activeTab !== "account" ? (
+              <div className="space-y-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">يوم الاجتماع</label>
+                    <select value={meetDay} onChange={e => setMeetDay(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                      {DAYS_AR.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">ساعة البدء</label>
+                    <input type="time" value={meetTime} onChange={e => setMeetTime(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">مدة الاجتماع</label>
+                  <select value={meetDuration} onChange={e => setMeetDuration(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                    <option value="60">ساعة واحدة (60 دقيقة)</option>
+                    <option value="90">ساعة ونصف (90 دقيقة)</option>
+                    <option value="120">ساعتان (120 دقيقة)</option>
+                    <option value="180">3 ساعات (180 دقيقة)</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                  <input value={name} onChange={e => setName(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
+                    <input value={jobTitle} onChange={e => setJobTitle(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الإدارية</label>
+                    <input value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                  <div className="text-xs font-black text-stone-800">🔐 تعديل اسم المستخدم وكلمة المرور</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-stone-600 mb-1">اسم المستخدم (Username)</label>
+                      <input value={username} onChange={e => setUsername(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-stone-600 mb-1">كلمة المرور الجديدة</label>
+                      <input type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-stone-400 bg-stone-50 px-3 py-2 rounded-xl">
+                  📅 تاريخ تفعيل حسابك بالنظام مرصود تلقائياً: <strong>{formatDateAr(currentUser.joinedAt)}</strong>.
+                </div>
+              </div>
+            )}
+
+            {err && <div className="text-xs font-bold text-rose-600">{err}</div>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={onClose} className="px-4 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold">إلغاء</button>
+              <button onClick={handleSave} className="px-6 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800">
+                حفظ التعديلات
+              </button>
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    function TaskNoteModal({ isOpen, onClose, initialNote, onSaveNote }) {
+      const [val, setVal] = useState(initialNote);
+      useEffect(() => { setVal(initialNote); }, [initialNote, isOpen]);
+      return (
+        <ModalContainer isOpen={isOpen} onClose={onClose} badge="مسودة شخصية" title="ملاحظاتك على المهمة">
+          <div className="space-y-4">
+            <textarea
+              rows="4"
+              value={val}
+              onChange={e => setVal(e.target.value)}
+              placeholder="اكتب مسودتك أو نقاطك الخاصة هنا..."
+              className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-sm"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-xl bg-stone-100 text-xs font-bold">إغلاق</button>
+              <button onClick={() => onSaveNote(val.trim())} className="px-6 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold">حفظ</button>
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 10. EXECUTIVE OFFICE MEMBER PORTAL (بوابة عضو المكتب التنفيذي - النشرة الإدارية)
+    // ============================================================================
+    function ExecutivePortal({ db, setDb, currentUser, onLogout, showToast }) {
+      const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+      const units = useMemo(() => Array.from(new Set(cadres.map(c => c.unit).filter(Boolean))), [cadres]);
+
+      const [title, setTitle] = useState("");
+      const [content, setContent] = useState("");
+      const [category, setCategory] = useState("سياسة جديدة");
+      const [targetType, setTargetType] = useState("all"); // 'all' | 'custom'
+      const [selectedIds, setSelectedIds] = useState([]);
+
+      const toggleRecipient = (id) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      };
+
+      const selectByUnit = (unitName) => {
+        const unitUserIds = cadres.filter(c => c.unit === unitName).map(c => c.id);
+        setSelectedIds(prev => Array.from(new Set([...prev, ...unitUserIds])));
+      };
+
+      const handlePublishBulletin = (e) => {
+        e.preventDefault();
+        if (!title.trim() || !content.trim()) {
+          showToast("يرجى كتابة عنوان ونص التعميم الإداري أولاً.");
+          return;
+        }
+        if (targetType === "custom" && selectedIds.length === 0) {
+          showToast("يرجى اختيار كادر واحد على الأقل لإرسال التعميم المخصص.");
+          return;
+        }
+
+        const now = new Date();
+        const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+        const newBulletin = {
+          id: "bul_" + Date.now(),
+          title: title.trim(),
+          content: content.trim(),
+          category,
+          senderName: currentUser.name,
+          senderRole: currentUser.jobTitle || "عضو المكتب التنفيذي",
+          createdAt: `اليوم • ${timeStr}`,
+          targetType,
+          recipientIds: targetType === "all" ? [] : selectedIds,
+          acknowledgedBy: {}
+        };
+
+        setDb(prev => ({
+          ...prev,
+          bulletins: [newBulletin, ...(prev.bulletins || [])]
+        }));
+
+        setTitle("");
+        setContent("");
+        showToast("تم نشر وإرسال التعميم في النشرة الإدارية بنجاح 📢");
+      };
+
+      const deleteBulletin = (id) => {
+        setDb(prev => ({
+          ...prev,
+          bulletins: (prev.bulletins || []).filter(b => b.id !== id)
+        }));
+        showToast("تم حذف التعميم من النشرة الإدارية");
+      };
+
+      return (
+        <div className="min-h-screen bg-[#F7F7F5]">
+          <header className="bg-white border-b border-stone-200 sticky top-0 z-30">
+            <div className="max-w-5xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <MadyanWordmark size="text-2xl sm:text-3xl" />
+                <span className="text-xs font-black px-3 py-1 rounded-full madyan-gradient text-white shadow-sm">
+                  🏛️ بوابة عضو المكتب التنفيذي • النشرة الإدارية
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-stone-600 hidden sm:inline">
+                  {currentUser.name} ({currentUser.jobTitle})
+                </span>
+                <button
+                  onClick={onLogout}
+                  className="px-4 py-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold transition"
+                >
+                  تسجيل الخروج
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-5xl mx-auto px-4 pt-6 space-y-6">
+            <BulletinPublisherPanel
+              cadres={cadres}
+              units={units}
+              title={title}
+              setTitle={setTitle}
+              content={content}
+              setContent={setContent}
+              category={category}
+              setCategory={setCategory}
+              targetType={targetType}
+              setTargetType={setTargetType}
+              selectedIds={selectedIds}
+              setSelectedIds={setSelectedIds}
+              toggleRecipient={toggleRecipient}
+              selectByUnit={selectByUnit}
+              onSubmit={handlePublishBulletin}
+              bulletins={db.bulletins || []}
+              onDelete={deleteBulletin}
+            />
+          </main>
+        </div>
+      );
+    }
+
+    // مكون مشترك لإصدار النشرة الإدارية وتحديد المستلمين ومتابعة الاستيعاب
+    function BulletinPublisherPanel({
+      cadres, units, title, setTitle, content, setContent, category, setCategory,
+      targetType, setTargetType, selectedIds, setSelectedIds, toggleRecipient, selectByUnit,
+      onSubmit, bulletins, onDelete
+    }) {
+      return (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* نموذج إرسال تعميم إداري جديد (One-Way Message) */}
+          <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+            <div>
+              <span className="text-xs font-bold text-orange-600">إصدار تعميم لحظي (One-Way)</span>
+              <h2 className="text-lg font-black text-stone-900">إرسال نشرة إدارية أو سياسة جديدة</h2>
+              <p className="text-xs text-stone-500 mt-0.5">
+                حدد محتوى الرسالة واختر بدقة من تصل إليه ومن لا تصل إليه من الكوادر.
+              </p>
+            </div>
+
+            <form onSubmit={onSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">تصنيف النشرة</label>
+                <select
+                  value={category}
+                  onChange={e => setCategory(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  <option value="سياسة جديدة">📜 سياسة جديدة</option>
+                  <option value="تعميم مشروع">🚀 تعميم مشروع</option>
+                  <option value="توجيه عاجل">⚡ توجيه عاجل</option>
+                  <option value="معلومة إدارية">💡 معلومة إدارية</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">عنوان التعميم / السياسة</label>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="مثال: اعتماد لائحة الاجتماعات الأسبوعية الجديدة..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">تفاصيل التعميم المطلوب استيعابه</label>
+                <textarea
+                  rows="4"
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  placeholder="اكتب النص الكامل للتعميم أو القرار الإداري ليظهر في الصفحة الرئيسية للمستلمين..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-xs leading-relaxed"
+                />
+              </div>
+
+              {/* التحكم الدقيق في المستلمين (توصل لمين ومتوصلش لمين) */}
+              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                <div className="text-xs font-black text-stone-800">🎯 تحديد المستلمين (توصل لمين ومتوصلش لمين)</div>
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setTargetType("all")}
+                    className={`py-2 px-3 rounded-xl border transition ${
+                      targetType === "all" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-600"
+                    }`}
+                  >
+                    🌐 جميع الكوادر ({cadres.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTargetType("custom")}
+                    className={`py-2 px-3 rounded-xl border transition ${
+                      targetType === "custom" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-600"
+                    }`}
+                  >
+                    🎯 تحديد مخصص ({selectedIds.length})
+                  </button>
+                </div>
+
+                {targetType === "custom" && (
+                  <div className="space-y-2.5 pt-2 border-t border-stone-200/70">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-stone-500">تحديد سريع لوحدة:</span>
+                      {units.map(uName => (
+                        <button
+                          key={uName}
+                          type="button"
+                          onClick={() => selectByUnit(uName)}
+                          className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-orange-100 text-orange-800 hover:bg-orange-200"
+                        >
+                          + {uName}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedIds([])}
+                        className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-stone-200 text-stone-600"
+                      >
+                        إلغاء الكل
+                      </button>
+                    </div>
+
+                    <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                      {cadres.map(c => {
+                        const checked = selectedIds.includes(c.id);
+                        return (
+                          <label
+                            key={c.id}
+                            onClick={() => toggleRecipient(c.id)}
+                            className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer text-xs transition ${
+                              checked ? "bg-orange-50 border-orange-400 font-black" : "bg-white border-stone-200 text-stone-500"
+                            }`}
+                          >
+                            <div>
+                              <span className="text-stone-800">{c.name}</span>
+                              <span className="text-[10px] text-stone-400 mr-1.5">({c.unit})</span>
+                            </div>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-md ${checked ? "bg-emerald-600 text-white" : "bg-stone-100 text-stone-500"}`}>
+                              {checked ? "تصل له ✓" : "مستثنى ✕"}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95"
+              >
+                📢 إرسال ونشر التعميم اللحظي الآن
+              </button>
+            </form>
+          </div>
+
+          {/* سجل التعميمات الصادرة ومتابعة من استوعبها */}
+          <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold text-orange-600">متابعة الاستيعاب اللحظي</span>
+                <h2 className="text-lg font-black text-stone-900">سجل النشرات والتعميمات الصادرة ({bulletins.length})</h2>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {bulletins.map(bul => {
+                const targetCadres = bul.targetType === "all"
+                  ? cadres
+                  : cadres.filter(c => (bul.recipientIds || []).includes(c.id));
+                const ackCount = targetCadres.filter(c => bul.acknowledgedBy?.[c.id]).length;
+                const ackPct = targetCadres.length > 0 ? Math.round((ackCount / targetCadres.length) * 100) : 0;
+
+                return (
+                  <div key={bul.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-orange-100 text-orange-800">
+                          {bul.category}
+                        </span>
+                        <span className="text-xs font-bold text-stone-500">{bul.createdAt}</span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700">
+                          {bul.targetType === "all" ? "🌐 موجه للجميع" : `🎯 مخصص لـ ${targetCadres.length} كوادر`}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => onDelete(bul.id)}
+                        className="text-[11px] font-bold text-rose-600 hover:underline"
+                      >
+                        حذف التعميم
+                      </button>
+                    </div>
+
+                    <h3 className="text-sm font-black text-stone-900">{bul.title}</h3>
+                    <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">{bul.content}</p>
+
+                    <div className="pt-2 border-t border-stone-200/70 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="text-stone-700">نسبة الاطلاع والاستيعاب:</span>
+                        <span className="text-emerald-700">{ackCount} من {targetCadres.length} ({ackPct}%)</span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-stone-200 overflow-hidden">
+                        <div style={{ width: `${ackPct}%` }} className="h-full bg-emerald-600 transition-all" />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {targetCadres.map(c => {
+                          const isAck = Boolean(bul.acknowledgedBy?.[c.id]);
+                          return (
+                            <span
+                              key={c.id}
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border ${
+                                isAck
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                  : "bg-white text-stone-400 border-stone-200"
+                              }`}
+                            >
+                              {c.name}: {isAck ? "استوعب ✓" : "لم يطلع بعد"}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 11. MANAGER / HR PORTAL
+    // ============================================================================
+    function AdminPortal({ db, setDb, currentUser, onLogout, showToast }) {
+      const [activeSection, setActiveSection] = useState("dashboard");
+      const [inspectedCadre, setInspectedCadre] = useState(null);
+
+      const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+      const units = useMemo(() => Array.from(new Set(cadres.map(c => c.unit).filter(Boolean))), [cadres]);
+
+      // state for Admin Bulletin tab
+      const [bTitle, setBTitle] = useState("");
+      const [bContent, setBContent] = useState("");
+      const [bCategory, setBCategory] = useState("سياسة جديدة");
+      const [bTargetType, setBTargetType] = useState("all");
+      const [bSelectedIds, setBSelectedIds] = useState([]);
+
+      const toggleBRecipient = (id) => {
+        setBSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      };
+
+      const selectBByUnit = (unitName) => {
+        const unitUserIds = cadres.filter(c => c.unit === unitName).map(c => c.id);
+        setBSelectedIds(prev => Array.from(new Set([...prev, ...unitUserIds])));
+      };
+
+      const handleAdminPublishBulletin = (e) => {
+        e.preventDefault();
+        if (!bTitle.trim() || !bContent.trim()) {
+          showToast("يرجى كتابة عنوان ونص التعميم الإداري أولاً.");
+          return;
+        }
+        if (bTargetType === "custom" && bSelectedIds.length === 0) {
+          showToast("يرجى اختيار كادر واحد على الأقل.");
+          return;
+        }
+        const now = new Date();
+        const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+        const newBul = {
+          id: "bul_" + Date.now(),
+          title: bTitle.trim(),
+          content: bContent.trim(),
+          category: bCategory,
+          senderName: currentUser.name,
+          senderRole: "الإدارة العليا",
+          createdAt: `اليوم • ${timeStr}`,
+          targetType: bTargetType,
+          recipientIds: bTargetType === "all" ? [] : bSelectedIds,
+          acknowledgedBy: {}
+        };
+        setDb(prev => ({ ...prev, bulletins: [newBul, ...(prev.bulletins || [])] }));
+        setBTitle("");
+        setBContent("");
+        showToast("تم نشر التعميم الإداري بنجاح 📢");
+      };
+
+      return (
+        <div className="min-h-screen bg-[#F7F7F5]">
+          <header className="bg-white border-b border-stone-200 sticky top-0 z-30">
+            <div className="max-w-6xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <MadyanWordmark size="text-2xl sm:text-3xl" />
+                <span className="text-xs font-black px-3 py-1 rounded-full bg-stone-900 text-white">
+                  بوابة المدير والـ HR
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 bg-stone-100 p-1.5 rounded-2xl text-xs font-black">
+                <button
+                  onClick={() => setActiveSection("dashboard")}
+                  className={`px-3.5 py-2 rounded-xl transition ${
+                    activeSection === "dashboard" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
+                  }`}
+                >
+                  📊 الداشبورد والتحليلات
+                </button>
+                <button
+                  onClick={() => setActiveSection("curriculum")}
+                  className={`px-3.5 py-2 rounded-xl transition ${
+                    activeSection === "curriculum" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
+                  }`}
+                >
+                  🎬 المحاضرات والاختبارات
+                </button>
+                <button
+                  onClick={() => setActiveSection("bulletins")}
+                  className={`px-3.5 py-2 rounded-xl transition ${
+                    activeSection === "bulletins" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
+                  }`}
+                >
+                  📢 النشرة الإدارية
+                </button>
+                <button
+                  onClick={() => setActiveSection("settings")}
+                  className={`px-3.5 py-2 rounded-xl transition ${
+                    activeSection === "settings" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
+                  }`}
+                >
+                  ⚙️ الإعدادات والحسابات
+                </button>
+              </div>
+
+              <button
+                onClick={onLogout}
+                className="px-4 py-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold transition"
+              >
+                تسجيل الخروج
+              </button>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 pt-6">
+            {activeSection === "dashboard" && (
+              <AdminDashboardSection
+                cadres={cadres}
+                db={db}
+                onInspectCadre={(c) => setInspectedCadre(c)}
+              />
+            )}
+
+            {activeSection === "curriculum" && (
+              <AdminCurriculumSection
+                db={db}
+                setDb={setDb}
+                showToast={showToast}
+              />
+            )}
+
+            {activeSection === "bulletins" && (
+              <BulletinPublisherPanel
+                cadres={cadres}
+                units={units}
+                title={bTitle}
+                setTitle={setBTitle}
+                content={bContent}
+                setContent={setBContent}
+                category={bCategory}
+                setCategory={setBCategory}
+                targetType={bTargetType}
+                setTargetType={setBTargetType}
+                selectedIds={bSelectedIds}
+                setSelectedIds={setBSelectedIds}
+                toggleRecipient={toggleBRecipient}
+                selectByUnit={selectBByUnit}
+                onSubmit={handleAdminPublishBulletin}
+                bulletins={db.bulletins || []}
+                onDelete={(id) => {
+                  setDb(prev => ({ ...prev, bulletins: (prev.bulletins || []).filter(b => b.id !== id) }));
+                  showToast("تم حذف التعميم");
+                }}
+              />
+            )}
+
+            {activeSection === "settings" && (
+              <AdminSettingsAndUsersSection
+                db={db}
+                setDb={setDb}
+                cadres={cadres}
+                showToast={showToast}
+              />
+            )}
+          </main>
+
+          <CadreInspectorModal
+            cadre={inspectedCadre}
+            db={db}
+            onClose={() => setInspectedCadre(null)}
+          />
+        </div>
+      );
+    }
+
+    function AdminDashboardSection({ cadres, db, onInspectCadre }) {
+      const analytics = useMemo(() => {
+        const list = cadres.map(c => ({
+          cadre: c,
+          metrics: computeCadreMetrics(c)
+        })).sort((a, b) => b.metrics.overallScorePct - a.metrics.overallScorePct);
+
+        let totalOnTime = 0, totalLate = 0, totalPending = 0, totalAll = 0;
+        const taskTotals = {
+          lecture: { onTime: 0, late: 0, total: 0 },
+          agenda: { onTime: 0, late: 0, total: 0 },
+          attendance: { onTime: 0, late: 0, total: 0 },
+          minutes: { onTime: 0, late: 0, total: 0 }
+        };
+
+        list.forEach(({ metrics }) => {
+          totalOnTime += metrics.onTimeCount;
+          totalLate += metrics.lateCount;
+          totalPending += metrics.pendingCount;
+          totalAll += metrics.totalTasksCount;
+
+          ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
+            taskTotals[k].onTime += metrics.byTaskKey[k].onTime;
+            taskTotals[k].late += metrics.byTaskKey[k].late;
+            taskTotals[k].total += metrics.totalWeeks;
+          });
+        });
+
+        return {
+          list,
+          onTimePct: totalAll ? Math.round((totalOnTime / totalAll) * 100) : 0,
+          latePct: totalAll ? Math.round((totalLate / totalAll) * 100) : 0,
+          pendingPct: totalAll ? Math.round((totalPending / totalAll) * 100) : 0,
+          taskTotals
+        };
+      }, [cadres]);
+
+      const taskNames = {
+        lecture: "1. المحاضرة الأسبوعية والاختبار",
+        agenda: "2. إرسال الأجندة (قبل 24 ساعة)",
+        attendance: "3. الانضباط في حضور اللقاء",
+        minutes: "4. توثيق المحضر (خلال 24 ساعة)"
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-stone-200/80 shadow-sm">
+              <div className="text-xs font-bold text-stone-400">إجمالي الكوادر النشطة</div>
+              <div className="text-3xl font-black text-stone-900 mt-2">{cadres.length} كوادر</div>
+              <div className="text-[11px] text-stone-500 mt-1">مسجلين بحسابات حصرية</div>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-emerald-200 shadow-sm">
+              <div className="text-xs font-bold text-emerald-700">الإنجاز في الموعد (On-Time)</div>
+              <div className="text-3xl font-black text-emerald-600 mt-2">{analytics.onTimePct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">التزام كامل بالوقت المحدد (100% سكور)</div>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-amber-200 shadow-sm">
+              <div className="text-xs font-bold text-amber-700">إنجاز متأخر (محاضرات فائتة)</div>
+              <div className="text-3xl font-black text-amber-500 mt-2">{analytics.latePct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">أُنجزت بعد انتهاء أسبوعها (50% سكور)</div>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-rose-200 shadow-sm">
+              <div className="text-xs font-bold text-rose-700">غير منجز / قيد الانتظار</div>
+              <div className="text-3xl font-black text-rose-600 mt-2">{analytics.pendingPct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">مهمات لم تُستكمل بعد (0% سكور)</div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+            <div>
+              <span className="text-xs font-bold text-orange-600">تحليل العادات الأربع</span>
+              <h2 className="text-lg font-black text-stone-900">مدى إنجاز كل مهمة على حدة عبر جميع الكوادر</h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                const t = analytics.taskTotals[k];
+                const onTimeRate = t.total ? Math.round((t.onTime / t.total) * 100) : 0;
+                const lateRate = t.total ? Math.round((t.late / t.total) * 100) : 0;
+                const totalDoneRate = onTimeRate + lateRate;
+
+                return (
+                  <div key={k} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-black">
+                      <span className="text-stone-800">{taskNames[k]}</span>
+                      <span className="text-stone-900">{totalDoneRate}% إجمالي الإنجاز</span>
+                    </div>
+                    <div className="w-full h-3 rounded-full bg-stone-200 overflow-hidden flex">
+                      <div style={{ width: `${onTimeRate}%` }} className="bg-emerald-600 h-full" title="في الموعد" />
+                      <div style={{ width: `${lateRate}%` }} className="bg-amber-500 h-full" title="متأخر" />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-stone-500 font-semibold">
+                      <span>✅ في الموعد: {onTimeRate}% ({t.onTime})</span>
+                      {k === "lecture" && <span>⚠️ متأخر: {lateRate}% ({t.late})</span>}
+                      <span>⏳ غير منجز: {100 - totalDoneRate}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-bold text-orange-600">تقييم الكوادر التفصيلي</span>
+                <h2 className="text-lg font-black text-stone-900">جدول التزام الكوادر والـ Score التراكمي وإجابات الاختبارات</h2>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead>
+                  <tr className="border-b border-stone-200 text-stone-400 font-bold">
+                    <th className="py-3 px-2">#</th>
+                    <th className="py-3 px-2">الكادر الإداري</th>
+                    <th className="py-3 px-2">بيانات الدخول الحالية</th>
+                    <th className="py-3 px-2">تاريخ الانضمام (الأسابيع)</th>
+                    <th className="py-3 px-2">حالة الأسبوع الحالي</th>
+                    <th className="py-3 px-2">متوسط الاختبارات</th>
+                    <th className="py-3 px-2">السكور العام</th>
+                    <th className="py-3 px-2">التفاصيل وإجابات الاختبار</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {analytics.list.map(({ cadre, metrics }, idx) => {
+                    const currWeekRec = cadre.tasksRecord?.[metrics.totalWeeks] || {};
+                    return (
+                      <tr key={cadre.id} className="hover:bg-stone-50/80">
+                        <td className="py-3.5 px-2 font-black text-stone-500">{idx + 1}</td>
+                        <td className="py-3.5 px-2">
+                          <div className="font-black text-stone-900 text-sm">{cadre.name}</div>
+                          <div className="text-[11px] text-stone-400">{cadre.unit} • {cadre.jobTitle}</div>
+                        </td>
+                        <td className="py-3.5 px-2">
+                          <span className="font-mono bg-stone-100 px-2 py-1 rounded-lg text-stone-700 font-bold">
+                            {cadre.username} / {cadre.password}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-2 font-semibold text-stone-600">
+                          {formatDateAr(cadre.joinedAt)} ({metrics.totalWeeks} أسبوع)
+                        </td>
+                        <td className="py-3.5 px-2">
+                          <div className="flex items-center gap-1.5">
+                            {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                              const st = currWeekRec[k]?.status || 'pending';
+                              return (
+                                <span
+                                  key={k}
+                                  title={k}
+                                  className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold ${
+                                    st === 'on_time'
+                                      ? 'bg-emerald-100 text-emerald-700'
+                                      : st === 'late'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-50 text-rose-500'
+                                  }`}
+                                >
+                                  {st === 'on_time' ? '✓' : st === 'late' ? '!' : '•'}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-2 font-bold">
+                          {metrics.avgQuizPct !== null ? (
+                            <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800">{metrics.avgQuizPct}%</span>
+                          ) : (
+                            <span className="text-stone-400">لم يختبر بعد</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-2">
+                          <span className={`text-sm font-black px-3 py-1 rounded-full ${
+                            metrics.overallScorePct >= 80
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : metrics.overallScorePct >= 50
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-rose-100 text-rose-800'
+                          }`}>
+                            {metrics.overallScorePct}%
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-2">
+                          <button
+                            onClick={() => onInspectCadre(cadre)}
+                            className="px-3 py-1.5 rounded-xl bg-stone-900 text-white font-bold hover:bg-orange-600 transition"
+                          >
+                            🔍 فحص الإجابات والسجل
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 12. ADMIN CURRICULUM & QUIZ BUILDER SECTION (إدارة المحاضرات والاختبارات)
+    // ============================================================================
+    function AdminCurriculumSection({ db, setDb, showToast }) {
+      const availableWeeks = db.systemConfig?.availableCurriculumWeeks || [1, 2, 3, 4, 5, 6, 7, 8];
+      const [selectedKey, setSelectedKey] = useState("default");
+
+      const currentCurr = useMemo(() => {
+        return db.weeklyCurriculums?.[selectedKey] || db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
+      }, [db.weeklyCurriculums, selectedKey]);
+
+      const [lectureTitle, setLectureTitle] = useState(currentCurr.lectureTitle || "");
+      const [lectureDesc, setLectureDesc] = useState(currentCurr.lectureDesc || "");
+      const [videoType, setVideoType] = useState(currentCurr.videoType || "mp4");
+      const [videoUrl, setVideoUrl] = useState(currentCurr.videoUrl || "");
+      const [questions, setQuestions] = useState(currentCurr.questions || []);
+
+      useEffect(() => {
+        setLectureTitle(currentCurr.lectureTitle || "");
+        setLectureDesc(currentCurr.lectureDesc || "");
+        setVideoType(currentCurr.videoType || "mp4");
+        setVideoUrl(currentCurr.videoUrl || "");
+        setQuestions(
+          Array.isArray(currentCurr.questions)
+            ? currentCurr.questions.map(q => ({ ...q, options: [...(q.options || ["", "", "", ""])] }))
+            : []
+        );
+      }, [currentCurr, selectedKey]);
+
+      const handleQuestionChange = (qIdx, field, val) => {
+        setQuestions(prev => prev.map((q, idx) => idx === qIdx ? { ...q, [field]: val } : q));
+      };
+
+      const handleOptionChange = (qIdx, optIdx, val) => {
+        setQuestions(prev => prev.map((q, idx) => {
+          if (idx !== qIdx) return q;
+          const nextOpts = [...(q.options || [])];
+          nextOpts[optIdx] = val;
+          return { ...q, options: nextOpts };
+        }));
+      };
+
+      const addQuestion = () => {
+        setQuestions(prev => [
+          ...prev,
+          {
+            id: "q_" + Date.now(),
+            text: "سؤال جديد حول المحاضرة الأسبوعية؟",
+            options: ["الخيار الأول", "الخيار الثاني", "الخيار الثالث", "الخيار الرابع"],
+            correctIndex: 0
+          }
+        ]);
+      };
+
+      const removeQuestion = (qIdx) => {
+        if (questions.length <= 1) {
+          showToast("يجب أن يحتوي الاختبار على سؤال واحد على الأقل.");
+          return;
+        }
+        setQuestions(prev => prev.filter((_, idx) => idx !== qIdx));
+      };
+
+      const handleSaveCurriculum = (e) => {
+        e.preventDefault();
+        if (!lectureTitle.trim() || !videoUrl.trim()) {
+          showToast("يرجى إدخال عنوان المحاضرة ورابط الفيديو.");
+          return;
+        }
+
+        const updatedCurr = {
+          lectureTitle: lectureTitle.trim(),
+          lectureDesc: lectureDesc.trim(),
+          videoType,
+          videoUrl: videoUrl.trim(),
+          questions
+        };
+
+        setDb(prev => ({
+          ...prev,
+          weeklyCurriculums: {
+            ...(prev.weeklyCurriculums || {}),
+            [selectedKey]: updatedCurr
+          }
+        }));
+
+        showToast(
+          selectedKey === "default"
+            ? "تم حفظ المنهج الافتراضي لجميع الأسابيع بنجاح ✓"
+            : `تم حفظ محاضرة واختبار الأسبوع ${selectedKey} بنجاح ✓`
+        );
+      };
+
+      const addNewWeekSlot = () => {
+        const nextWeekNum = availableWeeks.length > 0 ? Math.max(...availableWeeks) + 1 : 1;
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            availableCurriculumWeeks: [...availableWeeks, nextWeekNum]
+          }
+        }));
+        setSelectedKey(String(nextWeekNum));
+        showToast(`تمت إضافة الأسبوع ${nextWeekNum} إلى خطة المحاضرات ✓`);
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-bold text-orange-600">إدارة المحتوى المعرفي والاختبارات</span>
+                <h2 className="text-lg font-black text-stone-900">تخصيص المحاضرات الأسبوعية وأسئلة الاستيعاب</h2>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  اختر «المنهج الافتراضي» لتطبيقه تلقائياً، أو خصص محاضرة واختباراً مستقلاً لكل أسبوع.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addNewWeekSlot}
+                className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 transition"
+              >
+                + إضافة أسبوع جديد للخطة
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+              <button
+                type="button"
+                onClick={() => setSelectedKey("default")}
+                className={`px-4 py-2.5 rounded-2xl text-xs font-black border transition flex-shrink-0 ${
+                  selectedKey === "default"
+                    ? "madyan-gradient text-white border-transparent shadow-sm"
+                    : "bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100"
+                }`}
+              >
+                🌟 المنهج الافتراضي العام
+              </button>
+              {availableWeeks.map(w => {
+                const isCustom = Boolean(db.weeklyCurriculums?.[w]);
+                return (
+                  <button
+                    key={w}
+                    type="button"
+                    onClick={() => setSelectedKey(String(w))}
+                    className={`px-4 py-2.5 rounded-2xl text-xs font-black border transition flex-shrink-0 ${
+                      String(selectedKey) === String(w)
+                        ? "bg-stone-900 text-white border-stone-900 shadow-sm"
+                        : "bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100"
+                    }`}
+                  >
+                    الأسبوع {w} {isCustom && <span className="text-orange-500 mr-1">• مخصص</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveCurriculum} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+              <h3 className="text-base font-black text-stone-900">
+                🎬 بيانات الفيديو والمحاضرة ({selectedKey === "default" ? "الافتراضي" : `الأسبوع ${selectedKey}`})
+              </h3>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">عنوان المحاضرة</label>
+                <input
+                  value={lectureTitle}
+                  onChange={e => setLectureTitle(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">وصف المحاضرة</label>
+                <textarea
+                  rows="3"
+                  value={lectureDesc}
+                  onChange={e => setLectureDesc(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs leading-relaxed"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">نوع الفيديو</label>
+                  <select
+                    value={videoType}
+                    onChange={e => setVideoType(e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs font-bold"
+                  >
+                    <option value="mp4">ملف MP4 مباشر</option>
+                    <option value="youtube">رابط YouTube</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط الفيديو (URL)</label>
+                  <input
+                    value={videoUrl}
+                    onChange={e => setVideoUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono"
+                    dir="ltr"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-2xl overflow-hidden bg-stone-950 aspect-video border border-stone-800">
+                {videoType === "youtube" ? (
+                  <iframe
+                    src={getYoutubeEmbedUrl(videoUrl)}
+                    title="معاينة المحاضرة"
+                    className="w-full h-full"
+                    allowFullScreen
+                  />
+                ) : (
+                  <video src={videoUrl} controls className="w-full h-full object-contain" />
+                )}
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95 transition"
+              >
+                💾 حفظ واعتماد المحاضرة والاختبار
+              </button>
+            </div>
+
+            <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-stone-900">📝 أسئلة الاختبار القصير ({questions.length})</h3>
+                  <p className="text-xs text-stone-500">حدد السؤال والخيارات الأربعة والإجابة الصحيحة لكل سؤال</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={addQuestion}
+                  className="px-3.5 py-2 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 text-xs font-black hover:bg-orange-100"
+                >
+                  + إضافة سؤال
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {questions.map((q, qIdx) => (
+                  <div key={q.id || qIdx} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-black text-stone-800">السؤال #{qIdx + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeQuestion(qIdx)}
+                        className="text-[11px] font-bold text-rose-600 hover:underline"
+                      >
+                        حذف السؤال
+                      </button>
+                    </div>
+
+                    <input
+                      value={q.text}
+                      onChange={e => handleQuestionChange(qIdx, "text", e.target.value)}
+                      placeholder="نص السؤال..."
+                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
+                    />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {(q.options || []).map((opt, optIdx) => {
+                        const isCorrect = Number(q.correctIndex) === optIdx;
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`p-2 rounded-xl border flex items-center gap-2 ${
+                              isCorrect ? "bg-emerald-50 border-emerald-400" : "bg-white border-stone-200"
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name={`correct_${qIdx}`}
+                              checked={isCorrect}
+                              onChange={() => handleQuestionChange(qIdx, "correctIndex", optIdx)}
+                              title="تحديد كإجابة صحيحة"
+                            />
+                            <input
+                              value={opt}
+                              onChange={e => handleOptionChange(qIdx, optIdx, e.target.value)}
+                              className="flex-1 bg-transparent text-xs font-semibold focus:outline-none"
+                              placeholder={`خيار ${optIdx + 1}`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 13. ADMIN USERS & SYSTEM SETTINGS SECTION (إدارة الحسابات وإعدادات النظام)
+    // ============================================================================
+    function AdminSettingsAndUsersSection({ db, setDb, cadres, showToast }) {
+      const [newName, setNewName] = useState("");
+      const [newJobTitle, setNewJobTitle] = useState("");
+      const [newUnit, setNewUnit] = useState("وحدة التخطيط الاستراتيجي");
+      const [newUsername, setNewUsername] = useState("");
+      const [newPassword, setNewPassword] = useState("1234");
+      const [newRoleType, setNewRoleType] = useState("cadre");
+      const [newWeeksAgo, setNewWeeksAgo] = useState(1);
+      const [newMeetDay, setNewMeetDay] = useState(2);
+      const [newMeetTime, setNewMeetTime] = useState("19:00");
+
+      const [quoteText, setQuoteText] = useState("");
+      const [quoteAuthor, setQuoteAuthor] = useState("منهجية Madyan");
+
+      const handleCreateUser = (e) => {
+        e.preventDefault();
+        if (!newName.trim() || !newUsername.trim() || !newPassword.trim()) {
+          showToast("يرجى إدخال الاسم واسم المستخدم وكلمة المرور.");
+          return;
+        }
+        const cleanUser = newUsername.trim().toLowerCase();
+        if (db.users.some(u => u.username.toLowerCase() === cleanUser)) {
+          showToast("اسم المستخدم هذا مسجل بالفعل، اختر اسماً آخر.");
+          return;
+        }
+
+        const weeksNum = Math.max(1, parseInt(newWeeksAgo, 10) || 1);
+        const joinedTimestamp = Date.now() - ((weeksNum - 1) * MS_PER_WEEK) - (24 * 3600 * 1000);
+
+        const initialTasks = {};
+        if (newRoleType === "cadre") {
+          for (let w = 1; w <= weeksNum; w++) {
+            initialTasks[w] = {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            };
+          }
+        }
+
+        const created = {
+          id: "u_" + Date.now(),
+          username: newUsername.trim(),
+          password: newPassword.trim(),
+          roleType: newRoleType,
+          onboarded: false,
+          joinedAt: joinedTimestamp,
+          name: newName.trim(),
+          jobTitle: newJobTitle.trim() || (newRoleType === "executive" ? "عضو المكتب التنفيذي" : "كادر إداري"),
+          unit: newUnit.trim() || "الإدارة العامة",
+          defaultSchedule: {
+            meetDay: parseInt(newMeetDay, 10),
+            meetTime: newMeetTime,
+            meetDuration: 90
+          },
+          weekOverrides: {},
+          tasksRecord: initialTasks
+        };
+
+        setDb(prev => ({
+          ...prev,
+          users: [...prev.users, created]
+        }));
+
+        setNewName("");
+        setNewJobTitle("");
+        setNewUsername("");
+        showToast(`تم إنشاء الحساب (${created.name}) بنجاح ✓`);
+      };
+
+      const handleDeleteUser = (userId) => {
+        const target = db.users.find(u => u.id === userId);
+        if (!target) return;
+        if (target.roleType === "admin" && db.users.filter(u => u.roleType === "admin").length <= 1) {
+          showToast("لا يمكن حذف حساب المدير الوحيد في النظام.");
+          return;
+        }
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.filter(u => u.id !== userId)
+        }));
+        showToast("تم حذف الحساب من المنصة.");
+      };
+
+      const handleAddQuote = (e) => {
+        e.preventDefault();
+        if (!quoteText.trim()) return;
+        const nextQuote = {
+          id: Date.now(),
+          text: quoteText.trim(),
+          author: quoteAuthor.trim() || "منهجية Madyan"
+        };
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            quotes: [nextQuote, ...(prev.systemConfig?.quotes || [])]
+          }
+        }));
+        setQuoteText("");
+        showToast("تمت إضافة الاقتباس التحفيزي بنجاح 🌱");
+      };
+
+      const handleDeleteQuote = (id) => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            quotes: (prev.systemConfig?.quotes || []).filter(q => q.id !== id)
+          }
+        }));
+      };
+
+      return (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* توليد حساب جديد */}
+          <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+            <div>
+              <span className="text-xs font-bold text-orange-600">إدارة الحسابات والصلاحيات</span>
+              <h2 className="text-lg font-black text-stone-900">توليد حساب جديد (كادر / تنفيذي / مدير)</h2>
+              <p className="text-xs text-stone-500 mt-0.5">
+                الحسابات تُمنح حصرياً من الإدارة، ويمكن للكادر تعديل بياناته عند أول دخول.
+              </p>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">نوع الصلاحية (Role)</label>
+                <select
+                  value={newRoleType}
+                  onChange={e => setNewRoleType(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  <option value="cadre">👤 كادر إداري (Cadre)</option>
+                  <option value="executive">🏛️ عضو المكتب التنفيذي (Executive)</option>
+                  <option value="admin">🛡️ مدير النظام والـ HR (Admin)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                <input
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  placeholder="مثال: خالد العتيبي"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
+                  <input
+                    value={newJobTitle}
+                    onChange={e => setNewJobTitle(e.target.value)}
+                    placeholder="منسق مشاريع"
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الإدارية</label>
+                  <input
+                    value={newUnit}
+                    onChange={e => setNewUnit(e.target.value)}
+                    placeholder="وحدة التخطيط"
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-orange-50/60 border border-orange-200/80">
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم (Username)</label>
+                  <input
+                    value={newUsername}
+                    onChange={e => setNewUsername(e.target.value)}
+                    placeholder="khalid"
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                    dir="ltr"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور الابتدائية</label>
+                  <input
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                    dir="ltr"
+                    required
+                  />
+                </div>
+              </div>
+
+              {newRoleType === "cadre" && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-stone-700 mb-1">عدد الأسابيع</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="52"
+                      value={newWeeksAgo}
+                      onChange={e => setNewWeeksAgo(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-stone-700 mb-1">يوم الاجتماع</label>
+                    <select
+                      value={newMeetDay}
+                      onChange={e => setNewMeetDay(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-xs font-bold"
+                    >
+                      {DAYS_AR.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-stone-700 mb-1">الوقت</label>
+                    <input
+                      type="time"
+                      value={newMeetTime}
+                      onChange={e => setNewMeetTime(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-xs font-bold"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95"
+              >
+                + توليد الحساب وتفعيله فوراً
+              </button>
+            </form>
+          </div>
+
+          {/* قائمة جميع الحسابات + الاقتباسات */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <h3 className="text-base font-black text-stone-900">👥 الحسابات المسجلة بالنظام ({db.users.length})</h3>
+              <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                {db.users.map(u => (
+                  <div key={u.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-black text-stone-900">{u.name}</span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                          u.roleType === "admin"
+                            ? "bg-stone-900 text-white"
+                            : u.roleType === "executive"
+                            ? "bg-orange-100 text-orange-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {u.roleType === "admin" ? "مدير النظام" : u.roleType === "executive" ? "المكتب التنفيذي" : "كادر"}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-stone-500 mt-0.5">
+                        {u.unit} • {u.jobTitle}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-xl border border-stone-200 font-bold text-stone-700">
+                        {u.username} / {u.password}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteUser(u.id)}
+                        className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-bold"
+                      >
+                        حذف
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <h3 className="text-base font-black text-stone-900">🌱 الاقتباسات والرسائل التحفيزية ({db.systemConfig?.quotes?.length || 0})</h3>
+              <form onSubmit={handleAddQuote} className="flex flex-wrap gap-2">
+                <input
+                  value={quoteText}
+                  onChange={e => setQuoteText(e.target.value)}
+                  placeholder="أضف حكمة أو رسالة تحفيزية أسبوعية..."
+                  className="flex-1 min-w-[200px] rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+                />
+                <input
+                  value={quoteAuthor}
+                  onChange={e => setQuoteAuthor(e.target.value)}
+                  placeholder="المصدر"
+                  className="w-36 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                />
+                <button type="submit" className="px-4 py-2 rounded-2xl bg-stone-900 text-white text-xs font-bold">
+                  إضافة
+                </button>
+              </form>
+              <div className="space-y-2">
+                {(db.systemConfig?.quotes || []).map(q => (
+                  <div key={q.id} className="p-3 rounded-2xl bg-stone-50 border border-stone-200 flex items-center justify-between gap-2 text-xs">
+                    <div>
+                      <span className="font-bold text-stone-800">“{q.text}”</span>
+                      <span className="text-stone-400 mr-2">— {q.author}</span>
+                    </div>
+                    <button onClick={() => handleDeleteQuote(q.id)} className="text-rose-600 font-bold text-[11px]">حذف</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 14. CADRE INSPECTOR MODAL (فحص سجل الكادر وإجابات الاختبارات بالتفصيل)
+    // ============================================================================
+    function CadreInspectorModal({ cadre, db, onClose }) {
+      if (!cadre) return null;
+      const totalWeeks = calculateWeeksSinceJoin(cadre.joinedAt);
+      const metrics = computeCadreMetrics(cadre);
+
+      return (
+        <ModalContainer
+          isOpen={Boolean(cadre)}
+          onClose={onClose}
+          badge={`فحص السجل التفصيلي • ${cadre.unit}`}
+          title={`${cadre.name} (@${cadre.username})`}
+          maxWidth="max-w-3xl"
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+              <div className="p-3 rounded-2xl bg-stone-50 border border-stone-200">
+                <div className="text-[11px] text-stone-400 font-bold">السكور التراكمي</div>
+                <div className="text-xl font-black text-stone-900 mt-0.5">{metrics.overallScorePct}%</div>
+              </div>
+              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
+                <div className="text-[11px] text-emerald-700 font-bold">منجز في الوقت</div>
+                <div className="text-xl font-black text-emerald-700 mt-0.5">{metrics.onTimeCount}</div>
+              </div>
+              <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
+                <div className="text-[11px] text-amber-800 font-bold">منجز متأخراً</div>
+                <div className="text-xl font-black text-amber-600 mt-0.5">{metrics.lateCount}</div>
+              </div>
+              <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200">
+                <div className="text-[11px] text-sky-800 font-bold">متوسط الاختبارات</div>
+                <div className="text-xl font-black text-sky-700 mt-0.5">
+                  {metrics.avgQuizPct !== null ? `${metrics.avgQuizPct}%` : "—"}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 max-h-[58vh] overflow-y-auto pr-1">
+              {Array.from({ length: totalWeeks }, (_, idx) => {
+                const w = totalWeeks - idx;
+                const wRec = cadre.tasksRecord?.[w] || {};
+                const curr = db.weeklyCurriculums?.[w] || db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
+                const quizSub = wRec.lecture?.quizSubmission;
+
+                return (
+                  <div key={w} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-stone-900">
+                        📅 الأسبوع {w} ({getWeekDateRangeLabel(w, totalWeeks)})
+                      </span>
+                      {quizSub && (
+                        <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                          درجة الاختبار: {quizSub.score}/{quizSub.total}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                        const t = wRec[k] || { status: "pending" };
+                        const labels = { lecture: "المحاضرة", agenda: "الأجندة", attendance: "الحضور", minutes: "المحضر" };
+                        return (
+                          <div key={k} className="p-2.5 rounded-xl bg-white border border-stone-200/80 space-y-1">
+                            <div className="font-black text-stone-700">{labels[k]}</div>
+                            <div className={`text-[11px] font-bold ${
+                              t.status === "on_time" ? "text-emerald-600" : t.status === "late" ? "text-amber-600" : "text-rose-500"
+                            }`}>
+                              {t.status === "on_time" ? "✓ في الموعد" : t.status === "late" ? "⚠️ متأخر" : "• غير منجز"}
+                            </div>
+                            {t.completedAt && <div className="text-[10px] text-stone-400">{t.completedAt}</div>}
+                            {t.note && <div className="text-[10px] text-amber-800 bg-amber-50 p-1 rounded">📌 {t.note}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {quizSub && Array.isArray(curr.questions) && (
+                      <div className="pt-2 border-t border-stone-200/70 space-y-1.5">
+                        <div className="text-[11px] font-black text-stone-600">إجابات الكادر في اختبار المحاضرة:</div>
+                        {curr.questions.map((q, qIdx) => {
+                          const picked = quizSub.answers?.[qIdx];
+                          const isRight = picked === q.correctIndex;
+                          return (
+                            <div key={qIdx} className="text-[11px] flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-1.5 rounded-xl border border-stone-200/60">
+                              <span className="font-bold text-stone-700">{qIdx + 1}. {q.text}</span>
+                              <span className={isRight ? "text-emerald-700 font-black" : "text-rose-600 font-black"}>
+                                {isRight ? "✅ " : "❌ "}
+                                {q.options?.[picked] ?? "لم يجب"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 15. CLOUD DATABASE SETUP MODAL (إعداد الربط السحابي المباشر بـ Supabase & Netlify)
+    // ============================================================================
+    function CloudSetupModal({
+      isOpen, onClose, cloudConfig, cloudStatus, cloudError, lastSyncAt, onSaveConfig, onDisconnect, showToast
+    }) {
+      const [url, setUrl] = useState(cloudConfig?.supabaseUrl || "");
+      const [anonKey, setAnonKey] = useState(cloudConfig?.supabaseAnonKey || "");
+
+      useEffect(() => {
+        if (isOpen) {
+          setUrl(cloudConfig?.supabaseUrl || "");
+          setAnonKey(cloudConfig?.supabaseAnonKey || "");
+        }
+      }, [isOpen, cloudConfig]);
+
+      if (!isOpen) return null;
+
+      const copySql = () => {
+        navigator.clipboard.writeText(SQL_SCHEMA_SNIPPET);
+        showToast("تم نسخ كود إنشاء جدول SQL! الصقه في Supabase SQL Editor واضغط Run ✓");
+      };
+
+      return (
+        <ModalContainer
+          isOpen={isOpen}
+          onClose={onClose}
+          badge="Full-Stack Cloud Architecture (Supabase + GitHub + Netlify)"
+          title="☁️ إعداد ومزامنة قاعدة البيانات الحقيقية (Supabase PostgreSQL)"
+          maxWidth="max-w-2xl"
+        >
+          <div className="space-y-4">
+            <div className={`p-4 rounded-2xl border text-xs space-y-1 ${
+              cloudStatus === "connected"
+                ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                : cloudStatus === "error"
+                ? "bg-rose-50 border-rose-300 text-rose-900"
+                : "bg-stone-50 border-stone-200 text-stone-700"
+            }`}>
+              <div className="font-black text-sm">
+                {cloudStatus === "connected"
+                  ? `✅ متصل فعلياً بقاعدة بيانات Supabase (آخر مزامنة: ${lastSyncAt || "الآن"})`
+                  : cloudStatus === "error"
+                  ? "⚠️ تعذر إتمام المزامنة مع Supabase"
+                  : "ℹ️ يعمل التطبيق حالياً بالذاكرة المحلية إلى حين إدخال مفاتيح مشروعك في Supabase"}
+              </div>
+              {cloudError && <p className="text-xs font-bold text-rose-700 mt-1">{cloudError}</p>}
+            </div>
+
+            <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-stone-900">1️⃣ الخطوة الأولى: تهيئة الجدول في Supabase SQL Editor</span>
+                <button
+                  type="button"
+                  onClick={copySql}
+                  className="px-3 py-1.5 rounded-xl bg-stone-900 text-white text-[11px] font-bold hover:bg-orange-600 transition"
+                >
+                  📋 نسخ كود الـ SQL
+                </button>
+              </div>
+              <pre className="text-[11px] bg-stone-900 text-emerald-300 p-3 rounded-xl overflow-x-auto font-mono" dir="ltr">
+                {SQL_SCHEMA_SNIPPET}
+              </pre>
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-xs font-black text-stone-900">
+                2️⃣ الخطوة الثانية: أدخل بيانات مشروعك من (Supabase Project Settings → API)
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">رابط المشروع (Supabase Project URL)</label>
+                <input
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="https://xxxxxxxxxxxx.supabase.co"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono font-bold"
+                  dir="ltr"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">المفتاح العام (Supabase anon / public Key)</label>
+                <input
+                  value={anonKey}
+                  onChange={e => setAnonKey(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono font-bold"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-stone-100">
+              {cloudConfig?.supabaseUrl ? (
+                <button
+                  type="button"
+                  onClick={onDisconnect}
+                  className="px-4 py-2.5 rounded-2xl bg-rose-50 text-rose-700 text-xs font-bold"
+                >
+                  فصل الاتصال السحابي
+                </button>
+              ) : <div />}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+                >
+                  إغلاق
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!url.trim() || !anonKey.trim()) {
+                      showToast("يرجى إدخال Project URL و Anon Key أولاً.");
+                      return;
+                    }
+                    onSaveConfig(url, anonKey);
+                    onClose();
+                  }}
+                  className="px-6 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+                >
+                  ☁️ حفظ الاتصال ومزامنة البيانات الآن
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalContainer>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
+  </script>
+</body>
+</html>
