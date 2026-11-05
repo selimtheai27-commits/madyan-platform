@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Madyan | محرك بناء العادات المؤسسية</title>
+  <title>Madyan | محرك بناء العادات المؤسسية والتربوية</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Google Fonts: Cairo (Arabic) & Plus Jakarta Sans (Bold Sans-Serif for Madyan Logo) -->
@@ -12,13 +12,13 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Supabase JS Client v2 (Real PostgreSQL + Realtime Sync) -->
+  <!-- Supabase JS Client v2 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <style>
     body {
       font-family: 'Cairo', sans-serif;
-      background-color: #F7F7F5;
+      background-color: #F6F5F2;
       color: #1C1917;
       -webkit-font-smoothing: antialiased;
     }
@@ -33,14 +33,8 @@
     .madyan-gradient {
       background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%);
     }
-    .timeline-line {
-      position: absolute;
-      right: 19px;
-      top: 32px;
-      bottom: -28px;
-      width: 2px;
-      border-right: 2px dashed #D6D3D1;
-      z-index: 0;
+    .tarbawi-gradient {
+      background: linear-gradient(135deg, #059669 0%, #0D9488 100%);
     }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -53,19 +47,89 @@
     const { useState, useEffect, useMemo } = React;
 
     // ============================================================================
-    // 1. CONSTANTS & INITIAL DATABASE SEED
+    // 1. CONSTANTS & INITIAL DATABASE SEED (DUAL-PILLAR: ADMIN + TARBAWI)
     // ============================================================================
     const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const DAYS_SHORT_AR = ['أحد', 'اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
     const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
     const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
     const SYSTEM_ANCHOR_DATE = new Date().getTime();
 
+    const DEFAULT_TARBAWI_TASKS = [
+      {
+        id: "tarbawi_wird",
+        title: "الورد القرآني والذكر اليومي",
+        subtitle: "المحافظة اليومية على ورد التلاوة وأذكار الصباح والمساء",
+        instructions: "اضغط على أيام الأسبوع التي أتممت فيها وردك اليومي (يكتمل الهدف الأسبوعي بإنجاز 5 أيام فأكثر أو إتمام النصاب).",
+        durationMinutes: 20,
+        badge: "زاد روحي يومي",
+        icon: "📖",
+        trackType: "daily_days",
+        targetDays: 5,
+        targetScope: "all",
+        targetUnit: "",
+        targetUserIds: [],
+        enabled: true
+      },
+      {
+        id: "tarbawi_reading",
+        title: "القراءة المنهجية والكتاب المقرر",
+        subtitle: "قراءة القدر الأسبوعي المقرر وتدوين أهم الفوائد العملية",
+        instructions: "اقرأ الصفحات المقررة لهذا الأسبوع، وسجّل خلاصة الفكرة أو الفائدة في مسودتك التربوية.",
+        durationMinutes: 40,
+        badge: "بناء فكري",
+        icon: "📚",
+        trackType: "check",
+        targetDays: 1,
+        targetScope: "all",
+        targetUnit: "",
+        targetUserIds: [],
+        enabled: true
+      },
+      {
+        id: "tarbawi_majlis",
+        title: "اللقاء التربوي الأسبوعي",
+        subtitle: "حضور الجلسة التربوية الأسبوعية والمشاركة الفاعلة فيها",
+        instructions: "احضر اللقاء التربوي في موعده وساهم في النقاش العملي حول قيمة الأسبوع.",
+        durationMinutes: 60,
+        badge: "تزكية وصحبة",
+        icon: "🌿",
+        trackType: "check",
+        targetDays: 1,
+        targetScope: "all",
+        targetUnit: "",
+        targetUserIds: [],
+        enabled: true
+      },
+      {
+        id: "tarbawi_amal",
+        title: "التطبيق السلوكي والمبادرة العملية",
+        subtitle: "تحويل قيمة الأسبوع التربوية إلى سلوك عملي ملموس",
+        instructions: "طبّق السلوك المستهدف لهذا الأسبوع في بيئة عملك أو محيطك ثم أكّد الإنجاز.",
+        durationMinutes: 25,
+        badge: "أثر سلوكي",
+        icon: "✨",
+        trackType: "check",
+        targetDays: 1,
+        targetScope: "all",
+        targetUnit: "",
+        targetUserIds: [],
+        enabled: true
+      }
+    ];
+
     const INITIAL_STATE = {
       systemConfig: {
         availableCurriculumWeeks: [1, 2, 3, 4, 5, 6, 7, 8],
+        tarbawiWeeklyFocus: {
+          title: "الإتقان والأمانة في العمل المؤسسي",
+          bookTitle: "المقرر القرائي: فصل فقه الأولويات (ص 15 - 35)",
+          hint: "تذكّر أن توازن الكادر يجمع بين انضباطه الإداري وزاده التربوي."
+        },
         quotes: [
           { id: 1, text: "الانضباط المؤسسي ليس قيداً، بل هو الجسر الذي يحول الأهداف الاستراتيجية إلى واقع يومي ملموس.", author: "منهجية Madyan" },
-          { id: 2, text: "التحضير الجيد قبل الاجتماع بـ 24 ساعة يختصر نصف وقت النقاش ويضاعف جودة القرار.", author: "إدارة العمليات" }
+          { id: 2, text: "التحضير الجيد قبل الاجتماع بـ 24 ساعة يختصر نصف وقت النقاش ويضاعف جودة القرار.", author: "إدارة العمليات" },
+          { id: 3, text: "قليلٌ دائمٌ خيرٌ من كثيرٍ منقطع؛ العادة التربوية تُبنى بالمداومة اليومية الهادئة.", author: "المحور التربوي" }
         ],
         taskDefinitions: {
           lecture: {
@@ -96,7 +160,8 @@
             durationMinutes: 20,
             badge: "خلال 24 ساعة بعد اللقاء"
           }
-        }
+        },
+        tarbawiTaskDefinitions: DEFAULT_TARBAWI_TASKS
       },
 
       bulletins: [
@@ -191,31 +256,51 @@
               lecture: { status: "on_time", completedAt: "الأحد 08:30 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
               agenda: { status: "on_time", completedAt: "الاثنين 06:15 مساءً", note: "تم إرسال الأجندة للمجموعة" },
               attendance: { status: "on_time", completedAt: "الثلاثاء 07:05 مساءً" },
-              minutes: { status: "on_time", completedAt: "الأربعاء 03:20 مساءً" }
+              minutes: { status: "on_time", completedAt: "الأربعاء 03:20 مساءً" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 3, 4, 5], completedAt: "الجمعة 09:00 مساءً" },
+              tarbawi_reading: { status: "on_time", completedAt: "الخميس 08:00 مساءً", note: "تمت قراءة الفصل الأول وتلخيص 3 نقاط" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الأربعاء 08:30 مساءً" },
+              tarbawi_amal: { status: "on_time", completedAt: "الخميس 05:00 مساءً" }
             },
             2: {
               lecture: { status: "on_time", completedAt: "الاثنين 09:00 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
               agenda: { status: "on_time", completedAt: "الاثنين 05:40 مساءً" },
               attendance: { status: "on_time", completedAt: "الثلاثاء 07:00 مساءً" },
-              minutes: { status: "pending" }
+              minutes: { status: "pending" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 3, 4], completedAt: "الخميس 10:00 مساءً" },
+              tarbawi_reading: { status: "on_time", completedAt: "الأربعاء 09:15 مساءً" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الأربعاء 08:00 مساءً" },
+              tarbawi_amal: { status: "pending" }
             },
             3: {
               lecture: { status: "late", completedAt: "الأسبوع 4 (متأخر)", quizSubmission: { score: 2, total: 3, answers: [1, 1, 1] } },
               agenda: { status: "on_time", completedAt: "الاثنين 06:00 مساءً" },
               attendance: { status: "on_time", completedAt: "الثلاثاء 07:02 مساءً" },
-              minutes: { status: "on_time", completedAt: "الأربعاء 04:10 مساءً" }
+              minutes: { status: "on_time", completedAt: "الأربعاء 04:10 مساءً" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 4, 5], completedAt: "الجمعة 07:00 مساءً" },
+              tarbawi_reading: { status: "on_time", completedAt: "الخميس 06:00 مساءً" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الأربعاء 08:00 مساءً" },
+              tarbawi_amal: { status: "on_time", completedAt: "الجمعة 04:00 مساءً" }
             },
             4: {
               lecture: { status: "pending" },
               agenda: { status: "on_time", completedAt: "الاثنين 06:30 مساءً" },
               attendance: { status: "on_time", completedAt: "الثلاثاء 07:00 مساءً" },
-              minutes: { status: "pending" }
+              minutes: { status: "pending" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 3, 4], completedAt: "الخميس 11:00 مساءً" },
+              tarbawi_reading: { status: "pending" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الأربعاء 08:00 مساءً" },
+              tarbawi_amal: { status: "on_time", completedAt: "الخميس 03:00 مساءً" }
             },
             5: {
               lecture: { status: "pending" },
               agenda: { status: "on_time", completedAt: "الاثنين 06:45 مساءً" },
               attendance: { status: "pending" },
-              minutes: { status: "pending" }
+              minutes: { status: "pending" },
+              tarbawi_wird: { status: "pending", daysCompleted: [0, 1, 2] },
+              tarbawi_reading: { status: "on_time", completedAt: "الاثنين 09:30 مساءً", note: "أهم فائدة: التوازن بين الأهم فالمهم" },
+              tarbawi_majlis: { status: "pending" },
+              tarbawi_amal: { status: "pending" }
             }
           }
         },
@@ -236,19 +321,31 @@
               lecture: { status: "on_time", completedAt: "الأحد 02:00 مساءً", quizSubmission: { score: 3, total: 3, answers: [1, 1, 2] } },
               agenda: { status: "on_time", completedAt: "السبت 03:30 مساءً" },
               attendance: { status: "on_time", completedAt: "الأحد 04:00 مساءً" },
-              minutes: { status: "on_time", completedAt: "الاثنين 01:15 مساءً" }
+              minutes: { status: "on_time", completedAt: "الاثنين 01:15 مساءً" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 3, 4, 5, 6], completedAt: "السبت 08:00 مساءً" },
+              tarbawi_reading: { status: "on_time", completedAt: "الجمعة 05:00 مساءً" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الخميس 07:00 مساءً" },
+              tarbawi_amal: { status: "on_time", completedAt: "الجمعة 09:00 مساءً" }
             },
             2: {
               lecture: { status: "on_time", completedAt: "الاثنين 07:00 مساءً", quizSubmission: { score: 2, total: 3, answers: [1, 0, 2] } },
               agenda: { status: "on_time", completedAt: "السبت 03:00 مساءً" },
               attendance: { status: "on_time", completedAt: "الأحد 04:05 مساءً" },
-              minutes: { status: "on_time", completedAt: "الاثنين 12:30 مساءً" }
+              minutes: { status: "on_time", completedAt: "الاثنين 12:30 مساءً" },
+              tarbawi_wird: { status: "on_time", daysCompleted: [0, 1, 2, 3, 4], completedAt: "الخميس 09:00 مساءً" },
+              tarbawi_reading: { status: "on_time", completedAt: "الأربعاء 06:00 مساءً" },
+              tarbawi_majlis: { status: "on_time", completedAt: "الخميس 07:00 مساءً" },
+              tarbawi_amal: { status: "pending" }
             },
             3: {
               lecture: { status: "pending" },
               agenda: { status: "pending" },
               attendance: { status: "pending" },
-              minutes: { status: "pending" }
+              minutes: { status: "pending" },
+              tarbawi_wird: { status: "pending", daysCompleted: [0, 1] },
+              tarbawi_reading: { status: "pending" },
+              tarbawi_majlis: { status: "pending" },
+              tarbawi_amal: { status: "pending" }
             }
           }
         }
@@ -256,7 +353,7 @@
     };
 
     // ============================================================================
-    // 2. HELPER & SCORING ENGINE FUNCTIONS
+    // 2. HELPER & DUAL-PILLAR SCORING ENGINE FUNCTIONS
     // ============================================================================
     function calculateWeeksSinceJoin(joinedAtTimestamp) {
       if (!joinedAtTimestamp) return 1;
@@ -333,17 +430,44 @@
       };
     }
 
+    // جلب المهمات التربوية المفعلة والموجهة لهذا الكادر تحديداً (عامة أو لوحدته أو مخصصة له)
+    function getApplicableTarbawiTasks(user, systemConfig) {
+      const list = Array.isArray(systemConfig?.tarbawiTaskDefinitions)
+        ? systemConfig.tarbawiTaskDefinitions
+        : DEFAULT_TARBAWI_TASKS;
+      return list.filter(t => {
+        if (t.enabled === false) return false;
+        if (!user || user.roleType !== "cadre") return true;
+        if (!t.targetScope || t.targetScope === "all") return true;
+        if (t.targetScope === "unit") return t.targetUnit === user.unit;
+        if (t.targetScope === "custom") return Array.isArray(t.targetUserIds) && t.targetUserIds.includes(user.id);
+        return true;
+      });
+    }
+
     function getTaskScorePoints(taskObj) {
-      if (!taskObj || taskObj.status === 'pending') return 0;
+      if (!taskObj || taskObj.status === 'pending') {
+        // لو مهمة تتبع يومي وفيها أيام منجزة جزئياً نعطي نقاطاً تناسبية
+        if (Array.isArray(taskObj?.daysCompleted) && taskObj.daysCompleted.length > 0) {
+          return Math.min(90, Math.round((taskObj.daysCompleted.length / 5) * 100));
+        }
+        return 0;
+      }
       if (taskObj.status === 'on_time') return 100;
       if (taskObj.status === 'late') return 50;
       return 0;
     }
 
-    function computeCadreMetrics(user) {
+    function computeCadreMetrics(user, systemConfig = INITIAL_STATE.systemConfig) {
       const totalWeeks = calculateWeeksSinceJoin(user.joinedAt);
-      let totalPossiblePoints = totalWeeks * 4 * 100;
-      let earnedPoints = 0;
+      const tarbawiDefs = getApplicableTarbawiTasks(user, systemConfig);
+      const adminKeys = ['lecture', 'agenda', 'attendance', 'minutes'];
+
+      let adminPossible = totalWeeks * adminKeys.length * 100;
+      let adminEarned = 0;
+      let tarbawiPossible = totalWeeks * Math.max(1, tarbawiDefs.length) * 100;
+      let tarbawiEarned = 0;
+
       let onTimeCount = 0;
       let lateCount = 0;
       let pendingCount = 0;
@@ -356,11 +480,17 @@
         minutes: { onTime: 0, late: 0, pending: 0 }
       };
 
+      const byTarbawiKey = {};
+      tarbawiDefs.forEach(td => {
+        byTarbawiKey[td.id] = { onTime: 0, late: 0, pending: 0 };
+      });
+
       for (let w = 1; w <= totalWeeks; w++) {
         const wRec = (user.tasksRecord && user.tasksRecord[w]) || {};
-        ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
+
+        adminKeys.forEach(k => {
           const t = wRec[k] || { status: 'pending' };
-          earnedPoints += getTaskScorePoints(t);
+          adminEarned += getTaskScorePoints(t);
           if (t.status === 'on_time') {
             onTimeCount++;
             byTaskKey[k].onTime++;
@@ -376,20 +506,45 @@
             quizScores.push(qPct);
           }
         });
+
+        tarbawiDefs.forEach(td => {
+          const t = wRec[td.id] || { status: 'pending' };
+          tarbawiEarned += getTaskScorePoints(t);
+          if (t.status === 'on_time') {
+            onTimeCount++;
+            byTarbawiKey[td.id].onTime++;
+          } else if (t.status === 'late') {
+            lateCount++;
+            byTarbawiKey[td.id].late++;
+          } else {
+            pendingCount++;
+            byTarbawiKey[td.id].pending++;
+          }
+        });
       }
 
-      const overallScorePct = totalPossiblePoints > 0 ? Math.round((earnedPoints / totalPossiblePoints) * 100) : 0;
+      const adminScorePct = adminPossible > 0 ? Math.round((adminEarned / adminPossible) * 100) : 0;
+      const tarbawiScorePct = tarbawiDefs.length > 0 && tarbawiPossible > 0
+        ? Math.round((tarbawiEarned / tarbawiPossible) * 100)
+        : 0;
+
+      const totalPossible = adminPossible + (tarbawiDefs.length > 0 ? tarbawiPossible : 0);
+      const totalEarned = adminEarned + (tarbawiDefs.length > 0 ? tarbawiEarned : 0);
+      const overallScorePct = totalPossible > 0 ? Math.round((totalEarned / totalPossible) * 100) : 0;
       const avgQuizPct = quizScores.length > 0 ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null;
 
       return {
         totalWeeks,
         overallScorePct,
+        adminScorePct,
+        tarbawiScorePct,
         onTimeCount,
         lateCount,
         pendingCount,
-        totalTasksCount: totalWeeks * 4,
+        totalTasksCount: totalWeeks * (adminKeys.length + tarbawiDefs.length),
         avgQuizPct,
-        byTaskKey
+        byTaskKey,
+        byTarbawiKey
       };
     }
 
@@ -401,7 +556,7 @@
     }
 
     // ============================================================================
-    // 3. SHARED UI COMPONENTS & ERROR BOUNDARY
+    // 3. SHARED UI COMPONENTS, NORMALIZER & CLOUD SYNC ENGINE
     // ============================================================================
     class ErrorBoundary extends React.Component {
       constructor(props) {
@@ -414,7 +569,7 @@
       render() {
         if (this.state.hasError) {
           return (
-            <div className="min-h-screen flex items-center justify-center p-4 bg-[#F7F7F5]" dir="rtl">
+            <div className="min-h-screen flex items-center justify-center p-4 bg-[#F6F5F2]" dir="rtl">
               <div className="bg-white rounded-3xl max-w-md w-full p-7 shadow-xl border border-stone-200 text-center space-y-4">
                 <div className="text-3xl">🛠️</div>
                 <h2 className="text-lg font-black text-stone-900">تم رصد تعارض في البيانات المخزنة</h2>
@@ -440,19 +595,29 @@
 
     function normalizeDb(raw) {
       if (!raw || typeof raw !== "object") return INITIAL_STATE;
+
+      const rawTarbawiDefs = Array.isArray(raw.systemConfig?.tarbawiTaskDefinitions) && raw.systemConfig.tarbawiTaskDefinitions.length > 0
+        ? raw.systemConfig.tarbawiTaskDefinitions
+        : DEFAULT_TARBAWI_TASKS;
+
       const safeSystemConfig = {
         ...INITIAL_STATE.systemConfig,
         ...(raw.systemConfig || {}),
         availableCurriculumWeeks: Array.isArray(raw.systemConfig?.availableCurriculumWeeks)
           ? raw.systemConfig.availableCurriculumWeeks
           : INITIAL_STATE.systemConfig.availableCurriculumWeeks,
-        quotes: Array.isArray(raw.systemConfig?.quotes)
+        tarbawiWeeklyFocus: {
+          ...INITIAL_STATE.systemConfig.tarbawiWeeklyFocus,
+          ...(raw.systemConfig?.tarbawiWeeklyFocus || {})
+        },
+        quotes: Array.isArray(raw.systemConfig?.quotes) && raw.systemConfig.quotes.length > 0
           ? raw.systemConfig.quotes
           : INITIAL_STATE.systemConfig.quotes,
         taskDefinitions: {
           ...INITIAL_STATE.systemConfig.taskDefinitions,
           ...(raw.systemConfig?.taskDefinitions || {})
-        }
+        },
+        tarbawiTaskDefinitions: rawTarbawiDefs
       };
 
       const safeBulletins = Array.isArray(raw.bulletins) ? raw.bulletins : INITIAL_STATE.bulletins;
@@ -469,6 +634,20 @@
 
       const safeUsers = mergedUsers.map(u => {
         if (u.roleType !== "cadre") return u;
+        const seedMatch = INITIAL_STATE.users.find(su => su.id === u.id);
+        const rawRec = u.tasksRecord || {};
+        const mergedRec = { ...rawRec };
+
+        // دمج بيانات المحور التربوي الافتراضية للحسابات التجريبية إن لم تكن موجودة بعد
+        if (seedMatch && seedMatch.tasksRecord) {
+          Object.keys(seedMatch.tasksRecord).forEach(wKey => {
+            mergedRec[wKey] = {
+              ...(seedMatch.tasksRecord[wKey] || {}),
+              ...(rawRec[wKey] || {})
+            };
+          });
+        }
+
         return {
           ...u,
           joinedAt: u.joinedAt || Date.now(),
@@ -478,7 +657,7 @@
             meetDuration: u.defaultSchedule?.meetDuration || 90
           },
           weekOverrides: u.weekOverrides || {},
-          tasksRecord: u.tasksRecord || {}
+          tasksRecord: mergedRec
         };
       });
 
@@ -573,7 +752,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       const [currentUserId, setCurrentUserId] = useState(null);
       const [toastMsg, setToastMsg] = useState(null);
       const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
-      const [cloudStatus, setCloudStatus] = useState("checking"); // 'checking' | 'connected' | 'local_only' | 'error'
+      const [cloudStatus, setCloudStatus] = useState("checking");
       const [cloudError, setCloudError] = useState("");
       const [lastSyncAt, setLastSyncAt] = useState(null);
       const [cloudModalOpen, setCloudModalOpen] = useState(false);
@@ -581,7 +760,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       const supabaseClientRef = React.useRef(null);
       const initialPullDoneRef = React.useRef(false);
 
-      // تلقائياً: فحص إعدادات Netlify Serverless API (/api/config) عند فتح الموقع
       useEffect(() => {
         let cancelled = false;
         async function discoverServerlessConfig() {
@@ -600,7 +778,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         return () => { cancelled = true; };
       }, []);
 
-      // الاتصال بـ Supabase PostgreSQL ومزامنة البيانات + Realtime WebSocket
       useEffect(() => {
         if (!cloudConfig.supabaseUrl || !cloudConfig.supabaseAnonKey || !window.supabase) {
           setCloudStatus("local_only");
@@ -627,7 +804,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
 
             if (error) {
               setCloudStatus("error");
-              setCloudError(error.message || "تعذر القراءة من جدول madyan_app_state. تأكد من تشغيل ملف schema.sql في Supabase.");
+              setCloudError(error.message || "تعذر القراءة من جدول madyan_app_state.");
               return;
             }
 
@@ -638,7 +815,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
               initialPullDoneRef.current = true;
               setCloudStatus("connected");
             } else {
-              // الجدول فارغ: نرفع البيانات الابتدائية لقاعدة البيانات
               const { error: upsertErr } = await client
                 .from("madyan_app_state")
                 .upsert({
@@ -660,7 +836,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
 
           initSync();
 
-          // الاشتراك اللحظي (Supabase Realtime)
           channel = client
             .channel("madyan_global_sync")
             .on(
@@ -688,7 +863,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         };
       }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey]);
 
-      // حفظ أي تعديل في localStorage + دفعه تلقائياً إلى Supabase PostgreSQL و Netlify API
       useEffect(() => {
         try {
           localStorage.setItem("MADYAN_DB_V6_SAFE", JSON.stringify(db));
@@ -740,7 +914,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         return db.users.some(u => u.id !== ignoreUserId && u.username.toLowerCase() === clean);
       };
 
-      // تأكيد استيعاب وقراءة التعميم الإداري (One-Way Acknowledgment)
       const acknowledgeBulletin = (bulletinId, userId) => {
         const now = new Date();
         const stamp = `اليوم ${formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`)}`;
@@ -809,31 +982,31 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
             />
           )}
 
-          {/* شريط الحالة السحابية العائم (Supabase + Netlify Full-Stack Status) */}
-          <div className="fixed bottom-4 left-4 z-40 flex items-center gap-2">
+          {/* مؤشر الاتصال السحابي العائم (هادئ وغير مزاحم) */}
+          <div className="fixed bottom-4 left-4 z-40">
             <button
               onClick={() => setCloudModalOpen(true)}
-              className={`px-3.5 py-2 rounded-2xl text-xs font-black shadow-lg border flex items-center gap-2 transition ${
+              className={`px-3 py-1.5 rounded-full text-[11px] font-bold shadow-md border flex items-center gap-1.5 transition backdrop-blur-md ${
                 cloudStatus === "connected"
-                  ? "bg-emerald-950/95 text-emerald-100 border-emerald-700 hover:bg-emerald-900"
+                  ? "bg-white/90 text-emerald-800 border-emerald-200 hover:bg-emerald-50"
                   : cloudStatus === "error"
-                  ? "bg-rose-950/95 text-rose-100 border-rose-700 hover:bg-rose-900"
-                  : "bg-stone-900/95 text-white border-stone-700 hover:bg-stone-800"
+                  ? "bg-rose-950/95 text-rose-100 border-rose-700"
+                  : "bg-white/90 text-stone-600 border-stone-200 hover:bg-stone-100"
               }`}
             >
-              <span className={`w-2.5 h-2.5 rounded-full ${
+              <span className={`w-2 h-2 rounded-full ${
                 cloudStatus === "connected"
-                  ? "bg-emerald-400 animate-pulse"
+                  ? "bg-emerald-500 animate-pulse"
                   : cloudStatus === "error"
                   ? "bg-rose-400"
                   : "bg-amber-400"
               }`} />
               <span>
                 {cloudStatus === "connected"
-                  ? `☁️ متصل بـ Supabase لحظياً ${lastSyncAt ? `(${lastSyncAt})` : ""}`
+                  ? "متصل سحابياً"
                   : cloudStatus === "error"
-                  ? "⚠️ تنبيه اتصال Supabase (اضغط للإصلاح)"
-                  : "☁️ إعداد الربط السحابي (Supabase / Netlify)"}
+                  ? "تنبيه اتصال سحابي"
+                  : "الربط السحابي"}
               </span>
             </button>
           </div>
@@ -866,7 +1039,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 5. LOGIN SCREEN
+    // 5. LOGIN SCREEN (واضحة من أول نظرة وتوضح المحورين الإداري والتربوي)
     // ============================================================================
     function LoginView({ users, onLoginSuccess, onResetDemo }) {
       const [username, setUsername] = useState("madyan");
@@ -896,21 +1069,29 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       };
 
       return (
-        <div className="min-h-screen flex items-center justify-center p-4 bg-[#F7F7F5]">
-          <div className="bg-white rounded-[32px] max-w-md w-full p-7 sm:p-9 shadow-xl border border-stone-200/80">
-            <div className="flex flex-col items-center text-center mb-7">
+        <div className="min-h-screen flex items-center justify-center p-4 bg-[#F6F5F2]">
+          <div className="bg-white rounded-[32px] max-w-md w-full p-7 sm:p-8 shadow-xl border border-stone-200/80">
+            <div className="flex flex-col items-center text-center mb-6">
               <MadyanWordmark size="text-4xl sm:text-5xl" />
               <span className="text-[11px] font-bold tracking-widest text-stone-400 uppercase mt-1">
                 Habit-Building Engine
               </span>
-              <p className="text-xs text-stone-500 mt-2">
-                منصة بناء العادات المؤسسية • الدخول حصري للحسابات المعتمدة
+              <p className="text-xs font-bold text-stone-600 mt-2">
+                منصة بناء العادات الأسبوعية المتوازنة للكادر
               </p>
+              <div className="flex items-center justify-center gap-2 mt-3">
+                <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-orange-50 text-orange-800 border border-orange-200/70">
+                  🏛️ المحور الإداري
+                </span>
+                <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70">
+                  🌱 المحور التربوي
+                </span>
+              </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1.5">اسم المستخدم (Username)</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">اسم المستخدم (Username)</label>
                 <input
                   type="text"
                   value={username}
@@ -920,7 +1101,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1.5">كلمة المرور (Password)</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">كلمة المرور (Password)</label>
                 <input
                   type="password"
                   value={password}
@@ -944,21 +1125,27 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
               </button>
             </form>
 
-            <div className="mt-6 pt-5 border-t border-stone-100 space-y-2.5">
+            <div className="mt-6 pt-5 border-t border-stone-100 space-y-2">
               <div className="text-[11px] font-bold text-stone-400 text-center">
-                بوابات تجريبية سريعة (اضغط للدخول المباشر):
+                دخول سريع للحسابات التجريبية:
               </div>
 
-              <button
-                onClick={() => quickFill("exec", "1234")}
-                className="w-full p-3 rounded-2xl bg-gradient-to-l from-orange-600 to-amber-500 text-white hover:opacity-95 text-right transition flex items-center justify-between shadow-md shadow-orange-500/15"
-              >
-                <div>
-                  <div className="text-xs font-black">🏛️ بوابة عضو المكتب التنفيذي (exec)</div>
-                  <div className="text-[10px] text-orange-50 mt-0.5">إصدار التعميمات والنشرة الإدارية • تحديد المستلمين • متابعة الاستيعاب</div>
-                </div>
-                <span className="text-xs font-black bg-white/20 px-2.5 py-1 rounded-lg">دخول تنفيذي</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => quickFill("madyan", "1234")}
+                  className="p-3 rounded-2xl bg-orange-50/60 hover:bg-orange-100/70 border border-orange-200 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-900">👤 كادر: أحمد (madyan)</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">إداري + تربوي (5 أسابيع)</div>
+                </button>
+                <button
+                  onClick={() => quickFill("sara", "1234")}
+                  className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-800">👤 كادر: سارة (sara)</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">تهيئة أولى + 3 أسابيع</div>
+                </button>
+              </div>
 
               <button
                 onClick={() => quickFill("admin", "admin123")}
@@ -966,29 +1153,23 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
               >
                 <div>
                   <div className="text-xs font-black">🛡️ بوابة المدير والـ HR (admin)</div>
-                  <div className="text-[10px] text-stone-300 mt-0.5">إعداد المحاضرات والاختبارات • توليد اليوزرات • الداشبورد</div>
+                  <div className="text-[10px] text-stone-300 mt-0.5">تخصيص مهمات المحورين الإداري والتربوي • المحاضرات • الداشبورد</div>
                 </div>
-                <span className="text-xs font-bold bg-white/10 px-2.5 py-1 rounded-lg">دخول كمدير</span>
+                <span className="text-xs font-bold bg-white/10 px-2.5 py-1 rounded-lg">دخول</span>
               </button>
 
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => quickFill("madyan", "1234")}
-                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 hover:border-orange-300 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-800">👤 كادر: madyan</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">لديه تعميمات + 5 أسابيع</div>
-                </button>
-                <button
-                  onClick={() => quickFill("sara", "1234")}
-                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 hover:border-orange-300 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-800">👤 كادر جديد: sara</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">أون بوردينج + 3 أسابيع</div>
-                </button>
-              </div>
+              <button
+                onClick={() => quickFill("exec", "1234")}
+                className="w-full p-2.5 rounded-2xl bg-stone-100 text-stone-800 hover:bg-stone-200 text-right transition flex items-center justify-between"
+              >
+                <div>
+                  <div className="text-xs font-black">🏛️ بوابة المكتب التنفيذي (exec)</div>
+                  <div className="text-[10px] text-stone-500">إصدار التعميمات والنشرة الإدارية ومتابعة الاستيعاب</div>
+                </div>
+                <span className="text-[11px] font-bold bg-white px-2.5 py-1 rounded-lg border border-stone-200">دخول</span>
+              </button>
 
-              <div className="pt-2 text-center">
+              <div className="pt-1 text-center">
                 <button onClick={onResetDemo} className="text-[11px] text-stone-400 hover:text-stone-600 underline">
                   إعادة ضبط بيانات المحاكاة لحالتها الأصلية
                 </button>
@@ -1000,16 +1181,23 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 6. CADRE PORTAL COMPONENT (With Administrative Bulletin Feed & Archive)
+    // 6. CADRE PORTAL COMPONENT (رحلة عين مرتبة + المحور الإداري والمحور التربوي)
     // ============================================================================
     function CadrePortal({ db, currentUser, updateUserRecord, isUsernameTaken, onAcknowledgeBulletin, onLogout, showToast }) {
       const totalWeeks = useMemo(() => calculateWeeksSinceJoin(currentUser.joinedAt), [currentUser.joinedAt]);
       const [selectedWeek, setSelectedWeek] = useState(totalWeeks);
+      const [activePillar, setActivePillar] = useState("all"); // 'all' | 'admin' | 'tarbawi'
+      const [expandedHelpKey, setExpandedHelpKey] = useState(null);
       const [showOnboarding, setShowOnboarding] = useState(!currentUser.onboarded);
       const [settingsModalScope, setSettingsModalScope] = useState(null);
       const [lectureModalOpen, setLectureModalOpen] = useState(false);
       const [noteModalTaskKey, setNoteModalTaskKey] = useState(null);
       const [bulletinArchiveOpen, setBulletinArchiveOpen] = useState(false);
+
+      const tarbawiTasks = useMemo(
+        () => getApplicableTarbawiTasks(currentUser, db.systemConfig),
+        [currentUser, db.systemConfig]
+      );
 
       useEffect(() => {
         let needsInit = false;
@@ -1031,7 +1219,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         }
       }, [totalWeeks, currentUser.id]);
 
-      // فلترة النشرة الإدارية بحيث يرى الكادر فقط الرسائل الموجهة للجميع أو الموجهة له شخصياً
       const myBulletins = useMemo(() => {
         const list = db.bulletins || [];
         return list.filter(b => b.targetType === "all" || (b.recipientIds || []).includes(currentUser.id));
@@ -1044,18 +1231,90 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       const isPastWeek = selectedWeek < totalWeeks;
       const activeSched = (currentUser.weekOverrides && currentUser.weekOverrides[selectedWeek]) || currentUser.defaultSchedule;
       const computedSched = computeWeekSchedule(activeSched, db.systemConfig.taskDefinitions);
-      const weekRecord = (currentUser.tasksRecord && currentUser.tasksRecord[selectedWeek]) || {
-        lecture: { status: "pending" },
-        agenda: { status: "pending" },
-        attendance: { status: "pending" },
-        minutes: { status: "pending" }
-      };
+      const weekRecord = (currentUser.tasksRecord && currentUser.tasksRecord[selectedWeek]) || {};
 
-      const metrics = useMemo(() => computeCadreMetrics(currentUser), [currentUser]);
+      const metrics = useMemo(() => computeCadreMetrics(currentUser, db.systemConfig), [currentUser, db.systemConfig]);
       const activeCurriculum = db.weeklyCurriculums[selectedWeek] || db.weeklyCurriculums.default;
       const randomQuote = db.systemConfig.quotes[selectedWeek % Math.max(1, db.systemConfig.quotes.length)] || db.systemConfig.quotes[0];
+      const tarbawiFocus = db.systemConfig.tarbawiWeeklyFocus || INITIAL_STATE.systemConfig.tarbawiWeeklyFocus;
 
-      const handleTaskAction = (taskKey) => {
+      // حساب إحصائيات الأسبوع المحدد للمحور الإداري والمحور التربوي
+      const weekStats = useMemo(() => {
+        const adminKeys = ['lecture', 'agenda', 'attendance', 'minutes'];
+        let adminDone = 0;
+        let adminPoints = 0;
+        adminKeys.forEach(k => {
+          const st = weekRecord[k]?.status || 'pending';
+          if (st !== 'pending') adminDone++;
+          adminPoints += getTaskScorePoints(weekRecord[k]);
+        });
+
+        let tarbawiDone = 0;
+        let tarbawiPoints = 0;
+        tarbawiTasks.forEach(t => {
+          const rec = weekRecord[t.id] || { status: 'pending' };
+          if (rec.status && rec.status !== 'pending') tarbawiDone++;
+          tarbawiPoints += getTaskScorePoints(rec);
+        });
+
+        const adminPct = Math.round((adminPoints / (adminKeys.length * 100)) * 100);
+        const tarbawiPct = tarbawiTasks.length > 0
+          ? Math.round((tarbawiPoints / (tarbawiTasks.length * 100)) * 100)
+          : 0;
+        const totalCount = adminKeys.length + tarbawiTasks.length;
+        const completedCount = adminDone + tarbawiDone;
+        const totalPossible = totalCount * 100;
+        const weekScorePct = totalPossible > 0 ? Math.round(((adminPoints + tarbawiPoints) / totalPossible) * 100) : 0;
+
+        return {
+          adminDone,
+          adminTotal: adminKeys.length,
+          adminPct,
+          tarbawiDone,
+          tarbawiTotal: tarbawiTasks.length,
+          tarbawiPct,
+          completedCount,
+          totalCount,
+          weekScorePct
+        };
+      }, [weekRecord, tarbawiTasks]);
+
+      // تحديد «الخطوة التالية الآن» لتوجيه عين الكادر فوراً دون تشتت
+      const nextStepInfo = useMemo(() => {
+        const adminOrder = ['lecture', 'agenda', 'attendance', 'minutes'];
+        for (const k of adminOrder) {
+          const st = weekRecord[k]?.status || 'pending';
+          if (st === 'pending') {
+            if (isPastWeek && k !== 'lecture') continue;
+            const def = db.systemConfig.taskDefinitions[k];
+            const sc = computedSched[k];
+            return {
+              pillar: "admin",
+              key: k,
+              title: def.title,
+              hint: `${sc.dayName} • ${sc.timeLabel}`,
+              actionLabel: k === "lecture" ? "فتح المحاضرة والاختبار ▶" : "تسجيل الإنجاز الآن ✓"
+            };
+          }
+        }
+        if (!isPastWeek) {
+          for (const t of tarbawiTasks) {
+            const st = weekRecord[t.id]?.status || 'pending';
+            if (st === 'pending') {
+              return {
+                pillar: "tarbawi",
+                key: t.id,
+                title: t.title,
+                hint: t.subtitle,
+                actionLabel: t.trackType === "daily_days" ? "تسجيل ورد اليوم 📖" : "تأكيد الإنجاز ✓"
+              };
+            }
+          }
+        }
+        return null;
+      }, [weekRecord, tarbawiTasks, isPastWeek, db.systemConfig.taskDefinitions, computedSched]);
+
+      const handleAdminTaskAction = (taskKey) => {
         if (taskKey === "lecture") {
           setLectureModalOpen(true);
           return;
@@ -1075,9 +1334,9 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
           tasksRecord: {
             ...u.tasksRecord,
             [selectedWeek]: {
-              ...u.tasksRecord[selectedWeek],
+              ...(u.tasksRecord?.[selectedWeek] || {}),
               [taskKey]: {
-                ...u.tasksRecord[selectedWeek][taskKey],
+                ...(u.tasksRecord?.[selectedWeek]?.[taskKey] || {}),
                 status: nextStatus,
                 completedAt: nextStatus === "on_time" ? `اليوم ${timeFormatted}` : null
               }
@@ -1086,19 +1345,66 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         }));
       };
 
-      const weekStats = useMemo(() => {
-        let completedCount = 0;
-        let weekPoints = 0;
-        ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
-          const st = weekRecord[k]?.status || 'pending';
-          if (st !== 'pending') completedCount++;
-          weekPoints += getTaskScorePoints(weekRecord[k]);
-        });
-        return {
-          completedCount,
-          weekScorePct: Math.round((weekPoints / 400) * 100)
-        };
-      }, [weekRecord]);
+      const handleTarbawiTaskToggle = (taskDef) => {
+        if (isPastWeek) {
+          showToast("🔒 الأسبوع منتهٍ ولا يمكن تعديل مهام الأسابيع السابقة.");
+          return;
+        }
+        const currentRec = weekRecord[taskDef.id] || { status: "pending", daysCompleted: [] };
+        const nextStatus = currentRec.status === "on_time" ? "pending" : "on_time";
+        const now = new Date();
+        const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+
+        updateUserRecord(currentUser.id, u => ({
+          ...u,
+          tasksRecord: {
+            ...u.tasksRecord,
+            [selectedWeek]: {
+              ...(u.tasksRecord?.[selectedWeek] || {}),
+              [taskDef.id]: {
+                ...currentRec,
+                status: nextStatus,
+                completedAt: nextStatus === "on_time" ? `اليوم ${timeFormatted}` : null
+              }
+            }
+          }
+        }));
+
+        if (nextStatus === "on_time") {
+          showToast(`تم تسجيل إنجاز «${taskDef.title}» في المحور التربوي 🌱`);
+        }
+      };
+
+      const handleTarbawiDayToggle = (taskDef, dayIdx) => {
+        if (isPastWeek) {
+          showToast("🔒 الأسبوع منتهٍ ولا يمكن تعديل سجل الأيام السابقة.");
+          return;
+        }
+        const currentRec = weekRecord[taskDef.id] || { status: "pending", daysCompleted: [] };
+        const prevDays = Array.isArray(currentRec.daysCompleted) ? currentRec.daysCompleted : [];
+        const exists = prevDays.includes(dayIdx);
+        const nextDays = exists ? prevDays.filter(d => d !== dayIdx) : [...prevDays, dayIdx].sort();
+        const targetDays = Number(taskDef.targetDays) || 5;
+        const reachedTarget = nextDays.length >= targetDays;
+        const now = new Date();
+        const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+
+        updateUserRecord(currentUser.id, u => ({
+          ...u,
+          tasksRecord: {
+            ...u.tasksRecord,
+            [selectedWeek]: {
+              ...(u.tasksRecord?.[selectedWeek] || {}),
+              [taskDef.id]: {
+                ...currentRec,
+                daysCompleted: nextDays,
+                status: reachedTarget ? "on_time" : "pending",
+                completedAt: reachedTarget ? `أتمّ ${nextDays.length} أيام (${timeFormatted})` : null
+              }
+            }
+          }
+        }));
+      };
 
       const getCategoryBadgeStyle = (cat) => {
         switch (cat) {
@@ -1111,18 +1417,35 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
 
       return (
         <div>
-          <header className="bg-white/90 backdrop-blur-md border-b border-stone-200/80 sticky top-0 z-30">
-            <div className="max-w-2xl mx-auto px-4 py-3.5 flex items-center justify-between">
-              <MadyanWordmark size="text-2xl sm:text-3xl" />
+          {/* ==================================================================== */}
+          {/* هيدر نظيف وواضح */}
+          {/* ==================================================================== */}
+          <header className="bg-white/95 backdrop-blur-md border-b border-stone-200/80 sticky top-0 z-30">
+            <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                <MadyanWordmark size="text-2xl sm:text-3xl" />
+                <div className="hidden sm:flex items-center gap-2 pr-3 border-r border-stone-200">
+                  <div className="w-8 h-8 rounded-full madyan-gradient text-white font-black flex items-center justify-center text-xs">
+                    {currentUser.name.slice(0, 2)}
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-stone-800 leading-tight">{currentUser.name}</div>
+                    <div className="text-[10px] text-stone-500">{currentUser.unit} • {currentUser.jobTitle}</div>
+                  </div>
+                </div>
+              </div>
 
-              <div className="flex items-center gap-2">
-                {/* زر سريع لفتح سجل النشرة الإدارية */}
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => setBulletinArchiveOpen(true)}
-                  className="relative p-2.5 rounded-2xl bg-orange-50 text-orange-800 hover:bg-orange-100 border border-orange-200/80 transition flex items-center gap-1.5 text-xs font-black"
+                  className={`relative px-3 py-2 rounded-2xl border transition flex items-center gap-1.5 text-xs font-bold ${
+                    unreadBulletins.length > 0
+                      ? "bg-orange-50 text-orange-900 border-orange-300 font-black"
+                      : "bg-stone-100 text-stone-700 border-transparent hover:bg-stone-200"
+                  }`}
                 >
                   <span>📢</span>
-                  <span className="hidden sm:inline">النشرة الإدارية</span>
+                  <span className="hidden sm:inline">التعميمات</span>
                   {unreadBulletins.length > 0 && (
                     <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse">
                       {unreadBulletins.length}
@@ -1132,467 +1455,674 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
 
                 <button
                   onClick={() => setSettingsModalScope("global")}
-                  className="p-2.5 rounded-2xl bg-stone-100 text-stone-700 hover:bg-stone-200 transition flex items-center gap-1.5 text-xs font-bold"
+                  className="px-3 py-2 rounded-2xl bg-stone-100 text-stone-700 hover:bg-stone-200 transition flex items-center gap-1.5 text-xs font-bold"
                 >
                   <span>⚙️</span>
                   <span className="hidden sm:inline">الإعدادات</span>
                 </button>
+
                 <button
                   onClick={onLogout}
-                  className="p-2.5 rounded-2xl bg-stone-100 text-stone-500 hover:bg-rose-50 hover:text-rose-600 transition text-xs font-bold"
+                  className="px-3 py-2 rounded-2xl bg-stone-100 text-stone-500 hover:bg-rose-50 hover:text-rose-600 transition text-xs font-bold"
                 >
                   خروج
                 </button>
-                <div className="flex items-center gap-2.5 pr-2 border-r border-stone-200">
-                  <div className="text-left hidden sm:block">
-                    <div className="text-sm font-bold text-stone-800">{currentUser.name}</div>
-                    <div className="text-[11px] text-stone-500">@{currentUser.username} • {currentUser.jobTitle}</div>
-                  </div>
-                  <div className="w-10 h-10 rounded-full madyan-gradient text-white font-black flex items-center justify-center text-sm shadow-sm">
-                    {currentUser.name.slice(0, 2)}
-                  </div>
-                </div>
               </div>
             </div>
           </header>
 
-          <main className="max-w-2xl mx-auto px-4 pt-6 space-y-5">
+          <main className="max-w-5xl mx-auto px-4 pt-5 space-y-5">
 
             {/* ==================================================================== */}
-            {/* قسم النشرة الإدارية (One-Way Administrative Bulletin Widget) */}
+            {/* المحطة 1: شريط التعميمات الذكي (يبرز فقط عند وجود تعميم غير مقروء!) */}
             {/* ==================================================================== */}
-            <div className={`rounded-3xl p-5 shadow-sm border transition space-y-3.5 ${
-              unreadBulletins.length > 0
-                ? "bg-gradient-to-br from-orange-50/90 via-white to-amber-50/60 border-orange-300 ring-2 ring-orange-100"
-                : "bg-white border-stone-200/80"
-            }`}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="w-9 h-9 rounded-2xl madyan-gradient text-white flex items-center justify-center text-base shadow-sm">
-                    📢
-                  </span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm sm:text-base font-black text-stone-900">النشرة الإدارية والتعميمات</h2>
-                      {unreadBulletins.length > 0 ? (
-                        <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-rose-600 text-white">
-                          {unreadBulletins.length} جديد مطلوب استيعابه
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          ✓ تم استيعاب كافة التعميمات
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-stone-500">
-                      تعميمات المكتب التنفيذي والسياسات اللحظية الموجهة لك (اتجاه واحد • One-Way)
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setBulletinArchiveOpen(true)}
-                  className="text-xs font-bold px-3.5 py-2 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 transition flex items-center gap-1.5"
-                >
-                  <span>📂</span>
-                  <span>سجل الرسائل السابقة ({myBulletins.length})</span>
-                </button>
-              </div>
-
-              {/* عرض التعميمات غير المقروءة بشكل بارز أو آخر تعميم تم استيعابه */}
-              {unreadBulletins.length > 0 ? (
-                <div className="space-y-3 pt-1">
-                  {unreadBulletins.map(bul => (
-                    <div
-                      key={bul.id}
-                      className="p-4 rounded-2xl bg-white border-2 border-orange-300/90 shadow-sm space-y-2.5"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`}>
-                            {bul.category}
-                          </span>
-                          <span className="text-[11px] font-bold text-stone-600">
-                            🏛️ {bul.senderName} ({bul.senderRole})
-                          </span>
-                          {bul.targetType === "custom" && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
-                              🎯 موجه لك بشكل مخصص
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[11px] font-semibold text-stone-400">{bul.createdAt}</span>
-                      </div>
-
-                      <h3 className="text-sm sm:text-base font-black text-stone-900">{bul.title}</h3>
-                      <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">{bul.content}</p>
-
-                      <div className="pt-1 flex items-center justify-between gap-2 border-t border-stone-100">
-                        <span className="text-[10px] font-bold text-orange-700">
-                          ⚡ يرجى قراءة التعميم بدقة وتأكيد الاستيعاب
-                        </span>
-                        <button
-                          onClick={() => onAcknowledgeBulletin(bul.id, currentUser.id)}
-                          className="px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95 transition"
-                        >
-                          تم الاطلاع والاستيعاب ✓
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : myBulletins.length > 0 ? (
-                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-2 text-xs">
+            {unreadBulletins.length > 0 ? (
+              <div className="rounded-3xl p-4 sm:p-5 bg-gradient-to-br from-orange-50 via-white to-amber-50 border-2 border-orange-300 shadow-sm space-y-3">
+                <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-emerald-600 font-black">✓</span>
-                    <span className="text-stone-500">آخر تعميم مستوعب:</span>
-                    <strong className="text-stone-800">{myBulletins[0].title}</strong>
-                    <span className="text-[11px] text-stone-400">({myBulletins[0].createdAt})</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-[11px] font-black">
+                      📢 {unreadBulletins.length} تعميم إداري جديد مطلوب استيعابه
+                    </span>
                   </div>
                   <button
                     onClick={() => setBulletinArchiveOpen(true)}
-                    className="text-orange-600 font-bold hover:underline text-[11px]"
+                    className="text-[11px] font-bold text-stone-600 hover:text-stone-900 underline"
                   >
-                    قراءة التفاصيل ←
+                    عرض الأرشيف ({myBulletins.length})
                   </button>
                 </div>
-              ) : (
-                <div className="text-xs text-stone-400 text-center py-2">
-                  لا توجد تعميمات إدارية موجهة لك حالياً.
-                </div>
-              )}
-            </div>
 
-            {/* بطاقة البروفايل والملخص الزمني */}
-            <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200/60">
-                      {currentUser.unit}
-                    </span>
-                    <span className="text-[11px] font-bold text-stone-400 bg-stone-100 px-2.5 py-0.5 rounded-full">
-                      ⚡ مسجل تلقائياً منذ: {formatDateAr(currentUser.joinedAt)} ({totalWeeks} أسابيع)
-                    </span>
-                    {currentUser.weekOverrides?.[selectedWeek] && (
-                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                        جدول مخصص لهذا الأسبوع
-                      </span>
-                    )}
-                  </div>
-                  <h1 className="text-xl font-black text-stone-800 mt-2">مهماتك الأسبوعية</h1>
-                  <p className="text-xs text-stone-500 mt-0.5">
-                    اجتماع الأسبوع {selectedWeek}: يوم {DAYS_AR[activeSched.meetDay]} الساعة {formatTimeAr(activeSched.meetTime)} ({activeSched.meetDuration} دقيقة)
-                  </p>
-                </div>
-
-                {!isPastWeek && (
-                  <button
-                    onClick={() => setSettingsModalScope("week")}
-                    className="text-xs font-bold px-3.5 py-2.5 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 transition flex items-center gap-1.5"
-                  >
-                    <span>📅</span>
-                    <span>تخصيص مواعيد الأسبوع {selectedWeek}</span>
-                  </button>
-                )}
-              </div>
-
-              {isPastWeek && (
-                <div className="rounded-2xl bg-amber-50 border border-amber-200/90 px-4 py-3 text-xs text-amber-900 flex items-center justify-between gap-2">
-                  <div>
-                    <strong>🔒 أسبوع منتهٍ (الأسبوع {selectedWeek}):</strong> تم إغلاق تعديل مهمات هذا الأسبوع، باستثناء <strong>المحاضرة الأسبوعية</strong> في حال لم تنجزها بعد (تُحتسب متأخرة بـ 50% من السكور).
-                  </div>
-                  <button
-                    onClick={() => setSelectedWeek(totalWeeks)}
-                    className="flex-shrink-0 px-3 py-1.5 rounded-xl bg-amber-900 text-white font-bold text-[11px]"
-                  >
-                    الأسبوع الحالي ↩
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-              <div className="sm:col-span-7 bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex flex-col justify-between">
-                <div className="flex items-center justify-between text-xs text-stone-400 font-semibold">
-                  <span>{isPastWeek ? `سكور الأسبوع ${selectedWeek} (مغلق)` : `سكور الأسبوع الحالي (${selectedWeek})`}</span>
-                  <span className="text-stone-700 font-bold">{weekStats.completedCount}/4 مكتمل</span>
-                </div>
-                <div className="flex items-center justify-between mt-4">
-                  <div className="text-5xl sm:text-6xl font-black tracking-tight text-stone-900">
-                    {weekStats.weekScorePct}%
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <div className="grid grid-cols-4 gap-2">
-                      {Array.from({ length: Math.min(4, totalWeeks) }, (_, idx) => {
-                        const wNum = totalWeeks - Math.min(4, totalWeeks) + 1 + idx;
-                        const wRec = currentUser.tasksRecord?.[wNum] || {};
-                        return ['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                          const st = wRec[k]?.status || 'pending';
-                          return (
-                            <div
-                              key={`${wNum}_${k}`}
-                              title={`الأسبوع ${wNum} - ${st === 'on_time' ? 'في الموعد' : st === 'late' ? 'متأخر' : 'غير منجز'}`}
-                              className={`w-4 h-4 rounded-full ${
-                                st === 'on_time'
-                                  ? 'bg-emerald-600'
-                                  : st === 'late'
-                                  ? 'bg-amber-500'
-                                  : wNum === selectedWeek
-                                  ? 'bg-orange-100 border border-orange-400'
-                                  : 'bg-stone-200'
-                              }`}
-                            />
-                          );
-                        });
-                      })}
+                {unreadBulletins.map(bul => (
+                  <div key={bul.id} className="p-4 rounded-2xl bg-white border border-orange-200 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`}>
+                          {bul.category}
+                        </span>
+                        <span className="text-[11px] font-bold text-stone-600">
+                          {bul.senderName} ({bul.senderRole})
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-stone-400">{bul.createdAt}</span>
                     </div>
-                    <span className="text-[10px] text-stone-400 font-semibold">أخضر: بالوقت • برتقالي: متأخر</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="sm:col-span-5 bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex items-center gap-4">
-                <div className="relative w-20 h-20 flex-shrink-0 flex items-center justify-center">
-                  <svg className="w-20 h-20 -rotate-90" viewBox="0 0 80 80">
-                    <circle cx="40" cy="40" r="32" stroke="#F3F4F6" strokeWidth="7" fill="none" />
-                    <circle
-                      cx="40"
-                      cy="40"
-                      r="32"
-                      stroke="#EA580C"
-                      strokeWidth="7"
-                      fill="none"
-                      strokeDasharray="201"
-                      strokeDashoffset={201 - (metrics.overallScorePct / 100) * 201}
-                      strokeLinecap="round"
-                      className="transition-all duration-500"
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-                    <span className="text-base font-black text-stone-800">{metrics.overallScorePct}%</span>
-                    <span className="text-[9px] text-stone-400 font-bold mt-0.5">سكور عام</span>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] font-bold text-stone-400">مؤشر الانضباط التراكمي</div>
-                  <div className="text-base font-black text-stone-800 mt-0.5">
-                    {metrics.overallScorePct >= 85 ? "انضباط ممتاز!" : "واصل التقدم!"}
-                  </div>
-                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">
-                    في الوقت: <strong className="text-emerald-700">{metrics.onTimeCount}</strong> • متأخر: <strong className="text-amber-600">{metrics.lateCount}</strong>
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-3xl p-3.5 shadow-sm border border-stone-200/70 space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-extrabold text-stone-700">سجل الأسابيع منذ انضمامك ({totalWeeks} أسابيع)</span>
-                {selectedWeek !== totalWeeks && (
-                  <button
-                    onClick={() => setSelectedWeek(totalWeeks)}
-                    className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-orange-50 text-orange-700 hover:bg-orange-100 transition"
-                  >
-                    العودة للأسبوع الحالي ({totalWeeks}) ↩
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-                {Array.from({ length: totalWeeks }, (_, idx) => {
-                  const w = idx + 1;
-                  const active = w === selectedWeek;
-                  const isCurrent = w === totalWeeks;
-                  const wRec = currentUser.tasksRecord?.[w] || {};
-                  const doneCount = ['lecture', 'agenda', 'attendance', 'minutes'].filter(
-                    k => wRec[k]?.status && wRec[k]?.status !== 'pending'
-                  ).length;
-
-                  return (
-                    <button
-                      key={w}
-                      onClick={() => setSelectedWeek(w)}
-                      className={`flex-shrink-0 min-w-[135px] px-3.5 py-2.5 rounded-2xl border text-center transition ${
-                        active
-                          ? 'bg-stone-900 text-white border-stone-900 shadow-sm'
-                          : 'bg-stone-50 text-stone-600 border-stone-200/80 hover:bg-stone-100'
-                      }`}
-                    >
-                      <div className="text-xs font-black flex items-center justify-center gap-1">
-                        <span>{isCurrent ? `الأسبوع الحالي (${w})` : `الأسبوع ${w}`}</span>
-                        {!isCurrent && <span className="text-[10px] opacity-75">🔒</span>}
-                      </div>
-                      <div className={`text-[10px] mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>
-                        {getWeekDateRangeLabel(w, totalWeeks)} • ({doneCount}/4)
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-4 relative">
-              {['lecture', 'agenda', 'attendance', 'minutes'].map((taskKey, idx) => {
-                const def = db.systemConfig.taskDefinitions[taskKey];
-                const sched = computedSched[taskKey];
-                const rec = weekRecord[taskKey] || { status: "pending" };
-                const status = rec.status;
-                const isLast = idx === 3;
-
-                const isLockedByPastWeek = isPastWeek && (taskKey !== 'lecture' || status !== 'pending');
-                const icons = { lecture: "🎓", agenda: "📋", attendance: "🤝", minutes: "📝" };
-
-                return (
-                  <div key={taskKey} className="relative flex items-stretch gap-3 sm:gap-4">
-                    <div className="relative flex flex-col items-center pt-7 w-10 flex-shrink-0">
-                      {!isLast && <div className="timeline-line"></div>}
-                      <div
-                        className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center transition-all ${
-                          status === "on_time"
-                            ? "bg-emerald-600 ring-4 ring-emerald-100"
-                            : status === "late"
-                            ? "bg-amber-500 ring-4 ring-amber-100"
-                            : "bg-white border-2 border-orange-500 ring-4 ring-orange-50"
-                        }`}
-                      >
-                        {status !== "pending" && <span className="w-2 h-2 rounded-full bg-white"></span>}
-                      </div>
-                    </div>
-
-                    <div
-                      className={`flex-1 bg-white rounded-3xl p-5 shadow-sm border transition flex items-center justify-between gap-4 ${
-                        status === "on_time"
-                          ? "border-emerald-200/90 bg-emerald-50/15"
-                          : status === "late"
-                          ? "border-amber-300/90 bg-amber-50/20"
-                          : "border-stone-200/80"
-                      }`}
-                    >
-                      <div className="space-y-2 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-orange-100/80 text-orange-800">
-                            {sched.badge}
-                          </span>
-                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600">
-                            ⏱ {sched.durationMinutes} دقيقة
-                          </span>
-                          <span className="text-[11px] font-bold text-stone-400">
-                            📅 {sched.dayName} • {sched.timeLabel}
-                          </span>
-                          {status === "late" && (
-                            <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                              ⚠️ أُنجز متأخراً (50% سكور)
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-start gap-3 pt-0.5">
-                          <div className="w-11 h-11 rounded-2xl bg-stone-100 flex items-center justify-center text-lg flex-shrink-0">
-                            {icons[taskKey]}
-                          </div>
-                          <div>
-                            <h3 className={`text-base sm:text-lg font-black ${status !== "pending" ? "line-through text-stone-400" : "text-stone-900"}`}>
-                              {def.title}
-                            </h3>
-                            <p className="text-xs text-stone-500">{def.subtitle}</p>
-                            <p className="text-[11px] text-stone-400 mt-1 bg-stone-50 px-2.5 py-1.5 rounded-xl border border-stone-100">
-                              💡 {def.instructions}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {taskKey === "lecture" && (
-                            <button
-                              onClick={() => setLectureModalOpen(true)}
-                              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
-                            >
-                              🎬 {status === "pending" ? "مشاهدة المحاضرة وحل الاختبار" : "مراجعة الفيديو ونتيجة الاختبار"}
-                            </button>
-                          )}
-
-                          {rec.quizSubmission && (
-                            <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
-                              📝 درجة الاختبار: {rec.quizSubmission.score}/{rec.quizSubmission.total}
-                            </span>
-                          )}
-
-                          <button
-                            onClick={() => setNoteModalTaskKey(taskKey)}
-                            className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-stone-100 text-stone-600 hover:bg-stone-200 transition"
-                          >
-                            📌 {rec.note ? "تعديل المسودة" : "مسودة خاصة"}
-                          </button>
-
-                          {rec.completedAt && (
-                            <span className="text-[10px] font-bold text-stone-500">
-                              ✓ {rec.completedAt}
-                            </span>
-                          )}
-                        </div>
-
-                        {rec.note && (
-                          <div className="text-xs bg-amber-50/70 border border-amber-200/70 text-stone-700 rounded-xl px-3 py-2">
-                            <strong className="text-amber-800">مسودتك:</strong> {rec.note}
-                          </div>
-                        )}
-                      </div>
-
+                    <h3 className="text-sm font-black text-stone-900">{bul.title}</h3>
+                    <p className="text-xs text-stone-600 leading-relaxed">{bul.content}</p>
+                    <div className="pt-2 flex justify-end">
                       <button
-                        onClick={() => handleTaskAction(taskKey)}
-                        disabled={isLockedByPastWeek && taskKey !== "lecture"}
-                        className={`w-16 h-16 sm:w-[72px] sm:h-[72px] rounded-full flex-shrink-0 flex flex-col items-center justify-center font-bold text-xs shadow-sm transition ${
-                          status === "on_time"
-                            ? "bg-emerald-600 text-white"
-                            : status === "late"
-                            ? "bg-amber-500 text-white"
-                            : isLockedByPastWeek
-                            ? "bg-stone-200 text-stone-400 cursor-not-allowed"
-                            : "bg-stone-900 text-white hover:bg-orange-600"
-                        }`}
+                        onClick={() => onAcknowledgeBulletin(bul.id, currentUser.id)}
+                        className="px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95"
                       >
-                        {status === "on_time" ? (
-                          <>
-                            <span className="text-xl leading-none">✓</span>
-                            <span className="text-[10px] mt-0.5">مكتمل</span>
-                          </>
-                        ) : status === "late" ? (
-                          <>
-                            <span className="text-base leading-none">⚠️</span>
-                            <span className="text-[10px] mt-0.5">متأخر</span>
-                          </>
-                        ) : isLockedByPastWeek ? (
-                          <>
-                            <span className="text-base leading-none">🔒</span>
-                            <span className="text-[10px] mt-0.5">مغلق</span>
-                          </>
-                        ) : taskKey === "lecture" ? (
-                          <>
-                            <span className="text-sm leading-none">▶</span>
-                            <span className="text-[10px] mt-0.5">{isPastWeek ? "حل متأخر" : "الاختبار"}</span>
-                          </>
-                        ) : (
-                          <span>إنجاز</span>
-                        )}
+                        تم الاطلاع والاستيعاب ✓
                       </button>
                     </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+            ) : myBulletins.length > 0 && (
+              <div className="px-4 py-2.5 rounded-2xl bg-white border border-stone-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[11px] font-black">✓</span>
+                  <span className="text-stone-500 font-semibold">النشرة الإدارية:</span>
+                  <span className="font-bold text-stone-800 truncate">{myBulletins[0].title}</span>
+                </div>
+                <button
+                  onClick={() => setBulletinArchiveOpen(true)}
+                  className="text-orange-600 font-bold hover:underline text-[11px] flex-shrink-0"
+                >
+                  سجل التعميمات ({myBulletins.length}) ←
+                </button>
+              </div>
+            )}
+
+            {/* ==================================================================== */}
+            {/* المحطة 2: لوحة القيادة الأسبوعية الموحدة (واضحة من أول نظرة في 3 ثوانٍ) */}
+            {/* ==================================================================== */}
+            <section className="bg-white rounded-[28px] p-5 sm:p-6 shadow-sm border border-stone-200/80 space-y-5">
+              {/* السطر العلوي: الأسبوع الحالي + مبدل الأسابيع المدمج + موعد الاجتماع */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-stone-100">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black px-2.5 py-1 rounded-xl bg-stone-900 text-white">
+                      {selectedWeek === totalWeeks ? `الأسبوع الحالي (${selectedWeek})` : `الأسبوع ${selectedWeek} (سابق)`}
+                    </span>
+                    <span className="text-xs font-bold text-stone-500">
+                      📅 {getWeekDateRangeLabel(selectedWeek, totalWeeks)}
+                    </span>
+                    {currentUser.weekOverrides?.[selectedWeek] && (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800">
+                        موعد مخصص
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-stone-500 mt-1.5">
+                    موعد لقاء الأسبوع: <strong className="text-stone-800">يوم {DAYS_AR[activeSched.meetDay]} الساعة {formatTimeAr(activeSched.meetTime)}</strong> ({activeSched.meetDuration} د)
+                    {!isPastWeek && (
+                      <button
+                        onClick={() => setSettingsModalScope("week")}
+                        className="mr-2 text-orange-600 font-bold hover:underline"
+                      >
+                        • تغيير الموعد
+                      </button>
+                    )}
+                  </p>
+                </div>
+
+                {/* شريط تبديل الأسابيع المدمج */}
+                <div className="flex items-center gap-1.5 bg-stone-100 p-1 rounded-2xl overflow-x-auto no-scrollbar">
+                  {Array.from({ length: totalWeeks }, (_, idx) => {
+                    const w = idx + 1;
+                    const active = w === selectedWeek;
+                    const isCurr = w === totalWeeks;
+                    return (
+                      <button
+                        key={w}
+                        onClick={() => setSelectedWeek(w)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition flex-shrink-0 ${
+                          active
+                            ? "bg-white text-stone-900 shadow-sm"
+                            : "text-stone-500 hover:text-stone-800"
+                        }`}
+                      >
+                        {isCurr ? `الحالي (${w})` : `أسبوع ${w}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* القلب البصري: 3 بطاقات متوازنة توضح الإنجاز الكلي + الإداري + التربوي */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                {/* 1. السكور الكلي للأسبوع */}
+                <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between">
+                  <div>
+                    <div className="text-[11px] font-bold text-stone-500">إنجاز الأسبوع ({selectedWeek})</div>
+                    <div className="text-3xl font-black text-stone-900 mt-0.5">{weekStats.weekScorePct}%</div>
+                    <div className="text-[11px] text-stone-500 mt-1">
+                      اكتمل <strong className="text-stone-800">{weekStats.completedCount}</strong> من <strong className="text-stone-800">{weekStats.totalCount}</strong> مهام
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <span className="inline-block text-[11px] font-black px-2.5 py-1 rounded-xl bg-white border border-stone-200 text-stone-700">
+                      العام: {metrics.overallScorePct}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* 2. مؤشر المحور الإداري */}
+                <div
+                  onClick={() => setActivePillar("admin")}
+                  className="p-4 rounded-2xl bg-orange-50/50 border border-orange-200/80 cursor-pointer hover:bg-orange-50 transition space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-orange-950">🏛️ المحور الإداري</span>
+                    <span className="text-xs font-black text-orange-700">{weekStats.adminDone}/{weekStats.adminTotal}</span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-orange-200/70 overflow-hidden">
+                    <div style={{ width: `${weekStats.adminPct}%` }} className="h-full madyan-gradient transition-all duration-300" />
+                  </div>
+                  <div className="text-[11px] text-stone-600 flex justify-between">
+                    <span>اللقاء والمحاضرة</span>
+                    <span className="font-bold text-orange-800">{weekStats.adminPct}%</span>
+                  </div>
+                </div>
+
+                {/* 3. مؤشر المحور التربوي */}
+                <div
+                  onClick={() => setActivePillar("tarbawi")}
+                  className="p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200/80 cursor-pointer hover:bg-emerald-50 transition space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-950">🌱 المحور التربوي</span>
+                    <span className="text-xs font-black text-emerald-700">{weekStats.tarbawiDone}/{weekStats.tarbawiTotal}</span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-emerald-200/70 overflow-hidden">
+                    <div style={{ width: `${weekStats.tarbawiPct}%` }} className="h-full tarbawi-gradient transition-all duration-300" />
+                  </div>
+                  <div className="text-[11px] text-stone-600 flex justify-between">
+                    <span>الورد والبناء الذاتي</span>
+                    <span className="font-bold text-emerald-800">{weekStats.tarbawiPct}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* بوصلة الخطوة التالية الآن (Next Action Compass) */}
+              {isPastWeek ? (
+                <div className="rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <strong>🔒 أرشيف الأسبوع {selectedWeek}:</strong> هذا الأسبوع انتهى، ويمكنك فقط استدراك <strong>المحاضرة الأسبوعية</strong> إن لم تكن قد اختبرت فيها بعد.
+                  </div>
+                  <button
+                    onClick={() => setSelectedWeek(totalWeeks)}
+                    className="px-3 py-1.5 rounded-xl bg-amber-900 text-white font-bold text-[11px]"
+                  >
+                    العودة للأسبوع الحالي ({totalWeeks}) ↩
+                  </button>
+                </div>
+              ) : nextStepInfo ? (
+                <div className="rounded-2xl bg-stone-900 text-white p-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center text-base">
+                      🎯
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-orange-300">خطوتك التالية الآن:</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white font-bold">
+                          {nextStepInfo.pillar === "admin" ? "🏛️ المحور الإداري" : "🌱 المحور التربوي"}
+                        </span>
+                      </div>
+                      <div className="text-sm font-black mt-0.5">{nextStepInfo.title}</div>
+                      <div className="text-[11px] text-stone-300">{nextStepInfo.hint}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (nextStepInfo.pillar === "admin") {
+                        handleAdminTaskAction(nextStepInfo.key);
+                      } else {
+                        setActivePillar("tarbawi");
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95 transition"
+                  >
+                    {nextStepInfo.actionLabel}
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-xs text-emerald-900 font-bold flex items-center justify-between">
+                  <span>🎉 بارك الله في جهودك! أتممت جميع مهمات المحور الإداري والمحور التربوي لهذا الأسبوع بالكامل.</span>
+                  <span className="text-sm font-black text-emerald-700">100% ✓</span>
+                </div>
+              )}
+            </section>
+
+            {/* ==================================================================== */}
+            {/* المحطة 3: مبدّل المحورين الواضح (الإداري | التربوي | العرض الشامل) */}
+            {/* ==================================================================== */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex p-1.5 rounded-2xl bg-white border border-stone-200/90 shadow-sm gap-1">
+                <button
+                  onClick={() => setActivePillar("all")}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition ${
+                    activePillar === "all"
+                      ? "bg-stone-900 text-white shadow-sm"
+                      : "text-stone-600 hover:bg-stone-100"
+                  }`}
+                >
+                  ⊞ الخريطة الكاملة ({weekStats.completedCount}/{weekStats.totalCount})
+                </button>
+                <button
+                  onClick={() => setActivePillar("admin")}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition ${
+                    activePillar === "admin"
+                      ? "madyan-gradient text-white shadow-sm"
+                      : "text-stone-600 hover:bg-orange-50"
+                  }`}
+                >
+                  🏛️ المحور الإداري ({weekStats.adminDone}/{weekStats.adminTotal})
+                </button>
+                <button
+                  onClick={() => setActivePillar("tarbawi")}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition ${
+                    activePillar === "tarbawi"
+                      ? "tarbawi-gradient text-white shadow-sm"
+                      : "text-stone-600 hover:bg-emerald-50"
+                  }`}
+                >
+                  🌱 المحور التربوي ({weekStats.tarbawiDone}/{weekStats.tarbawiTotal})
+                </button>
+              </div>
+
+              <span className="text-[11px] font-bold text-stone-400 hidden sm:inline">
+                اضغط «إنجاز» أمام أي مهمة لرصدها فوراً
+              </span>
             </div>
 
+            <div className={activePillar === "all" ? "grid grid-cols-1 lg:grid-cols-2 gap-6 items-start" : "space-y-4"}>
+            {/* ==================================================================== */}
+            {/* قسم المحور الإداري (Administrative Pillar Tasks) */}
+            {/* ==================================================================== */}
+            {(activePillar === "all" || activePillar === "admin") && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-xl madyan-gradient text-white flex items-center justify-center text-xs font-black">🏛️</span>
+                    <div>
+                      <h2 className="text-base font-black text-stone-900">أولاً: مهمات المحور الإداري</h2>
+                      <p className="text-[11px] text-stone-500">العادات المؤسسية الأربع المرتبطة باجتماعك الأسبوعي</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-black text-orange-700 bg-orange-50 px-3 py-1 rounded-full border border-orange-200">
+                    {weekStats.adminDone} من {weekStats.adminTotal} مكتمل
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  {['lecture', 'agenda', 'attendance', 'minutes'].map((taskKey, idx) => {
+                    const def = db.systemConfig.taskDefinitions[taskKey];
+                    const sched = computedSched[taskKey];
+                    const rec = weekRecord[taskKey] || { status: "pending" };
+                    const status = rec.status;
+                    const isLockedByPastWeek = isPastWeek && (taskKey !== 'lecture' || status !== 'pending');
+                    const icons = { lecture: "🎓", agenda: "📋", attendance: "🤝", minutes: "📝" };
+                    const showHelp = expandedHelpKey === `admin_${taskKey}`;
+
+                    return (
+                      <div
+                        key={taskKey}
+                        className={`bg-white rounded-3xl p-4 sm:p-5 border transition shadow-sm ${
+                          status === "on_time"
+                            ? "border-emerald-200 bg-emerald-50/10"
+                            : status === "late"
+                            ? "border-amber-300 bg-amber-50/15"
+                            : "border-stone-200/90 hover:border-orange-300"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          {/* يمين البطاقة: رقم المهمة والأيقونة */}
+                          <div className="flex items-start gap-3.5 flex-1">
+                            <div className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 border ${
+                              status === "on_time"
+                                ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                                : status === "late"
+                                ? "bg-amber-50 border-amber-200 text-amber-700"
+                                : "bg-stone-50 border-stone-200 text-stone-700"
+                            }`}>
+                              <span className="text-lg leading-none">{icons[taskKey]}</span>
+                              <span className="text-[9px] font-black mt-1 opacity-75">إداري {idx + 1}</span>
+                            </div>
+
+                            {/* وسط البطاقة: العنوان والوقت والوصف المباشر */}
+                            <div className="space-y-1.5 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-orange-50 text-orange-800 border border-orange-200/60">
+                                  📅 {sched.dayName} • {sched.timeLabel}
+                                </span>
+                                <span className="text-[11px] font-semibold text-stone-400">
+                                  ⏱ {sched.durationMinutes} د
+                                </span>
+                                {status === "late" && (
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                                    أُنجز متأخراً (50%)
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 className={`text-sm sm:text-base font-black ${status !== "pending" ? "text-stone-500 line-through" : "text-stone-900"}`}>
+                                {def.title}
+                              </h3>
+                              <p className="text-xs text-stone-500">{def.subtitle}</p>
+
+                              {/* أزرار مساعدة نظيفة ومختصرة */}
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                {taskKey === "lecture" && (
+                                  <button
+                                    onClick={() => setLectureModalOpen(true)}
+                                    className="text-[11px] font-bold px-3 py-1 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
+                                  >
+                                    🎬 {status === "pending" ? "مشاهدة المحاضرة والاختبار" : "مراجعة الفيديو والنتيجة"}
+                                  </button>
+                                )}
+
+                                {rec.quizSubmission && (
+                                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    الدرجة: {rec.quizSubmission.score}/{rec.quizSubmission.total}
+                                  </span>
+                                )}
+
+                                <button
+                                  onClick={() => setExpandedHelpKey(showHelp ? null : `admin_${taskKey}`)}
+                                  className="text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+                                >
+                                  💡 {showHelp ? "إخفاء الإرشادات" : "كيف أنجزها؟"}
+                                </button>
+
+                                <button
+                                  onClick={() => setNoteModalTaskKey(taskKey)}
+                                  className="text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+                                >
+                                  📌 {rec.note ? "تعديل المسودة" : "إضافة مسودة"}
+                                </button>
+
+                                {rec.completedAt && (
+                                  <span className="text-[10px] font-bold text-emerald-700">
+                                    ✓ {rec.completedAt}
+                                  </span>
+                                )}
+                              </div>
+
+                              {showHelp && (
+                                <div className="text-xs text-stone-600 bg-stone-50 p-3 rounded-2xl border border-stone-200/80 mt-2 leading-relaxed">
+                                  💡 <strong>خطوات التنفيذ:</strong> {def.instructions}
+                                </div>
+                              )}
+
+                              {rec.note && (
+                                <div className="text-xs bg-amber-50/70 border border-amber-200/70 text-stone-700 rounded-xl px-3 py-2 mt-1">
+                                  <strong className="text-amber-800">مسودتك:</strong> {rec.note}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* يسار البطاقة: زر الإنجاز المباشر الواضح */}
+                          <button
+                            onClick={() => handleAdminTaskAction(taskKey)}
+                            disabled={isLockedByPastWeek && taskKey !== "lecture"}
+                            className={`w-16 h-16 rounded-2xl flex-shrink-0 flex flex-col items-center justify-center font-black text-xs shadow-sm transition ${
+                              status === "on_time"
+                                ? "bg-emerald-600 text-white"
+                                : status === "late"
+                                ? "bg-amber-500 text-white"
+                                : isLockedByPastWeek
+                                ? "bg-stone-100 text-stone-400 cursor-not-allowed"
+                                : "bg-stone-900 text-white hover:bg-orange-600"
+                            }`}
+                          >
+                            {status === "on_time" ? (
+                              <>
+                                <span className="text-lg leading-none">✓</span>
+                                <span className="text-[10px] mt-1">مكتمل</span>
+                              </>
+                            ) : status === "late" ? (
+                              <>
+                                <span className="text-base leading-none">⚠️</span>
+                                <span className="text-[10px] mt-1">متأخر</span>
+                              </>
+                            ) : isLockedByPastWeek ? (
+                              <>
+                                <span className="text-sm leading-none">🔒</span>
+                                <span className="text-[10px] mt-1">مغلق</span>
+                              </>
+                            ) : taskKey === "lecture" ? (
+                              <>
+                                <span className="text-sm leading-none">▶</span>
+                                <span className="text-[10px] mt-1">الاختبار</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-base leading-none">○</span>
+                                <span className="text-[10px] mt-1">إنجاز</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* ==================================================================== */}
+            {/* قسم المحور التربوي (Educational / Tarbawi Pillar Tasks) */}
+            {/* ==================================================================== */}
+            {(activePillar === "all" || activePillar === "tarbawi") && (
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-xl tarbawi-gradient text-white flex items-center justify-center text-xs font-black">🌱</span>
+                    <div>
+                      <h2 className="text-base font-black text-stone-900">ثانياً: مهمات المحور التربوي</h2>
+                      <p className="text-[11px] text-stone-500">أوراد ومهمات البناء الذاتي والتزكية الأسبوعية</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-black text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                    {weekStats.tarbawiDone} من {weekStats.tarbawiTotal} مكتمل
+                  </span>
+                </div>
+
+                {/* بطاقة بوصلة الأسبوع التربوية */}
+                {tarbawiFocus?.title && (
+                  <div className="rounded-3xl p-4 bg-gradient-to-l from-emerald-900 to-teal-800 text-white shadow-sm flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] font-bold text-emerald-200">🌿 بوصلة الأسبوع التربوية</span>
+                      <div className="text-sm font-black">{tarbawiFocus.title}</div>
+                      {tarbawiFocus.bookTitle && (
+                        <div className="text-xs text-emerald-100">{tarbawiFocus.bookTitle}</div>
+                      )}
+                    </div>
+                    {tarbawiFocus.hint && (
+                      <span className="text-[11px] bg-white/10 px-3 py-1.5 rounded-xl text-emerald-50 font-semibold">
+                        {tarbawiFocus.hint}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 gap-3">
+                  {tarbawiTasks.map((tDef, idx) => {
+                    const rec = weekRecord[tDef.id] || { status: "pending", daysCompleted: [] };
+                    const status = rec.status || "pending";
+                    const daysCompleted = Array.isArray(rec.daysCompleted) ? rec.daysCompleted : [];
+                    const targetDays = Number(tDef.targetDays) || 5;
+                    const showHelp = expandedHelpKey === `tarbawi_${tDef.id}`;
+
+                    return (
+                      <div
+                        key={tDef.id}
+                        className={`bg-white rounded-3xl p-4 sm:p-5 border transition shadow-sm ${
+                          status === "on_time"
+                            ? "border-emerald-300 bg-emerald-50/15"
+                            : "border-stone-200/90 hover:border-emerald-300"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start gap-3.5 flex-1">
+                            <div className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 border ${
+                              status === "on_time"
+                                ? "bg-emerald-100 border-emerald-300 text-emerald-800"
+                                : "bg-emerald-50/60 border-emerald-200/70 text-emerald-800"
+                            }`}>
+                              <span className="text-lg leading-none">{tDef.icon || "🌱"}</span>
+                              <span className="text-[9px] font-black mt-1">تربوي {idx + 1}</span>
+                            </div>
+
+                            <div className="space-y-1.5 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70">
+                                  {tDef.badge || "عادة تربوية"}
+                                </span>
+                                {tDef.durationMinutes && (
+                                  <span className="text-[11px] font-semibold text-stone-400">
+                                    ⏱ {tDef.durationMinutes} د
+                                  </span>
+                                )}
+                                {tDef.targetScope === "unit" && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                                    مخصص لوحدة: {tDef.targetUnit}
+                                  </span>
+                                )}
+                                {tDef.targetScope === "custom" && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                                    مهمة مخصصة لك
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 className={`text-sm sm:text-base font-black ${status === "on_time" ? "text-stone-500 line-through" : "text-stone-900"}`}>
+                                {tDef.title}
+                              </h3>
+                              <p className="text-xs text-stone-500">{tDef.subtitle}</p>
+
+                              {/* متتبع الأيام السبعة للمهام اليومية مثل الورد القرآني */}
+                              {tDef.trackType === "daily_days" && (
+                                <div className="pt-2 space-y-1.5">
+                                  <div className="flex items-center justify-between text-[11px]">
+                                    <span className="font-bold text-stone-600">
+                                      سجل المداومة اليومية (الهدف: {targetDays} أيام في الأسبوع):
+                                    </span>
+                                    <span className="font-black text-emerald-700">
+                                      {daysCompleted.length} / {targetDays} أيام
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {DAYS_SHORT_AR.map((dLabel, dIdx) => {
+                                      const doneDay = daysCompleted.includes(dIdx);
+                                      return (
+                                        <button
+                                          key={dIdx}
+                                          type="button"
+                                          disabled={isPastWeek}
+                                          onClick={() => handleTarbawiDayToggle(tDef, dIdx)}
+                                          className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition ${
+                                            doneDay
+                                              ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                                              : "bg-stone-50 text-stone-600 border-stone-200 hover:border-emerald-400"
+                                          }`}
+                                        >
+                                          {doneDay ? `✓ ${dLabel}` : dLabel}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                <button
+                                  onClick={() => setExpandedHelpKey(showHelp ? null : `tarbawi_${tDef.id}`)}
+                                  className="text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+                                >
+                                  💡 {showHelp ? "إخفاء الإرشادات" : "إرشادات المهمة"}
+                                </button>
+
+                                <button
+                                  onClick={() => setNoteModalTaskKey(tDef.id)}
+                                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200/70"
+                                >
+                                  ✍️ {rec.note ? "تعديل الخاطرة / الفائدة" : "تدوين فائدة أو أثر"}
+                                </button>
+
+                                {rec.completedAt && (
+                                  <span className="text-[10px] font-bold text-emerald-700">
+                                    ✓ {rec.completedAt}
+                                  </span>
+                                )}
+                              </div>
+
+                              {showHelp && (
+                                <div className="text-xs text-stone-600 bg-stone-50 p-3 rounded-2xl border border-stone-200/80 mt-2 leading-relaxed">
+                                  💡 {tDef.instructions}
+                                </div>
+                              )}
+
+                              {rec.note && (
+                                <div className="text-xs bg-emerald-50/70 border border-emerald-200/80 text-emerald-950 rounded-xl px-3 py-2 mt-1">
+                                  <strong>ثمرة / فائدة مسجلة:</strong> {rec.note}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => handleTarbawiTaskToggle(tDef)}
+                            disabled={isPastWeek}
+                            className={`w-16 h-16 rounded-2xl flex-shrink-0 flex flex-col items-center justify-center font-black text-xs shadow-sm transition ${
+                              status === "on_time"
+                                ? "bg-emerald-600 text-white"
+                                : isPastWeek
+                                ? "bg-stone-100 text-stone-400 cursor-not-allowed"
+                                : "bg-stone-900 text-white hover:bg-emerald-600"
+                            }`}
+                          >
+                            {status === "on_time" ? (
+                              <>
+                                <span className="text-lg leading-none">✓</span>
+                                <span className="text-[10px] mt-1">مكتمل</span>
+                              </>
+                            ) : isPastWeek ? (
+                              <>
+                                <span className="text-sm leading-none">🔒</span>
+                                <span className="text-[10px] mt-1">مغلق</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-base leading-none">🌱</span>
+                                <span className="text-[10px] mt-1">إنجاز</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+            </div>
+
+            {/* اقتباس الأسبوع التحفيزي */}
             {randomQuote && (
               <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex items-center justify-between gap-4">
                 <div className="space-y-1">
-                  <span className="text-2xl text-orange-500 font-black leading-none">“</span>
-                  <p className="text-sm font-bold text-stone-800 leading-relaxed">
-                    {randomQuote.text}
+                  <p className="text-xs sm:text-sm font-bold text-stone-800 leading-relaxed">
+                    “{randomQuote.text}”
                   </p>
-                  <p className="text-xs text-stone-400 font-semibold">— {randomQuote.author}</p>
+                  <p className="text-[11px] text-stone-400 font-semibold">— {randomQuote.author}</p>
                 </div>
-                <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl flex-shrink-0">
-                  🌱
+                <div className="w-10 h-10 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center text-lg flex-shrink-0">
+                  ✨
                 </div>
               </div>
             )}
@@ -1614,9 +2144,9 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 tasksRecord: {
                   ...u.tasksRecord,
                   [selectedWeek]: {
-                    ...u.tasksRecord[selectedWeek],
+                    ...(u.tasksRecord?.[selectedWeek] || {}),
                     lecture: {
-                      ...u.tasksRecord[selectedWeek].lecture,
+                      ...(u.tasksRecord?.[selectedWeek]?.lecture || {}),
                       status: finalStatus,
                       completedAt: isPastWeek ? `أُنجز متأخراً (${timeFormatted})` : `اليوم ${timeFormatted}`,
                       quizSubmission: submission
@@ -1676,20 +2206,19 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 tasksRecord: {
                   ...u.tasksRecord,
                   [selectedWeek]: {
-                    ...u.tasksRecord[selectedWeek],
+                    ...(u.tasksRecord?.[selectedWeek] || {}),
                     [noteModalTaskKey]: {
-                      ...u.tasksRecord[selectedWeek][noteModalTaskKey],
+                      ...(u.tasksRecord?.[selectedWeek]?.[noteModalTaskKey] || { status: "pending" }),
                       note: val
                     }
                   }
                 }
               }));
               setNoteModalTaskKey(null);
-              showToast("تم حفظ المسودة الشخصية ✓");
+              showToast("تم حفظ المسودة والفائدة بنجاح ✓");
             }}
           />
 
-          {/* نافذة أرشيف وسجل النشرة الإدارية للكادر (كل الرسائل السابقة) */}
           <CadreBulletinArchiveModal
             isOpen={bulletinArchiveOpen}
             onClose={() => setBulletinArchiveOpen(false)}
@@ -1700,7 +2229,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
         </div>
       );
     }
-
     // ============================================================================
     // 6.1 CADRE BULLETIN ARCHIVE MODAL (سجل النشرة الإدارية وجميع الرسائل السابقة)
     // ============================================================================
@@ -2701,7 +3229,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 11. MANAGER / HR PORTAL
+    // 11. MANAGER / HR PORTAL (مع تخصيص المحور التربوي والمحور الإداري بالكامل)
     // ============================================================================
     function AdminPortal({ db, setDb, currentUser, onLogout, showToast }) {
       const [activeSection, setActiveSection] = useState("dashboard");
@@ -2710,7 +3238,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
       const units = useMemo(() => Array.from(new Set(cadres.map(c => c.unit).filter(Boolean))), [cadres]);
 
-      // state for Admin Bulletin tab
       const [bTitle, setBTitle] = useState("");
       const [bContent, setBContent] = useState("");
       const [bCategory, setBCategory] = useState("سياسة جديدة");
@@ -2757,9 +3284,9 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       };
 
       return (
-        <div className="min-h-screen bg-[#F7F7F5]">
+        <div className="min-h-screen bg-[#F6F5F2]">
           <header className="bg-white border-b border-stone-200 sticky top-0 z-30">
-            <div className="max-w-6xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div className="max-w-6xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <MadyanWordmark size="text-2xl sm:text-3xl" />
                 <span className="text-xs font-black px-3 py-1 rounded-full bg-stone-900 text-white">
@@ -2767,18 +3294,26 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 bg-stone-100 p-1.5 rounded-2xl text-xs font-black">
+              <div className="flex flex-wrap items-center gap-1 bg-stone-100 p-1.5 rounded-2xl text-xs font-black">
                 <button
                   onClick={() => setActiveSection("dashboard")}
-                  className={`px-3.5 py-2 rounded-xl transition ${
+                  className={`px-3 py-2 rounded-xl transition ${
                     activeSection === "dashboard" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
                   }`}
                 >
-                  📊 الداشبورد والتحليلات
+                  📊 الداشبورد
+                </button>
+                <button
+                  onClick={() => setActiveSection("tracks")}
+                  className={`px-3 py-2 rounded-xl transition ${
+                    activeSection === "tracks" ? "bg-emerald-700 text-white shadow-sm" : "text-emerald-800 hover:bg-emerald-50"
+                  }`}
+                >
+                  🌱 تخصيص المحور التربوي والإداري
                 </button>
                 <button
                   onClick={() => setActiveSection("curriculum")}
-                  className={`px-3.5 py-2 rounded-xl transition ${
+                  className={`px-3 py-2 rounded-xl transition ${
                     activeSection === "curriculum" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
                   }`}
                 >
@@ -2786,7 +3321,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 </button>
                 <button
                   onClick={() => setActiveSection("bulletins")}
-                  className={`px-3.5 py-2 rounded-xl transition ${
+                  className={`px-3 py-2 rounded-xl transition ${
                     activeSection === "bulletins" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
                   }`}
                 >
@@ -2794,11 +3329,11 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 </button>
                 <button
                   onClick={() => setActiveSection("settings")}
-                  className={`px-3.5 py-2 rounded-xl transition ${
+                  className={`px-3 py-2 rounded-xl transition ${
                     activeSection === "settings" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
                   }`}
                 >
-                  ⚙️ الإعدادات والحسابات
+                  ⚙️ الحسابات
                 </button>
               </div>
 
@@ -2817,6 +3352,17 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                 cadres={cadres}
                 db={db}
                 onInspectCadre={(c) => setInspectedCadre(c)}
+                onOpenTracks={() => setActiveSection("tracks")}
+              />
+            )}
+
+            {activeSection === "tracks" && (
+              <AdminTracksManagerSection
+                db={db}
+                setDb={setDb}
+                cadres={cadres}
+                units={units}
+                showToast={showToast}
               />
             )}
 
@@ -2872,14 +3418,21 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       );
     }
 
-    function AdminDashboardSection({ cadres, db, onInspectCadre }) {
+    function AdminDashboardSection({ cadres, db, onInspectCadre, onOpenTracks }) {
+      const tarbawiDefs = useMemo(
+        () => (db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS).filter(t => t.enabled !== false),
+        [db.systemConfig]
+      );
+
       const analytics = useMemo(() => {
         const list = cadres.map(c => ({
           cadre: c,
-          metrics: computeCadreMetrics(c)
+          metrics: computeCadreMetrics(c, db.systemConfig)
         })).sort((a, b) => b.metrics.overallScorePct - a.metrics.overallScorePct);
 
         let totalOnTime = 0, totalLate = 0, totalPending = 0, totalAll = 0;
+        let sumAdminPct = 0, sumTarbawiPct = 0;
+
         const taskTotals = {
           lecture: { onTime: 0, late: 0, total: 0 },
           agenda: { onTime: 0, late: 0, total: 0 },
@@ -2887,27 +3440,44 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
           minutes: { onTime: 0, late: 0, total: 0 }
         };
 
-        list.forEach(({ metrics }) => {
+        const tarbawiTotals = {};
+        tarbawiDefs.forEach(td => {
+          tarbawiTotals[td.id] = { onTime: 0, total: 0, title: td.title, icon: td.icon };
+        });
+
+        list.forEach(({ cadre, metrics }) => {
           totalOnTime += metrics.onTimeCount;
           totalLate += metrics.lateCount;
           totalPending += metrics.pendingCount;
           totalAll += metrics.totalTasksCount;
+          sumAdminPct += metrics.adminScorePct;
+          sumTarbawiPct += metrics.tarbawiScorePct;
 
           ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
             taskTotals[k].onTime += metrics.byTaskKey[k].onTime;
             taskTotals[k].late += metrics.byTaskKey[k].late;
             taskTotals[k].total += metrics.totalWeeks;
           });
+
+          tarbawiDefs.forEach(td => {
+            if (metrics.byTarbawiKey?.[td.id]) {
+              tarbawiTotals[td.id].onTime += metrics.byTarbawiKey[td.id].onTime;
+              tarbawiTotals[td.id].total += metrics.totalWeeks;
+            }
+          });
         });
 
         return {
           list,
+          avgAdminPct: list.length ? Math.round(sumAdminPct / list.length) : 0,
+          avgTarbawiPct: list.length ? Math.round(sumTarbawiPct / list.length) : 0,
           onTimePct: totalAll ? Math.round((totalOnTime / totalAll) * 100) : 0,
           latePct: totalAll ? Math.round((totalLate / totalAll) * 100) : 0,
           pendingPct: totalAll ? Math.round((totalPending / totalAll) * 100) : 0,
-          taskTotals
+          taskTotals,
+          tarbawiTotals
         };
-      }, [cadres]);
+      }, [cadres, db.systemConfig, tarbawiDefs]);
 
       const taskNames = {
         lecture: "1. المحاضرة الأسبوعية والاختبار",
@@ -2922,65 +3492,91 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
             <div className="bg-white p-5 rounded-3xl border border-stone-200/80 shadow-sm">
               <div className="text-xs font-bold text-stone-400">إجمالي الكوادر النشطة</div>
               <div className="text-3xl font-black text-stone-900 mt-2">{cadres.length} كوادر</div>
-              <div className="text-[11px] text-stone-500 mt-1">مسجلين بحسابات حصرية</div>
+              <div className="text-[11px] text-stone-500 mt-1">يتابعون المحورين الإداري والتربوي</div>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-orange-200 shadow-sm">
+              <div className="text-xs font-bold text-orange-700">🏛️ متوسط المحور الإداري</div>
+              <div className="text-3xl font-black text-orange-600 mt-2">{analytics.avgAdminPct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">المحاضرة • الأجندة • الحضور • المحضر</div>
             </div>
             <div className="bg-white p-5 rounded-3xl border border-emerald-200 shadow-sm">
-              <div className="text-xs font-bold text-emerald-700">الإنجاز في الموعد (On-Time)</div>
-              <div className="text-3xl font-black text-emerald-600 mt-2">{analytics.onTimePct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">التزام كامل بالوقت المحدد (100% سكور)</div>
+              <div className="text-xs font-bold text-emerald-700">🌱 متوسط المحور التربوي</div>
+              <div className="text-3xl font-black text-emerald-600 mt-2">{analytics.avgTarbawiPct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">{tarbawiDefs.length} مهمات تربوية مفعلة</div>
             </div>
-            <div className="bg-white p-5 rounded-3xl border border-amber-200 shadow-sm">
-              <div className="text-xs font-bold text-amber-700">إنجاز متأخر (محاضرات فائتة)</div>
-              <div className="text-3xl font-black text-amber-500 mt-2">{analytics.latePct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">أُنجزت بعد انتهاء أسبوعها (50% سكور)</div>
+            <div className="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
+              <div className="text-xs font-bold text-stone-600">معدل الإنجاز في الوقت</div>
+              <div className="text-3xl font-black text-stone-900 mt-2">{analytics.onTimePct}%</div>
+              <div className="text-[11px] text-stone-500 mt-1">متأخر: {analytics.latePct}% • قيد الإنجاز: {analytics.pendingPct}%</div>
             </div>
-            <div className="bg-white p-5 rounded-3xl border border-rose-200 shadow-sm">
-              <div className="text-xs font-bold text-rose-700">غير منجز / قيد الانتظار</div>
-              <div className="text-3xl font-black text-rose-600 mt-2">{analytics.pendingPct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">مهمات لم تُستكمل بعد (0% سكور)</div>
+          </div>
+
+          {/* تحليل المحورين جنباً إلى جنب */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <div>
+                <span className="text-xs font-bold text-orange-600">🏛️ المحور الإداري</span>
+                <h2 className="text-base font-black text-stone-900">نسب الالتزام بالعادات الإدارية الأربع</h2>
+              </div>
+              <div className="space-y-3">
+                {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                  const t = analytics.taskTotals[k];
+                  const onTimeRate = t.total ? Math.round((t.onTime / t.total) * 100) : 0;
+                  const lateRate = t.total ? Math.round((t.late / t.total) * 100) : 0;
+                  const totalDoneRate = onTimeRate + lateRate;
+                  return (
+                    <div key={k} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs font-black">
+                        <span className="text-stone-800">{taskNames[k]}</span>
+                        <span className="text-orange-700">{totalDoneRate}%</span>
+                      </div>
+                      <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden flex">
+                        <div style={{ width: `${onTimeRate}%` }} className="bg-orange-600 h-full" />
+                        <div style={{ width: `${lateRate}%` }} className="bg-amber-400 h-full" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-emerald-700">🌱 المحور التربوي</span>
+                  <h2 className="text-base font-black text-stone-900">نسب الالتزام بالمهمات التربوية المقررة</h2>
+                </div>
+                <button
+                  onClick={onOpenTracks}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold hover:bg-emerald-100"
+                >
+                  ⚙️ تخصيص المهمات التربوية
+                </button>
+              </div>
+              <div className="space-y-3">
+                {tarbawiDefs.map(td => {
+                  const stat = analytics.tarbawiTotals[td.id] || { onTime: 0, total: 1 };
+                  const rate = stat.total ? Math.round((stat.onTime / stat.total) * 100) : 0;
+                  return (
+                    <div key={td.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs font-black">
+                        <span className="text-stone-800">{td.icon} {td.title}</span>
+                        <span className="text-emerald-700">{rate}%</span>
+                      </div>
+                      <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden">
+                        <div style={{ width: `${rate}%` }} className="bg-emerald-600 h-full" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
           <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
             <div>
-              <span className="text-xs font-bold text-orange-600">تحليل العادات الأربع</span>
-              <h2 className="text-lg font-black text-stone-900">مدى إنجاز كل مهمة على حدة عبر جميع الكوادر</h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                const t = analytics.taskTotals[k];
-                const onTimeRate = t.total ? Math.round((t.onTime / t.total) * 100) : 0;
-                const lateRate = t.total ? Math.round((t.late / t.total) * 100) : 0;
-                const totalDoneRate = onTimeRate + lateRate;
-
-                return (
-                  <div key={k} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2">
-                    <div className="flex items-center justify-between text-xs font-black">
-                      <span className="text-stone-800">{taskNames[k]}</span>
-                      <span className="text-stone-900">{totalDoneRate}% إجمالي الإنجاز</span>
-                    </div>
-                    <div className="w-full h-3 rounded-full bg-stone-200 overflow-hidden flex">
-                      <div style={{ width: `${onTimeRate}%` }} className="bg-emerald-600 h-full" title="في الموعد" />
-                      <div style={{ width: `${lateRate}%` }} className="bg-amber-500 h-full" title="متأخر" />
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] text-stone-500 font-semibold">
-                      <span>✅ في الموعد: {onTimeRate}% ({t.onTime})</span>
-                      {k === "lecture" && <span>⚠️ متأخر: {lateRate}% ({t.late})</span>}
-                      <span>⏳ غير منجز: {100 - totalDoneRate}%</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <span className="text-xs font-bold text-orange-600">تقييم الكوادر التفصيلي</span>
-                <h2 className="text-lg font-black text-stone-900">جدول التزام الكوادر والـ Score التراكمي وإجابات الاختبارات</h2>
-              </div>
+              <span className="text-xs font-bold text-orange-600">تقييم الكوادر التفصيلي</span>
+              <h2 className="text-lg font-black text-stone-900">جدول التزام الكوادر في المحورين الإداري والتربوي</h2>
             </div>
 
             <div className="overflow-x-auto">
@@ -2989,83 +3585,65 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                   <tr className="border-b border-stone-200 text-stone-400 font-bold">
                     <th className="py-3 px-2">#</th>
                     <th className="py-3 px-2">الكادر الإداري</th>
-                    <th className="py-3 px-2">بيانات الدخول الحالية</th>
-                    <th className="py-3 px-2">تاريخ الانضمام (الأسابيع)</th>
-                    <th className="py-3 px-2">حالة الأسبوع الحالي</th>
+                    <th className="py-3 px-2">بيانات الدخول</th>
+                    <th className="py-3 px-2">🏛️ المحور الإداري</th>
+                    <th className="py-3 px-2">🌱 المحور التربوي</th>
                     <th className="py-3 px-2">متوسط الاختبارات</th>
                     <th className="py-3 px-2">السكور العام</th>
-                    <th className="py-3 px-2">التفاصيل وإجابات الاختبار</th>
+                    <th className="py-3 px-2">التفاصيل</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {analytics.list.map(({ cadre, metrics }, idx) => {
-                    const currWeekRec = cadre.tasksRecord?.[metrics.totalWeeks] || {};
-                    return (
-                      <tr key={cadre.id} className="hover:bg-stone-50/80">
-                        <td className="py-3.5 px-2 font-black text-stone-500">{idx + 1}</td>
-                        <td className="py-3.5 px-2">
-                          <div className="font-black text-stone-900 text-sm">{cadre.name}</div>
-                          <div className="text-[11px] text-stone-400">{cadre.unit} • {cadre.jobTitle}</div>
-                        </td>
-                        <td className="py-3.5 px-2">
-                          <span className="font-mono bg-stone-100 px-2 py-1 rounded-lg text-stone-700 font-bold">
-                            {cadre.username} / {cadre.password}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-2 font-semibold text-stone-600">
-                          {formatDateAr(cadre.joinedAt)} ({metrics.totalWeeks} أسبوع)
-                        </td>
-                        <td className="py-3.5 px-2">
-                          <div className="flex items-center gap-1.5">
-                            {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                              const st = currWeekRec[k]?.status || 'pending';
-                              return (
-                                <span
-                                  key={k}
-                                  title={k}
-                                  className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold ${
-                                    st === 'on_time'
-                                      ? 'bg-emerald-100 text-emerald-700'
-                                      : st === 'late'
-                                      ? 'bg-amber-100 text-amber-800'
-                                      : 'bg-rose-50 text-rose-500'
-                                  }`}
-                                >
-                                  {st === 'on_time' ? '✓' : st === 'late' ? '!' : '•'}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-2 font-bold">
-                          {metrics.avgQuizPct !== null ? (
-                            <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800">{metrics.avgQuizPct}%</span>
-                          ) : (
-                            <span className="text-stone-400">لم يختبر بعد</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-2">
-                          <span className={`text-sm font-black px-3 py-1 rounded-full ${
-                            metrics.overallScorePct >= 80
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : metrics.overallScorePct >= 50
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-rose-100 text-rose-800'
-                          }`}>
-                            {metrics.overallScorePct}%
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-2">
-                          <button
-                            onClick={() => onInspectCadre(cadre)}
-                            className="px-3 py-1.5 rounded-xl bg-stone-900 text-white font-bold hover:bg-orange-600 transition"
-                          >
-                            🔍 فحص الإجابات والسجل
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {analytics.list.map(({ cadre, metrics }, idx) => (
+                    <tr key={cadre.id} className="hover:bg-stone-50/80">
+                      <td className="py-3.5 px-2 font-black text-stone-500">{idx + 1}</td>
+                      <td className="py-3.5 px-2">
+                        <div className="font-black text-stone-900 text-sm">{cadre.name}</div>
+                        <div className="text-[11px] text-stone-400">{cadre.unit} • {metrics.totalWeeks} أسابيع</div>
+                      </td>
+                      <td className="py-3.5 px-2">
+                        <span className="font-mono bg-stone-100 px-2 py-1 rounded-lg text-stone-700 font-bold">
+                          {cadre.username} / {cadre.password}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-2">
+                        <span className="px-2.5 py-1 rounded-full bg-orange-50 text-orange-800 font-black">
+                          {metrics.adminScorePct}%
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-2">
+                        <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 font-black">
+                          {metrics.tarbawiScorePct}%
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-2 font-bold">
+                        {metrics.avgQuizPct !== null ? (
+                          <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800">{metrics.avgQuizPct}%</span>
+                        ) : (
+                          <span className="text-stone-400">لم يختبر</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-2">
+                        <span className={`text-sm font-black px-3 py-1 rounded-full ${
+                          metrics.overallScorePct >= 80
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : metrics.overallScorePct >= 50
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}>
+                          {metrics.overallScorePct}%
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-2">
+                        <button
+                          onClick={() => onInspectCadre(cadre)}
+                          className="px-3 py-1.5 rounded-xl bg-stone-900 text-white font-bold hover:bg-orange-600 transition"
+                        >
+                          🔍 فحص السجل
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -3075,7 +3653,500 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 12. ADMIN CURRICULUM & QUIZ BUILDER SECTION (إدارة المحاضرات والاختبارات)
+    // 11.5 ADMIN TRACKS MANAGER (تخصيص مهمات المحور التربوي والمحور الإداري)
+    // ============================================================================
+    function AdminTracksManagerSection({ db, setDb, cadres, units, showToast }) {
+      const tarbawiTasks = db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
+      const tarbawiFocus = db.systemConfig?.tarbawiWeeklyFocus || INITIAL_STATE.systemConfig.tarbawiWeeklyFocus;
+
+      const [focusTitle, setFocusTitle] = useState(tarbawiFocus.title || "");
+      const [focusBook, setFocusBook] = useState(tarbawiFocus.bookTitle || "");
+      const [focusHint, setFocusHint] = useState(tarbawiFocus.hint || "");
+
+      // نموذج إضافة أو تعديل مهمة تربوية
+      const [editingId, setEditingId] = useState(null);
+      const [tTitle, setTTitle] = useState("");
+      const [tSubtitle, setTSubtitle] = useState("");
+      const [tInstructions, setTInstructions] = useState("");
+      const [tBadge, setTBadge] = useState("بناء تربوي");
+      const [tIcon, setTIcon] = useState("🌱");
+      const [tDuration, setTDuration] = useState(30);
+      const [tTrackType, setTTrackType] = useState("check"); // 'check' | 'daily_days'
+      const [tTargetDays, setTTargetDays] = useState(5);
+      const [tTargetScope, setTTargetScope] = useState("all"); // 'all' | 'unit' | 'custom'
+      const [tTargetUnit, setTTargetUnit] = useState(units[0] || "");
+      const [tTargetUserIds, setTTargetUserIds] = useState([]);
+
+      const resetForm = () => {
+        setEditingId(null);
+        setTTitle("");
+        setTSubtitle("");
+        setTInstructions("");
+        setTBadge("بناء تربوي");
+        setTIcon("🌱");
+        setTDuration(30);
+        setTTrackType("check");
+        setTTargetDays(5);
+        setTTargetScope("all");
+        setTTargetUnit(units[0] || "");
+        setTTargetUserIds([]);
+      };
+
+      const startEditTask = (task) => {
+        setEditingId(task.id);
+        setTTitle(task.title || "");
+        setTSubtitle(task.subtitle || "");
+        setTInstructions(task.instructions || "");
+        setTBadge(task.badge || "بناء تربوي");
+        setTIcon(task.icon || "🌱");
+        setTDuration(task.durationMinutes || 30);
+        setTTrackType(task.trackType || "check");
+        setTTargetDays(task.targetDays || 5);
+        setTTargetScope(task.targetScope || "all");
+        setTTargetUnit(task.targetUnit || units[0] || "");
+        setTTargetUserIds(Array.isArray(task.targetUserIds) ? task.targetUserIds : []);
+      };
+
+      const handleSaveFocus = (e) => {
+        e.preventDefault();
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            tarbawiWeeklyFocus: {
+              title: focusTitle.trim(),
+              bookTitle: focusBook.trim(),
+              hint: focusHint.trim()
+            }
+          }
+        }));
+        showToast("تم حفظ بوصلة الأسبوع التربوية بنجاح 🌿");
+      };
+
+      const handleSaveTarbawiTask = (e) => {
+        e.preventDefault();
+        if (!tTitle.trim()) {
+          showToast("يرجى كتابة عنوان المهمة التربوية.");
+          return;
+        }
+        const taskPayload = {
+          id: editingId || ("tarbawi_" + Date.now()),
+          title: tTitle.trim(),
+          subtitle: tSubtitle.trim() || "مهمة ضمن المحور التربوي الأسبوعي",
+          instructions: tInstructions.trim() || "أتمّ المهمة وفق المقرر الأسبوعي ثم سجل إنجازك.",
+          badge: tBadge.trim() || "بناء تربوي",
+          icon: tIcon || "🌱",
+          durationMinutes: parseInt(tDuration, 10) || 25,
+          trackType: tTrackType,
+          targetDays: parseInt(tTargetDays, 10) || 5,
+          targetScope: tTargetScope,
+          targetUnit: tTargetScope === "unit" ? tTargetUnit : "",
+          targetUserIds: tTargetScope === "custom" ? tTargetUserIds : [],
+          enabled: true
+        };
+
+        setDb(prev => {
+          const currentList = prev.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
+          const nextList = editingId
+            ? currentList.map(item => item.id === editingId ? taskPayload : item)
+            : [...currentList, taskPayload];
+          return {
+            ...prev,
+            systemConfig: {
+              ...prev.systemConfig,
+              tarbawiTaskDefinitions: nextList
+            }
+          };
+        });
+
+        resetForm();
+        showToast(editingId ? "تم تحديث المهمة التربوية بنجاح ✓" : "تمت إضافة المهمة الجديدة للمحور التربوي 🌱");
+      };
+
+      const handleDeleteTarbawiTask = (id) => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            tarbawiTaskDefinitions: (prev.systemConfig?.tarbawiTaskDefinitions || []).filter(t => t.id !== id)
+          }
+        }));
+        if (editingId === id) resetForm();
+        showToast("تم حذف المهمة التربوية.");
+      };
+
+      const toggleCustomUser = (uid) => {
+        setTTargetUserIds(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
+      };
+
+      return (
+        <div className="space-y-6">
+          {/* بوصلة الأسبوع التربوية */}
+          <form onSubmit={handleSaveFocus} className="bg-white rounded-3xl p-6 border border-emerald-200 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-bold text-emerald-700">🌿 التوجيه التربوي الأسبوعي</span>
+                <h2 className="text-lg font-black text-stone-900">ضبط بوصلة الأسبوع التربوية والكتاب المقرر</h2>
+              </div>
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-2xl tarbawi-gradient text-white text-xs font-black shadow-sm"
+              >
+                حفظ البوصلة التربوية ✓
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">قيمة / عنوان الأسبوع التربوي</label>
+                <input
+                  value={focusTitle}
+                  onChange={e => setFocusTitle(e.target.value)}
+                  placeholder="مثال: الإتقان والأمانة في العمل"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">المقرر القرائي / الورد الأسبوعي</label>
+                <input
+                  value={focusBook}
+                  onChange={e => setFocusBook(e.target.value)}
+                  placeholder="مثال: فصل فقه الأولويات (ص 15 - 35)"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">رسالة تذكيرية مختصرة</label>
+                <input
+                  value={focusHint}
+                  onChange={e => setFocusHint(e.target.value)}
+                  placeholder="توجيه قصير يظهر للكادر..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+            </div>
+          </form>
+
+          {/* تخصيص وإضافة مهمات المحور التربوي */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-emerald-700">تخصيص المحور التربوي</span>
+                  <h3 className="text-base font-black text-stone-900">
+                    {editingId ? "✏️ تعديل المهمة التربوية" : "🌱 إضافة مهمة تربوية جديدة"}
+                  </h3>
+                </div>
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="text-xs font-bold text-stone-500 hover:text-stone-800 underline"
+                  >
+                    إلغاء التعديل
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveTarbawiTask} className="space-y-3.5">
+                <div className="grid grid-cols-4 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة</label>
+                    <select
+                      value={tIcon}
+                      onChange={e => setTIcon(e.target.value)}
+                      className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-base text-center"
+                    >
+                      {["📖", "📚", "🌿", "✨", "🕌", "🤲", "💡", "🎯", "🤝"].map(ic => (
+                        <option key={ic} value={ic}>{ic}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-3">
+                    <label className="block text-xs font-bold text-stone-700 mb-1">اسم المهمة التربوية</label>
+                    <input
+                      value={tTitle}
+                      onChange={e => setTTitle(e.target.value)}
+                      placeholder="مثال: الورد القرآني / قراءة الكتاب المقرر..."
+                      className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الوصف المختصر (يظهر تحت العنوان مباشرة)</label>
+                  <input
+                    value={tSubtitle}
+                    onChange={e => setTSubtitle(e.target.value)}
+                    placeholder="وصف واضح من سطر واحد..."
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">إرشادات التنفيذ التفصيلية</label>
+                  <textarea
+                    rows="2"
+                    value={tInstructions}
+                    onChange={e => setTInstructions(e.target.value)}
+                    placeholder="كيف ينجز الكادر هذه المهمة؟"
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">الشارة (Badge)</label>
+                    <input
+                      value={tBadge}
+                      onChange={e => setTBadge(e.target.value)}
+                      placeholder="زاد روحي / بناء فكري"
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">الوقت التقديري (دقيقة)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="240"
+                      value={tDuration}
+                      onChange={e => setTDuration(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                {/* طريقة تتبع الإنجاز */}
+                <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-200 space-y-2.5">
+                  <label className="block text-xs font-black text-emerald-950">طريقة قياس وإنجاز المهمة:</label>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setTTrackType("check")}
+                      className={`py-2 px-2.5 rounded-xl border transition ${
+                        tTrackType === "check" ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-stone-600"
+                      }`}
+                    >
+                      ✓ إنجاز أسبوعي مباشر
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTTrackType("daily_days")}
+                      className={`py-2 px-2.5 rounded-xl border transition ${
+                        tTrackType === "daily_days" ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-stone-600"
+                      }`}
+                    >
+                      📅 متتبع يومي (7 أيام)
+                    </button>
+                  </div>
+
+                  {tTrackType === "daily_days" && (
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <span className="font-bold text-emerald-900">عدد الأيام المستهدفة أسبوعياً:</span>
+                      <select
+                        value={tTargetDays}
+                        onChange={e => setTTargetDays(e.target.value)}
+                        className="rounded-xl border border-emerald-300 bg-white px-3 py-1 font-black text-emerald-900"
+                      >
+                        {[3, 4, 5, 6, 7].map(n => <option key={n} value={n}>{n} أيام في الأسبوع</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* لمن توجه هذه المهمة التربوية؟ */}
+                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5">
+                  <label className="block text-xs font-black text-stone-800">🎯 نطاق التخصيص (لمن تظهر هذه المهمة؟)</label>
+                  <div className="grid grid-cols-3 gap-1.5 text-[11px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setTTargetScope("all")}
+                      className={`py-2 rounded-xl border ${tTargetScope === "all" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
+                    >
+                      جميع الكوادر
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTTargetScope("unit")}
+                      className={`py-2 rounded-xl border ${tTargetScope === "unit" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
+                    >
+                      وحدة محددة
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTTargetScope("custom")}
+                      className={`py-2 rounded-xl border ${tTargetScope === "custom" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
+                    >
+                      كوادر محددين
+                    </button>
+                  </div>
+
+                  {tTargetScope === "unit" && (
+                    <select
+                      value={tTargetUnit}
+                      onChange={e => setTTargetUnit(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
+                    >
+                      {units.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  )}
+
+                  {tTargetScope === "custom" && (
+                    <div className="max-h-32 overflow-y-auto space-y-1 pt-1">
+                      {cadres.map(c => {
+                        const checked = tTargetUserIds.includes(c.id);
+                        return (
+                          <div
+                            key={c.id}
+                            onClick={() => toggleCustomUser(c.id)}
+                            className={`p-2 rounded-xl border text-xs cursor-pointer flex items-center justify-between ${
+                              checked ? "bg-emerald-50 border-emerald-400 font-black" : "bg-white border-stone-200"
+                            }`}
+                          >
+                            <span>{c.name} ({c.unit})</span>
+                            <span>{checked ? "✓ مضاف" : "+"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-2xl tarbawi-gradient text-white text-xs font-black shadow-md hover:opacity-95"
+                >
+                  {editingId ? "💾 حفظ تعديلات المهمة التربوية" : "+ إضافة المهمة إلى المحور التربوي"}
+                </button>
+              </form>
+            </div>
+
+            {/* قائمة المهمات التربوية الحالية */}
+            <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <div>
+                <span className="text-xs font-bold text-emerald-700">قائمة العادات والمهمات التربوية ({tarbawiTasks.length})</span>
+                <h3 className="text-base font-black text-stone-900">المهمات المفعلة في المحور التربوي</h3>
+                <p className="text-xs text-stone-500">يمكنك تعديل أي مهمة أو تخصيصها لوحدة معينة أو إضافة مهمات جديدة.</p>
+              </div>
+
+              <div className="space-y-3">
+                {tarbawiTasks.map((t, i) => (
+                  <div key={t.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-start gap-3 flex-1">
+                      <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg flex-shrink-0">
+                        {t.icon || "🌱"}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-sm font-black text-stone-900">{i + 1}. {t.title}</span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                            {t.badge}
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700">
+                            {t.trackType === "daily_days" ? `متتبع يومي (${t.targetDays || 5} أيام)` : "إنجاز أسبوعي مباشر"}
+                          </span>
+                          {t.targetScope === "unit" && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                              لوحدة: {t.targetUnit}
+                            </span>
+                          )}
+                          {t.targetScope === "custom" && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                              مخصص لـ {(t.targetUserIds || []).length} كادر
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-stone-500">{t.subtitle}</p>
+                        <p className="text-[11px] text-stone-400">💡 {t.instructions}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => startEditTask(t)}
+                        className="px-3 py-1.5 rounded-xl bg-white border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-bold"
+                      >
+                        تعديل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTarbawiTask(t.id)}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-xs font-bold"
+                      >
+                        حذف
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* تعديل عناوين وإرشادات مهمات المحور الإداري الأربع */}
+          <div className="bg-white rounded-3xl p-6 border border-orange-200 shadow-sm space-y-4">
+            <div>
+              <span className="text-xs font-bold text-orange-600">🏛️ تخصيص المحور الإداري</span>
+              <h3 className="text-base font-black text-stone-900">تعديل مسميات وإرشادات العادات الإدارية الأربع</h3>
+              <p className="text-xs text-stone-500">يمكنك تعديل العنوان أو الوصف أو خطوات التنفيذ أو الوقت التقديري لأي مهمة إدارية:</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {['lecture', 'agenda', 'attendance', 'minutes'].map((k, idx) => {
+                const def = db.systemConfig?.taskDefinitions?.[k] || INITIAL_STATE.systemConfig.taskDefinitions[k];
+                const updateAdminDef = (field, value) => {
+                  setDb(prev => ({
+                    ...prev,
+                    systemConfig: {
+                      ...prev.systemConfig,
+                      taskDefinitions: {
+                        ...(prev.systemConfig?.taskDefinitions || {}),
+                        [k]: {
+                          ...def,
+                          [field]: value
+                        }
+                      }
+                    }
+                  }));
+                };
+                return (
+                  <div key={k} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-orange-800">المهمة الإدارية #{idx + 1} ({k})</span>
+                      <span className="text-[11px] font-bold text-stone-500">⏱ {def.durationMinutes} د</span>
+                    </div>
+                    <input
+                      value={def.title}
+                      onChange={e => updateAdminDef("title", e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black"
+                      placeholder="عنوان المهمة"
+                    />
+                    <input
+                      value={def.subtitle}
+                      onChange={e => updateAdminDef("subtitle", e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-600"
+                      placeholder="الوصف المختصر"
+                    />
+                    <textarea
+                      rows="2"
+                      value={def.instructions}
+                      onChange={e => updateAdminDef("instructions", e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-white p-2.5 text-xs text-stone-600"
+                      placeholder="خطوات التنفيذ الإرشادية"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 12. ADMIN CURRICULUM & QUIZ BUILDER SECTION
     // ============================================================================
     function AdminCurriculumSection({ db, setDb, showToast }) {
       const availableWeeks = db.systemConfig?.availableCurriculumWeeks || [1, 2, 3, 4, 5, 6, 7, 8];
@@ -3354,7 +4425,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                               name={`correct_${qIdx}`}
                               checked={isCorrect}
                               onChange={() => handleQuestionChange(qIdx, "correctIndex", optIdx)}
-                              title="تحديد كإجابة صحيحة"
                             />
                             <input
                               value={opt}
@@ -3376,7 +4446,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 13. ADMIN USERS & SYSTEM SETTINGS SECTION (إدارة الحسابات وإعدادات النظام)
+    // 13. ADMIN USERS & SYSTEM SETTINGS SECTION
     // ============================================================================
     function AdminSettingsAndUsersSection({ db, setDb, cadres, showToast }) {
       const [newName, setNewName] = useState("");
@@ -3494,14 +4564,10 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
 
       return (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* توليد حساب جديد */}
           <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
             <div>
               <span className="text-xs font-bold text-orange-600">إدارة الحسابات والصلاحيات</span>
               <h2 className="text-lg font-black text-stone-900">توليد حساب جديد (كادر / تنفيذي / مدير)</h2>
-              <p className="text-xs text-stone-500 mt-0.5">
-                الحسابات تُمنح حصرياً من الإدارة، ويمكن للكادر تعديل بياناته عند أول دخول.
-              </p>
             </div>
 
             <form onSubmit={handleCreateUser} className="space-y-3.5">
@@ -3618,7 +4684,6 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
             </form>
           </div>
 
-          {/* قائمة جميع الحسابات + الاقتباسات */}
           <div className="lg:col-span-7 space-y-6">
             <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
               <h3 className="text-base font-black text-stone-900">👥 الحسابات المسجلة بالنظام ({db.users.length})</h3>
@@ -3697,12 +4762,13 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 14. CADRE INSPECTOR MODAL (فحص سجل الكادر وإجابات الاختبارات بالتفصيل)
+    // 14. CADRE INSPECTOR MODAL (يعرض تفاصيل المحور الإداري + التربوي + الاختبار)
     // ============================================================================
     function CadreInspectorModal({ cadre, db, onClose }) {
       if (!cadre) return null;
       const totalWeeks = calculateWeeksSinceJoin(cadre.joinedAt);
-      const metrics = computeCadreMetrics(cadre);
+      const metrics = computeCadreMetrics(cadre, db.systemConfig);
+      const tarbawiTasks = getApplicableTarbawiTasks(cadre, db.systemConfig);
 
       return (
         <ModalContainer
@@ -3715,16 +4781,16 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
           <div className="space-y-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
               <div className="p-3 rounded-2xl bg-stone-50 border border-stone-200">
-                <div className="text-[11px] text-stone-400 font-bold">السكور التراكمي</div>
+                <div className="text-[11px] text-stone-400 font-bold">السكور العام</div>
                 <div className="text-xl font-black text-stone-900 mt-0.5">{metrics.overallScorePct}%</div>
               </div>
-              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
-                <div className="text-[11px] text-emerald-700 font-bold">منجز في الوقت</div>
-                <div className="text-xl font-black text-emerald-700 mt-0.5">{metrics.onTimeCount}</div>
+              <div className="p-3 rounded-2xl bg-orange-50 border border-orange-200">
+                <div className="text-[11px] text-orange-800 font-bold">🏛️ المحور الإداري</div>
+                <div className="text-xl font-black text-orange-700 mt-0.5">{metrics.adminScorePct}%</div>
               </div>
-              <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
-                <div className="text-[11px] text-amber-800 font-bold">منجز متأخراً</div>
-                <div className="text-xl font-black text-amber-600 mt-0.5">{metrics.lateCount}</div>
+              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
+                <div className="text-[11px] text-emerald-800 font-bold">🌱 المحور التربوي</div>
+                <div className="text-xl font-black text-emerald-700 mt-0.5">{metrics.tarbawiScorePct}%</div>
               </div>
               <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200">
                 <div className="text-[11px] text-sky-800 font-bold">متوسط الاختبارات</div>
@@ -3754,23 +4820,53 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                      {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                        const t = wRec[k] || { status: "pending" };
-                        const labels = { lecture: "المحاضرة", agenda: "الأجندة", attendance: "الحضور", minutes: "المحضر" };
-                        return (
-                          <div key={k} className="p-2.5 rounded-xl bg-white border border-stone-200/80 space-y-1">
-                            <div className="font-black text-stone-700">{labels[k]}</div>
-                            <div className={`text-[11px] font-bold ${
-                              t.status === "on_time" ? "text-emerald-600" : t.status === "late" ? "text-amber-600" : "text-rose-500"
-                            }`}>
-                              {t.status === "on_time" ? "✓ في الموعد" : t.status === "late" ? "⚠️ متأخر" : "• غير منجز"}
+                    {/* مهام المحور الإداري */}
+                    <div>
+                      <div className="text-[11px] font-black text-orange-800 mb-1.5">🏛️ المحور الإداري:</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
+                          const t = wRec[k] || { status: "pending" };
+                          const labels = { lecture: "المحاضرة", agenda: "الأجندة", attendance: "الحضور", minutes: "المحضر" };
+                          return (
+                            <div key={k} className="p-2.5 rounded-xl bg-white border border-stone-200/80 space-y-1">
+                              <div className="font-black text-stone-700">{labels[k]}</div>
+                              <div className={`text-[11px] font-bold ${
+                                t.status === "on_time" ? "text-emerald-600" : t.status === "late" ? "text-amber-600" : "text-rose-500"
+                              }`}>
+                                {t.status === "on_time" ? "✓ في الموعد" : t.status === "late" ? "⚠️ متأخر" : "• غير منجز"}
+                              </div>
+                              {t.completedAt && <div className="text-[10px] text-stone-400">{t.completedAt}</div>}
+                              {t.note && <div className="text-[10px] text-amber-800 bg-amber-50 p-1 rounded">📌 {t.note}</div>}
                             </div>
-                            {t.completedAt && <div className="text-[10px] text-stone-400">{t.completedAt}</div>}
-                            {t.note && <div className="text-[10px] text-amber-800 bg-amber-50 p-1 rounded">📌 {t.note}</div>}
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* مهام المحور التربوي */}
+                    <div>
+                      <div className="text-[11px] font-black text-emerald-800 mb-1.5">🌱 المحور التربوي:</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        {tarbawiTasks.map(td => {
+                          const t = wRec[td.id] || { status: "pending", daysCompleted: [] };
+                          const dCount = Array.isArray(t.daysCompleted) ? t.daysCompleted.length : 0;
+                          return (
+                            <div key={td.id} className="p-2.5 rounded-xl bg-white border border-emerald-200/60 space-y-1">
+                              <div className="font-black text-stone-700">{td.icon} {td.title}</div>
+                              <div className={`text-[11px] font-bold ${
+                                t.status === "on_time" ? "text-emerald-600" : "text-stone-400"
+                              }`}>
+                                {t.status === "on_time"
+                                  ? "✓ مكتمل"
+                                  : td.trackType === "daily_days" && dCount > 0
+                                  ? `⏳ ${dCount}/${td.targetDays || 5} أيام`
+                                  : "• قيد الإنجاز"}
+                              </div>
+                              {t.note && <div className="text-[10px] text-emerald-800 bg-emerald-50 p-1 rounded">✍️ {t.note}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {quizSub && Array.isArray(curr.questions) && (
@@ -3801,7 +4897,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
     }
 
     // ============================================================================
-    // 15. CLOUD DATABASE SETUP MODAL (إعداد الربط السحابي المباشر بـ Supabase & Netlify)
+    // 15. CLOUD DATABASE SETUP MODAL
     // ============================================================================
     function CloudSetupModal({
       isOpen, onClose, cloudConfig, cloudStatus, cloudError, lastSyncAt, onSaveConfig, onDisconnect, showToast
@@ -3844,7 +4940,7 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                   ? `✅ متصل فعلياً بقاعدة بيانات Supabase (آخر مزامنة: ${lastSyncAt || "الآن"})`
                   : cloudStatus === "error"
                   ? "⚠️ تعذر إتمام المزامنة مع Supabase"
-                  : "ℹ️ يعمل التطبيق حالياً بالذاكرة المحلية إلى حين إدخال مفاتيح مشروعك في Supabase"}
+                  : "ℹ️ يعمل التطبيق حالياً بالذاكرة المحلية أو عبر متغيرات البيئة في Netlify"}
               </div>
               {cloudError && <p className="text-xs font-bold text-rose-700 mt-1">{cloudError}</p>}
             </div>
