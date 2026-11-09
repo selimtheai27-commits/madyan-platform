@@ -4489,24 +4489,26 @@ CREATE POLICY "Allow public upload on madyan-media"
                                   </div>
                                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
                                     {TASK_TEMPLATES_LIBRARY.map(tmpl => {
-                                      const checked = allowed.includes(tmpl.typeId);
+                                      const tId = tmpl.id || tmpl.typeId;
+                                      const tLabel = tmpl.title || tmpl.name;
+                                      const checked = allowed.includes(tId);
                                       return (
                                         <label
-                                          key={tmpl.typeId}
+                                          key={tId}
                                           className={`flex items-center justify-between p-3.5 rounded-2xl border cursor-pointer transition ${
                                             checked
                                               ? "bg-white border-stone-800 text-stone-900"
                                               : "bg-stone-100/70 border-stone-200 text-stone-500"
                                           }`}
                                         >
-                                          <div className="text-sm font-medium">{tmpl.name}</div>
+                                          <div className="text-sm font-medium">{tLabel}</div>
                                           <input
                                             type="checkbox"
                                             checked={checked}
                                             onChange={() => {
                                               const next = checked
-                                                ? allowed.filter(x => x !== tmpl.typeId)
-                                                : [...allowed, tmpl.typeId];
+                                                ? allowed.filter(x => x !== tId)
+                                                : [...allowed, tId];
                                               updateDepartment(dept.id, d => ({ ...d, allowedTaskTypes: next }));
                                             }}
                                             className="w-4 h-4 accent-stone-900"
