@@ -729,6 +729,9 @@ DROP POLICY IF EXISTS "Allow public upload on madyan-media" ON storage.objects;
 CREATE POLICY "Allow public upload on madyan-media"
   ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'madyan-media');`;
 
+    const DEFAULT_SUPABASE_URL = "https://qvmfaaudskpxiacaxbpn.supabase.co";
+    const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF2bWZhYXVkc2tweGlhY2F4YnBuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM4NDMwNjUsImV4cCI6MjEwOTQxOTA2NX0.Gl8NYt66eBjG_OQlaerjelBObC3QYBoCPmm0f5x_wNk";
+
     function loadCloudConfig() {
       try {
         const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
@@ -737,7 +740,10 @@ CREATE POLICY "Allow public upload on madyan-media"
           if (parsed && parsed.supabaseUrl && parsed.supabaseAnonKey) return parsed;
         }
       } catch (e) {}
-      return { supabaseUrl: "", supabaseAnonKey: "" };
+      return {
+        supabaseUrl: DEFAULT_SUPABASE_URL,
+        supabaseAnonKey: DEFAULT_SUPABASE_ANON_KEY
+      };
     }
 
     function saveCloudConfigToStorage(url, key) {
