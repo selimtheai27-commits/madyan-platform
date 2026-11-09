@@ -996,7 +996,16 @@ CREATE POLICY "Allow public upload on madyan-media"
         return normalizeDb(INITIAL_STATE);
       });
 
-      const [currentUserId, setCurrentUserId] = useState(null);
+      const [currentUserId, setCurrentUserId] = useState(() => {
+        try {
+          const p = new URLSearchParams(window.location.search).get("user");
+          if (p) {
+            const match = INITIAL_STATE.users.find(u => u.id === p || u.username === p);
+            if (match) return match.id;
+          }
+        } catch (e) {}
+        return null;
+      });
       const [supervisoryAdminId, setSupervisoryAdminId] = useState(null);
       const [toastMsg, setToastMsg] = useState(null);
       const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
@@ -5174,485 +5183,584 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
-    // 11. MANAGER / HR PORTAL (مع تخصيص المحور التربوي والمحور الإداري بالكامل)
+    // 11. ISOLATED OPERATIONAL DEPARTMENT PORTAL (واجهة إدارة الموارد البشرية + واجهة الإدارة التربوية)
     // ============================================================================
     function AdminPortal({ db, setDb, currentUser, onLogout, showToast }) {
-      const [activeSection, setActiveSection] = useState("dashboard");
-      const [inspectedCadre, setInspectedCadre] = useState(null);
+      const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+      const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+      const teams = db.systemConfig?.crossFunctionalTeams || DEFAULT_TEAMS;
 
-      const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
-      const units = useMemo(() => Array.from(new Set(cadres.map(c => c.unit).filter(Boolean))), [cadres]);
+      // تحديد الإدارة التشغيلية الحالية المعزولة لهذا المدير
+      const currentDeptId = currentUser.departmentId || "dept_hr";
+      const currentDept = departments.find(d => d.id === currentDeptId) || departments[0] || DEFAULT_DEPARTMENTS[0];
+      const isHr = currentDept.id === "dept_hr";
+      const isTarbawi = currentDept.id === "dept_tarbawi";
 
-      const [bTitle, setBTitle] = useState("");
-      const [bContent, setBContent] = useState("");
-      const [bCategory, setBCategory] = useState("سياسة جديدة");
-      const [bTargetType, setBTargetType] = useState("all");
-      const [bSelectedIds, setBSelectedIds] = useState([]);
+      // الشاشات الأربع المستقلة في القائمة الجانبية الثابتة (حسب الإجابة ١٦)
+      const [activeScreen, setActiveScreen] = useState("overview"); // 'overview' | 'cadres' | 'tasks' | 'reports'
 
-      const toggleBRecipient = (id) => {
-        setBSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-      };
+      // فلاتر جدول الكوادر
+      const [unitFilter, setUnitFilter] = useState("all");
+      const [teamFilter, setTeamFilter] = useState("all");
+      const [priorityFilter, setPriorityFilter] = useState("all"); // 'all' | 'urgent' | 'active' | 'done'
 
-      const selectBByUnit = (unitName) => {
-        const unitUserIds = cadres.filter(c => c.unit === unitName).map(c => c.id);
-        setBSelectedIds(prev => Array.from(new Set([...prev, ...unitUserIds])));
-      };
+      // التحكم في اللوحة الجانبية المنزلقة (Slide-over Drawer) لكافة الإجراءات
+      const [drawerMode, setDrawerMode] = useState(null);
+      // القيم الممكنة:
+      // 'evaluate_cadre' | 'add_task' | 'edit_task' | 'curriculum_builder' | 'tarbawi_compass' | 'dept_directive'
+      // + حصرياً للموارد البشرية: 'hr_add_cadre' | 'hr_bulk_import' | 'hr_unit_invites'
+      const [selectedCadreId, setSelectedCadreId] = useState(null);
+      const [editingTaskKey, setEditingTaskKey] = useState(null);
 
-      const handleAdminPublishBulletin = (e) => {
-        e.preventDefault();
-        if (!bTitle.trim() || !bContent.trim()) {
-          showToast("يرجى كتابة عنوان ونص التعميم الإداري أولاً.");
-          return;
+      // الكوادر الخاضعون لمسار هذه الإدارة فقط (عزل تام)
+      const deptCadres = useMemo(() => {
+        return db.users.filter(u => {
+          if (u.roleType !== "cadre") return false;
+          const assigned = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+            ? u.assignedDepartments
+            : ["dept_hr", "dept_tarbawi"];
+          return assigned.includes(currentDept.id);
+        });
+      }, [db.users, currentDept.id]);
+
+      const selectedCadre = deptCadres.find(c => c.id === selectedCadreId) || null;
+
+      // التعميم السياسي الأحدث من الإدارة العليا (البؤرة الأولى)
+      const latestExecutiveBulletin = useMemo(() => {
+        return (db.bulletins || []).find(b => !b.departmentId) || (db.bulletins || [])[0] || null;
+      }, [db.bulletins]);
+
+      // التوجيهات الفنية الخاصة بمسار هذه الإدارة فقط (معزولة لا تراها الإدارات الأخرى)
+      const deptDirectives = useMemo(() => {
+        return (db.bulletins || []).filter(b => b.departmentId === currentDept.id);
+      }, [db.bulletins, currentDept.id]);
+
+      // تجميع المهمات الخاصة بهذه الإدارة فقط مع إعدادات التقييم (ذاتي مقابل المدير) وتاريخ الاستحقاق
+      const deptTasksList = useMemo(() => {
+        if (isHr) {
+          const coreKeys = [
+            { key: "lecture", defaultTemplate: "lecture_quiz", defaultEval: "self", icon: "🎬", dueDate: "مسار نشط مستمر" },
+            { key: "agenda", defaultTemplate: "agenda_minutes", defaultEval: "self", icon: "📝", dueDate: "قبل اللقاء بـ ٢٤ ساعة" },
+            { key: "attendance", defaultTemplate: "meeting", defaultEval: "manager", icon: "🤝", dueDate: "يوم اللقاء المعتمد" },
+            { key: "minutes", defaultTemplate: "agenda_minutes", defaultEval: "self", icon: "📋", dueDate: "خلال ٢٤ ساعة بعد اللقاء" }
+          ];
+          const baseTasks = coreKeys.map(item => {
+            const def = db.systemConfig?.taskDefinitions?.[item.key] || INITIAL_STATE.systemConfig.taskDefinitions[item.key] || {};
+            return {
+              id: item.key,
+              isCoreAdmin: true,
+              title: def.title || item.key,
+              subtitle: def.subtitle || "",
+              instructions: def.instructions || "",
+              icon: def.icon || item.icon,
+              templateType: def.templateType || item.defaultTemplate,
+              evalMode: def.evalMode || item.defaultEval, // 'self' | 'manager'
+              dueDate: def.dueDate || item.dueDate,
+              targetScope: def.targetScope || "all",
+              targetUnit: def.targetUnit || "",
+              targetTeamId: def.targetTeamId || "",
+              targetUserIds: def.targetUserIds || [],
+              durationMinutes: def.durationMinutes || 25,
+              enabled: def.enabled !== false
+            };
+          }).filter(t => t.enabled !== false);
+
+          const extraHr = (db.systemConfig?.departmentCustomTasks?.dept_hr || []).filter(t => t.enabled !== false);
+          return [...baseTasks, ...extraHr];
         }
-        if (bTargetType === "custom" && bSelectedIds.length === 0) {
-          showToast("يرجى اختيار كادر واحد على الأقل.");
-          return;
+
+        if (isTarbawi) {
+          const rawTarbawi = (db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS).filter(t => t.enabled !== false);
+          return rawTarbawi.map(t => ({
+            ...t,
+            isCoreAdmin: false,
+            templateType: t.templateType || (t.trackType === "daily_days" ? "daily_habit" : "reading"),
+            evalMode: t.evalMode || "self",
+            dueDate: t.dueDate || "مسار نشط مستمر",
+            targetScope: t.targetScope || "all",
+            targetUnit: t.targetUnit || "",
+            targetTeamId: t.targetTeamId || "",
+            targetUserIds: t.targetUserIds || []
+          }));
         }
-        const now = new Date();
-        const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
-        const newBul = {
-          id: "bul_" + Date.now(),
-          title: bTitle.trim(),
-          content: bContent.trim(),
-          category: bCategory,
-          senderName: currentUser.name,
-          senderRole: "الإدارة العليا",
-          createdAt: `اليوم • ${timeStr}`,
-          targetType: bTargetType,
-          recipientIds: bTargetType === "all" ? [] : bSelectedIds,
-          acknowledgedBy: {}
-        };
-        setDb(prev => ({ ...prev, bulletins: [newBul, ...(prev.bulletins || [])] }));
-        setBTitle("");
-        setBContent("");
-        showToast("تم نشر التعميم الإداري بنجاح 📢");
-      };
 
-      return (
-        <div className="min-h-screen bg-[#F6F5F2]">
-          <header className="bg-white border-b border-stone-200 sticky top-0 z-30">
-            <div className="max-w-6xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <MadyanWordmark size="text-2xl sm:text-3xl" />
-                <span className="text-xs font-black px-3 py-1 rounded-full bg-stone-900 text-white">
-                  بوابة المدير والـ HR
-                </span>
-              </div>
+        return (db.systemConfig?.departmentCustomTasks?.[currentDept.id] || []).filter(t => t.enabled !== false);
+      }, [db.systemConfig, isHr, isTarbawi, currentDept.id]);
 
-              <div className="flex flex-wrap items-center gap-1 bg-stone-100 p-1.5 rounded-2xl text-xs font-black">
-                <button
-                  onClick={() => setActiveSection("dashboard")}
-                  className={`px-3 py-2 rounded-xl transition ${
-                    activeSection === "dashboard" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
-                  }`}
-                >
-                  📊 الداشبورد
-                </button>
-                <button
-                  onClick={() => setActiveSection("tracks")}
-                  className={`px-3 py-2 rounded-xl transition ${
-                    activeSection === "tracks" ? "bg-emerald-700 text-white shadow-sm" : "text-emerald-800 hover:bg-emerald-50"
-                  }`}
-                >
-                  🌱 تخصيص المحور التربوي والإداري
-                </button>
-                <button
-                  onClick={() => setActiveSection("curriculum")}
-                  className={`px-3 py-2 rounded-xl transition ${
-                    activeSection === "curriculum" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
-                  }`}
-                >
-                  🎬 المحاضرات والاختبارات
-                </button>
-                <button
-                  onClick={() => setActiveSection("bulletins")}
-                  className={`px-3 py-2 rounded-xl transition ${
-                    activeSection === "bulletins" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
-                  }`}
-                >
-                  📢 النشرة الإدارية
-                </button>
-                <button
-                  onClick={() => setActiveSection("settings")}
-                  className={`px-3 py-2 rounded-xl transition ${
-                    activeSection === "settings" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
-                  }`}
-                >
-                  ⚙️ الحسابات
-                </button>
-              </div>
+      // حساب درجة ومؤشرات الكادر في مسار هذه الإدارة فقط (دون كشف أو خلط درجات الإدارات الأخرى)
+      const getCadreDeptMetrics = (cadre) => {
+        const full = computeCadreMetrics(cadre, db.systemConfig);
+        const totalWeeks = calculateWeeksSinceJoin(cadre.joinedAt);
+        const currentPeriodRec = cadre.tasksRecord?.[totalWeeks] || {};
 
-              <button
-                onClick={onLogout}
-                className="px-4 py-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold transition"
-              >
-                تسجيل الخروج
-              </button>
-            </div>
-          </header>
-
-          <main className="max-w-6xl mx-auto px-4 pt-6">
-            {activeSection === "dashboard" && (
-              <AdminDashboardSection
-                cadres={cadres}
-                db={db}
-                onInspectCadre={(c) => setInspectedCadre(c)}
-                onOpenTracks={() => setActiveSection("tracks")}
-              />
-            )}
-
-            {activeSection === "tracks" && (
-              <AdminTracksManagerSection
-                db={db}
-                setDb={setDb}
-                cadres={cadres}
-                units={units}
-                showToast={showToast}
-              />
-            )}
-
-            {activeSection === "curriculum" && (
-              <AdminCurriculumSection
-                db={db}
-                setDb={setDb}
-                showToast={showToast}
-              />
-            )}
-
-            {activeSection === "bulletins" && (
-              <BulletinPublisherPanel
-                cadres={cadres}
-                units={units}
-                title={bTitle}
-                setTitle={setBTitle}
-                content={bContent}
-                setContent={setBContent}
-                category={bCategory}
-                setCategory={setBCategory}
-                targetType={bTargetType}
-                setTargetType={setBTargetType}
-                selectedIds={bSelectedIds}
-                setSelectedIds={setBSelectedIds}
-                toggleRecipient={toggleBRecipient}
-                selectByUnit={selectBByUnit}
-                onSubmit={handleAdminPublishBulletin}
-                bulletins={db.bulletins || []}
-                onDelete={(id) => {
-                  setDb(prev => ({ ...prev, bulletins: (prev.bulletins || []).filter(b => b.id !== id) }));
-                  showToast("تم حذف التعميم");
-                }}
-              />
-            )}
-
-            {activeSection === "settings" && (
-              <AdminSettingsAndUsersSection
-                db={db}
-                setDb={setDb}
-                cadres={cadres}
-                showToast={showToast}
-              />
-            )}
-          </main>
-
-          <CadreInspectorModal
-            cadre={inspectedCadre}
-            db={db}
-            onClose={() => setInspectedCadre(null)}
-          />
-        </div>
-      );
-    }
-
-    function AdminDashboardSection({ cadres, db, onInspectCadre, onOpenTracks }) {
-      const tarbawiDefs = useMemo(
-        () => (db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS).filter(t => t.enabled !== false),
-        [db.systemConfig]
-      );
-
-      const analytics = useMemo(() => {
-        const list = cadres.map(c => ({
-          cadre: c,
-          metrics: computeCadreMetrics(c, db.systemConfig)
-        })).sort((a, b) => b.metrics.overallScorePct - a.metrics.overallScorePct);
-
-        let totalOnTime = 0, totalLate = 0, totalPending = 0, totalAll = 0;
-        let sumAdminPct = 0, sumTarbawiPct = 0;
-
-        const taskTotals = {
-          lecture: { onTime: 0, late: 0, total: 0 },
-          agenda: { onTime: 0, late: 0, total: 0 },
-          attendance: { onTime: 0, late: 0, total: 0 },
-          minutes: { onTime: 0, late: 0, total: 0 }
-        };
-
-        const tarbawiTotals = {};
-        tarbawiDefs.forEach(td => {
-          tarbawiTotals[td.id] = { onTime: 0, total: 0, title: td.title, icon: td.icon };
+        // المهمات المنطبقة على هذا الكادر في هذه الإدارة
+        const applicableTasks = deptTasksList.filter(t => {
+          if (!t.targetScope || t.targetScope === "all") return true;
+          if (t.targetScope === "unit") return t.targetUnit === cadre.unit;
+          if (t.targetScope === "team") return (cadre.crossTeams || []).includes(t.targetTeamId);
+          if (t.targetScope === "custom") return Array.isArray(t.targetUserIds) && t.targetUserIds.includes(cadre.id);
+          return true;
         });
 
-        list.forEach(({ cadre, metrics }) => {
-          totalOnTime += metrics.onTimeCount;
-          totalLate += metrics.lateCount;
-          totalPending += metrics.pendingCount;
-          totalAll += metrics.totalTasksCount;
-          sumAdminPct += metrics.adminScorePct;
-          sumTarbawiPct += metrics.tarbawiScorePct;
+        let completedCount = 0;
+        let lateCount = 0;
+        let pendingManagerEvalCount = 0;
+        let pendingCount = 0;
 
-          ['lecture', 'agenda', 'attendance', 'minutes'].forEach(k => {
-            taskTotals[k].onTime += metrics.byTaskKey[k].onTime;
-            taskTotals[k].late += metrics.byTaskKey[k].late;
-            taskTotals[k].total += metrics.totalWeeks;
-          });
-
-          tarbawiDefs.forEach(td => {
-            if (metrics.byTarbawiKey?.[td.id]) {
-              tarbawiTotals[td.id].onTime += metrics.byTarbawiKey[td.id].onTime;
-              tarbawiTotals[td.id].total += metrics.totalWeeks;
+        applicableTasks.forEach(t => {
+          const rec = currentPeriodRec[t.id] || { status: "pending" };
+          if (rec.status === "on_time") {
+            completedCount++;
+          } else if (rec.status === "late") {
+            completedCount++;
+            lateCount++;
+          } else {
+            pendingCount++;
+            if (t.evalMode === "manager") {
+              pendingManagerEvalCount++;
             }
-          });
+          }
         });
+
+        const scorePct = isHr
+          ? full.adminScorePct
+          : isTarbawi
+          ? full.tarbawiScorePct
+          : (applicableTasks.length > 0 ? Math.round((completedCount / applicableTasks.length) * 100) : 100);
+
+        // تحديد أولوية الهيت ماب الثلاثية للكادر (١. عاجل/متأخر أو ينتظر تقييم المدير، ٢. قيد الإنجاز، ٣. مكتمل هادئ)
+        const priorityLevel =
+          (scorePct < 60 || pendingManagerEvalCount > 0 || lateCount > 0)
+            ? "urgent"
+            : pendingCount > 0
+            ? "active"
+            : "done";
 
         return {
-          list,
-          avgAdminPct: list.length ? Math.round(sumAdminPct / list.length) : 0,
-          avgTarbawiPct: list.length ? Math.round(sumTarbawiPct / list.length) : 0,
-          onTimePct: totalAll ? Math.round((totalOnTime / totalAll) * 100) : 0,
-          latePct: totalAll ? Math.round((totalLate / totalAll) * 100) : 0,
-          pendingPct: totalAll ? Math.round((totalPending / totalAll) * 100) : 0,
-          taskTotals,
-          tarbawiTotals
+          scorePct,
+          totalWeeks,
+          applicableTasks,
+          currentPeriodRec,
+          completedCount,
+          lateCount,
+          pendingCount,
+          pendingManagerEvalCount,
+          priorityLevel,
+          avgQuizPct: full.avgQuizPct
         };
-      }, [cadres, db.systemConfig, tarbawiDefs]);
-
-      const taskNames = {
-        lecture: "1. المحاضرة الأسبوعية والاختبار",
-        agenda: "2. إرسال الأجندة (قبل 24 ساعة)",
-        attendance: "3. الانضباط في حضور اللقاء",
-        minutes: "4. توثيق المحضر (خلال 24 ساعة)"
       };
 
-      return (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-            <div className="bg-white p-5 rounded-3xl border border-stone-200/80 shadow-sm">
-              <div className="text-xs font-bold text-stone-400">إجمالي الكوادر النشطة</div>
-              <div className="text-3xl font-black text-stone-900 mt-2">{cadres.length} كوادر</div>
-              <div className="text-[11px] text-stone-500 mt-1">يتابعون المحورين الإداري والتربوي</div>
-            </div>
-            <div className="bg-white p-5 rounded-3xl border border-orange-200 shadow-sm">
-              <div className="text-xs font-bold text-orange-700">🏛️ متوسط المحور الإداري</div>
-              <div className="text-3xl font-black text-orange-600 mt-2">{analytics.avgAdminPct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">المحاضرة • الأجندة • الحضور • المحضر</div>
-            </div>
-            <div className="bg-white p-5 rounded-3xl border border-emerald-200 shadow-sm">
-              <div className="text-xs font-bold text-emerald-700">🌱 متوسط المحور التربوي</div>
-              <div className="text-3xl font-black text-emerald-600 mt-2">{analytics.avgTarbawiPct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">{tarbawiDefs.length} مهمات تربوية مفعلة</div>
-            </div>
-            <div className="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
-              <div className="text-xs font-bold text-stone-600">معدل الإنجاز في الوقت</div>
-              <div className="text-3xl font-black text-stone-900 mt-2">{analytics.onTimePct}%</div>
-              <div className="text-[11px] text-stone-500 mt-1">متأخر: {analytics.latePct}% • قيد الإنجاز: {analytics.pendingPct}%</div>
-            </div>
-          </div>
+      const cadresWithDeptMetrics = useMemo(() => {
+        return deptCadres.map(c => ({
+          cadre: c,
+          deptMetrics: getCadreDeptMetrics(c)
+        })).sort((a, b) => {
+          const order = { urgent: 0, active: 1, done: 2 };
+          if (order[a.deptMetrics.priorityLevel] !== order[b.deptMetrics.priorityLevel]) {
+            return order[a.deptMetrics.priorityLevel] - order[b.deptMetrics.priorityLevel];
+          }
+          return a.deptMetrics.scorePct - b.deptMetrics.scorePct;
+        });
+      }, [deptCadres, deptTasksList, db.systemConfig]);
 
-          {/* تحليل المحورين جنباً إلى جنب */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <div>
-                <span className="text-xs font-bold text-orange-600">🏛️ المحور الإداري</span>
-                <h2 className="text-base font-black text-stone-900">نسب الالتزام بالعادات الإدارية الأربع</h2>
-              </div>
-              <div className="space-y-3">
-                {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                  const t = analytics.taskTotals[k];
-                  const onTimeRate = t.total ? Math.round((t.onTime / t.total) * 100) : 0;
-                  const lateRate = t.total ? Math.round((t.late / t.total) * 100) : 0;
-                  const totalDoneRate = onTimeRate + lateRate;
-                  return (
-                    <div key={k} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs font-black">
-                        <span className="text-stone-800">{taskNames[k]}</span>
-                        <span className="text-orange-700">{totalDoneRate}%</span>
-                      </div>
-                      <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden flex">
-                        <div style={{ width: `${onTimeRate}%` }} className="bg-orange-600 h-full" />
-                        <div style={{ width: `${lateRate}%` }} className="bg-amber-400 h-full" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+      const deptAveragePct = useMemo(() => {
+        if (cadresWithDeptMetrics.length === 0) return 0;
+        const sum = cadresWithDeptMetrics.reduce((acc, item) => acc + item.deptMetrics.scorePct, 0);
+        return Math.round(sum / cadresWithDeptMetrics.length);
+      }, [cadresWithDeptMetrics]);
 
-            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-emerald-700">🌱 المحور التربوي</span>
-                  <h2 className="text-base font-black text-stone-900">نسب الالتزام بالمهمات التربوية المقررة</h2>
-                </div>
-                <button
-                  onClick={onOpenTracks}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold hover:bg-emerald-100"
-                >
-                  ⚙️ تخصيص المهمات التربوية
-                </button>
-              </div>
-              <div className="space-y-3">
-                {tarbawiDefs.map(td => {
-                  const stat = analytics.tarbawiTotals[td.id] || { onTime: 0, total: 1 };
-                  const rate = stat.total ? Math.round((stat.onTime / stat.total) * 100) : 0;
-                  return (
-                    <div key={td.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs font-black">
-                        <span className="text-stone-800">{td.icon} {td.title}</span>
-                        <span className="text-emerald-700">{rate}%</span>
-                      </div>
-                      <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden">
-                        <div style={{ width: `${rate}%` }} className="bg-emerald-600 h-full" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+      const urgentCadresCount = cadresWithDeptMetrics.filter(x => x.deptMetrics.priorityLevel === "urgent").length;
 
-          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-            <div>
-              <span className="text-xs font-bold text-orange-600">تقييم الكوادر التفصيلي</span>
-              <h2 className="text-lg font-black text-stone-900">جدول التزام الكوادر في المحورين الإداري والتربوي</h2>
-            </div>
+      // فلاتر جدول الكوادر
+      const filteredCadres = cadresWithDeptMetrics.filter(({ cadre, deptMetrics }) => {
+        if (unitFilter !== "all" && cadre.unit !== unitFilter) return false;
+        if (teamFilter !== "all" && !(cadre.crossTeams || []).includes(teamFilter)) return false;
+        if (priorityFilter !== "all" && deptMetrics.priorityLevel !== priorityFilter) return false;
+        return true;
+      });
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead>
-                  <tr className="border-b border-stone-200 text-stone-400 font-bold">
-                    <th className="py-3 px-2">#</th>
-                    <th className="py-3 px-2">الكادر الإداري</th>
-                    <th className="py-3 px-2">بيانات الدخول</th>
-                    <th className="py-3 px-2">🏛️ المحور الإداري</th>
-                    <th className="py-3 px-2">🌱 المحور التربوي</th>
-                    <th className="py-3 px-2">متوسط الاختبارات</th>
-                    <th className="py-3 px-2">السكور العام</th>
-                    <th className="py-3 px-2">التفاصيل</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {analytics.list.map(({ cadre, metrics }, idx) => (
-                    <tr key={cadre.id} className="hover:bg-stone-50/80">
-                      <td className="py-3.5 px-2 font-black text-stone-500">{idx + 1}</td>
-                      <td className="py-3.5 px-2">
-                        <div className="font-black text-stone-900 text-sm">{cadre.name}</div>
-                        <div className="text-[11px] text-stone-400">{cadre.unit} • {metrics.totalWeeks} أسابيع</div>
-                      </td>
-                      <td className="py-3.5 px-2">
-                        <span className="font-mono bg-stone-100 px-2 py-1 rounded-lg text-stone-700 font-bold">
-                          {cadre.username} / {cadre.password}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-2">
-                        <span className="px-2.5 py-1 rounded-full bg-orange-50 text-orange-800 font-black">
-                          {metrics.adminScorePct}%
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-2">
-                        <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 font-black">
-                          {metrics.tarbawiScorePct}%
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-2 font-bold">
-                        {metrics.avgQuizPct !== null ? (
-                          <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800">{metrics.avgQuizPct}%</span>
-                        ) : (
-                          <span className="text-stone-400">لم يختبر</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-2">
-                        <span className={`text-sm font-black px-3 py-1 rounded-full ${
-                          metrics.overallScorePct >= 80
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : metrics.overallScorePct >= 50
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-rose-100 text-rose-800'
-                        }`}>
-                          {metrics.overallScorePct}%
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-2">
-                        <button
-                          onClick={() => onInspectCadre(cadre)}
-                          className="px-3 py-1.5 rounded-xl bg-stone-900 text-white font-bold hover:bg-orange-600 transition"
-                        >
-                          🔍 فحص السجل
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+      // حالات اللوحة المنزلقة: إضافة أو تعديل مهمة في الإدارة
+      const allowedTemplates = TASK_TEMPLATES_LIBRARY.filter(t =>
+        (currentDept.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"]).includes(t.id)
       );
-    }
+      const [taskTitle, setTaskTitle] = useState("");
+      const [taskSubtitle, setTaskSubtitle] = useState("");
+      const [taskInstructions, setTaskInstructions] = useState("");
+      const [taskIcon, setTaskIcon] = useState(isTarbawi ? "🌱" : "📋");
+      const [taskTemplateType, setTaskTemplateType] = useState(allowedTemplates[0]?.id || "practical");
+      const [taskEvalMode, setTaskEvalMode] = useState("self"); // 'self' | 'manager'
+      const [taskDueDate, setTaskDueDate] = useState("٢٠ نوفمبر ٢٠٢٦");
+      const [taskTargetScope, setTaskTargetScope] = useState("all"); // 'all' | 'unit' | 'team' | 'custom'
+      const [taskTargetUnit, setTaskTargetUnit] = useState(units[0]?.name || "");
+      const [taskTargetTeamId, setTaskTargetTeamId] = useState(teams[0]?.id || "");
+      const [taskTargetUserIds, setTaskTargetUserIds] = useState([]);
+      const [taskTargetDays, setTaskTargetDays] = useState(5);
 
-    // ============================================================================
-    // 11.5 ADMIN TRACKS MANAGER (تخصيص مهمات المحور التربوي والمحور الإداري)
-    // ============================================================================
-    function AdminTracksManagerSection({ db, setDb, cadres, units, showToast }) {
-      const tarbawiTasks = db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
+      const openAddTaskDrawer = () => {
+        if (deptTasksList.length >= (currentDept.maxTotalTasks || 6)) {
+          showToast(`بلغت الإدارة الحد الأقصى المسموح به للمهمات (${currentDept.maxTotalTasks || 6} مهمات).`);
+          return;
+        }
+        setEditingTaskKey(null);
+        setTaskTitle("");
+        setTaskSubtitle("");
+        setTaskInstructions("");
+        setTaskIcon(isTarbawi ? "🌱" : "📋");
+        setTaskTemplateType(allowedTemplates[0]?.id || "practical");
+        setTaskEvalMode("self");
+        setTaskDueDate("٢٠ نوفمبر ٢٠٢٦");
+        setTaskTargetScope("all");
+        setTaskTargetUnit(units[0]?.name || "");
+        setTaskTargetTeamId(teams[0]?.id || "");
+        setTaskTargetUserIds([]);
+        setDrawerMode("add_task");
+      };
+
+      const openEditTaskDrawer = (task) => {
+        setEditingTaskKey(task.id);
+        setTaskTitle(task.title || "");
+        setTaskSubtitle(task.subtitle || "");
+        setTaskInstructions(task.instructions || "");
+        setTaskIcon(task.icon || "📋");
+        setTaskTemplateType(task.templateType || "practical");
+        setTaskEvalMode(task.evalMode || "self");
+        setTaskDueDate(task.dueDate || "مسار نشط مستمر");
+        setTaskTargetScope(task.targetScope || "all");
+        setTaskTargetUnit(task.targetUnit || units[0]?.name || "");
+        setTaskTargetTeamId(task.targetTeamId || teams[0]?.id || "");
+        setTaskTargetUserIds(Array.isArray(task.targetUserIds) ? task.targetUserIds : []);
+        setTaskTargetDays(task.targetDays || 5);
+        setDrawerMode("edit_task");
+      };
+
+      const handleSaveDeptTask = (e) => {
+        e.preventDefault();
+        if (!taskTitle.trim()) {
+          showToast("يرجى إدخال عنوان المهمة.");
+          return;
+        }
+
+        // التحقق من حصة المهمات الإجمالية وحصة النوع الواحد للفرد (الإجابة ٤)
+        if (!editingTaskKey) {
+          const maxTotal = currentDept.maxTotalTasks || 6;
+          if (deptTasksList.length >= maxTotal) {
+            showToast(`لا يمكن تجاوز الحد الأقصى لإجمالي مهمات الإدارة (${maxTotal} مهمات).`);
+            return;
+          }
+          const sameTypeCount = deptTasksList.filter(t => t.templateType === taskTemplateType).length;
+          const maxPerType = currentDept.maxPerTypePerCadre || 2;
+          if (sameTypeCount >= maxPerType) {
+            showToast(`وصلت للحد الأقصى المسموح إسناده للفرد من هذا النوع (${maxPerType} مهمات).`);
+            return;
+          }
+        }
+
+        if (isHr && editingTaskKey && ["lecture", "agenda", "attendance", "minutes"].includes(editingTaskKey)) {
+          setDb(prev => ({
+            ...prev,
+            systemConfig: {
+              ...prev.systemConfig,
+              taskDefinitions: {
+                ...(prev.systemConfig?.taskDefinitions || {}),
+                [editingTaskKey]: {
+                  ...(prev.systemConfig?.taskDefinitions?.[editingTaskKey] || {}),
+                  title: taskTitle.trim(),
+                  subtitle: taskSubtitle.trim(),
+                  instructions: taskInstructions.trim(),
+                  icon: taskIcon,
+                  templateType: taskTemplateType,
+                  evalMode: taskEvalMode,
+                  dueDate: taskDueDate.trim(),
+                  targetScope: taskTargetScope,
+                  targetUnit: taskTargetScope === "unit" ? taskTargetUnit : "",
+                  targetTeamId: taskTargetScope === "team" ? taskTargetTeamId : "",
+                  targetUserIds: taskTargetScope === "custom" ? taskTargetUserIds : []
+                }
+              }
+            }
+          }));
+          setDrawerMode(null);
+          showToast("تم تحديث المهمة الإدارية وطريقة تقييمها بنجاح ✓");
+          return;
+        }
+
+        const payload = {
+          id: editingTaskKey || (`${currentDept.id}_task_` + Date.now()),
+          title: taskTitle.trim(),
+          subtitle: taskSubtitle.trim() || `مهمة ضمن ${currentDept.name}`,
+          instructions: taskInstructions.trim() || "أتم المهمة وفق التوجيهات المعتمدة.",
+          icon: taskIcon || "📋",
+          badge: currentDept.shortName,
+          templateType: taskTemplateType,
+          trackType: taskTemplateType === "daily_habit" ? "daily_days" : "check",
+          targetDays: parseInt(taskTargetDays, 10) || 5,
+          evalMode: taskEvalMode, // 'self' | 'manager'
+          dueDate: taskDueDate.trim() || "مسار نشط مستمر",
+          targetScope: taskTargetScope,
+          targetUnit: taskTargetScope === "unit" ? taskTargetUnit : "",
+          targetTeamId: taskTargetScope === "team" ? taskTargetTeamId : "",
+          targetUserIds: taskTargetScope === "custom" ? taskTargetUserIds : [],
+          enabled: true
+        };
+
+        if (isTarbawi) {
+          setDb(prev => {
+            const list = prev.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
+            const nextList = editingTaskKey
+              ? list.map(t => t.id === editingTaskKey ? { ...t, ...payload } : t)
+              : [...list, payload];
+            return {
+              ...prev,
+              systemConfig: {
+                ...prev.systemConfig,
+                tarbawiTaskDefinitions: nextList
+              }
+            };
+          });
+        } else {
+          setDb(prev => {
+            const deptMap = prev.systemConfig?.departmentCustomTasks || {};
+            const list = deptMap[currentDept.id] || [];
+            const nextList = editingTaskKey
+              ? list.map(t => t.id === editingTaskKey ? { ...t, ...payload } : t)
+              : [...list, payload];
+            return {
+              ...prev,
+              systemConfig: {
+                ...prev.systemConfig,
+                departmentCustomTasks: {
+                  ...deptMap,
+                  [currentDept.id]: nextList
+                }
+              }
+            };
+          });
+        }
+
+        setDrawerMode(null);
+        showToast(editingTaskKey ? "تم تحديث المهمة بنجاح ✓" : "تمت إضافة المهمة الجديدة ضمن حصة الإدارة ✓");
+      };
+
+      const handleDeleteDeptTask = (taskId) => {
+        if (isHr && ["lecture", "agenda", "attendance", "minutes"].includes(taskId)) {
+          showToast("هذه مهمة تأسيسية؛ يمكنك تعديل عنوانها أو طريقة تقييمها أو نطاقها.");
+          return;
+        }
+        if (isTarbawi) {
+          setDb(prev => ({
+            ...prev,
+            systemConfig: {
+              ...prev.systemConfig,
+              tarbawiTaskDefinitions: (prev.systemConfig?.tarbawiTaskDefinitions || []).filter(t => t.id !== taskId)
+            }
+          }));
+        } else {
+          setDb(prev => ({
+            ...prev,
+            systemConfig: {
+              ...prev.systemConfig,
+              departmentCustomTasks: {
+                ...(prev.systemConfig?.departmentCustomTasks || {}),
+                [currentDept.id]: (prev.systemConfig?.departmentCustomTasks?.[currentDept.id] || []).filter(t => t.id !== taskId)
+              }
+            }
+          }));
+        }
+        setDrawerMode(null);
+        showToast("تم حذف المهمة من مسار الإدارة.");
+      };
+
+      // تقييم مدير القسم لمهمة كادر مباشرة من اللوحة المنزلقة (الإجابة ٦)
+      const handleManagerEvaluateTask = (cadreId, taskKey, nextStatus) => {
+        const target = db.users.find(u => u.id === cadreId);
+        if (!target) return;
+        const periodKey = calculateWeeksSinceJoin(target.joinedAt);
+        const now = new Date();
+        const stamp = nextStatus === "pending"
+          ? null
+          : `تقييم المدير • ${formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`)}`;
+
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => {
+            if (u.id !== cadreId) return u;
+            const prevRec = u.tasksRecord?.[periodKey] || {};
+            const prevTask = prevRec[taskKey] || {};
+            return {
+              ...u,
+              tasksRecord: {
+                ...(u.tasksRecord || {}),
+                [periodKey]: {
+                  ...prevRec,
+                  [taskKey]: {
+                    ...prevTask,
+                    status: nextStatus,
+                    completedAt: stamp,
+                    evaluatedByManager: true
+                  }
+                }
+              }
+            };
+          })
+        }));
+        showToast("تم حفظ تقييم مدير القسم للمهمة ✓");
+      };
+
+      // حالات اللوحة المنزلقة: إصدار توجيه فني خاص بكوادر مسار هذه الإدارة فقط (الإجابة ٧)
+      const [dirTitle, setDirTitle] = useState("");
+      const [dirContent, setDirContent] = useState("");
+      const [dirScope, setDirScope] = useState("all"); // 'all' | 'unit' | 'team' | 'custom'
+      const [dirUnit, setDirUnit] = useState(units[0]?.name || "");
+      const [dirTeamId, setDirTeamId] = useState(teams[0]?.id || "");
+      const [dirUserIds, setDirUserIds] = useState([]);
+
+      const handlePublishDirective = (e) => {
+        e.preventDefault();
+        if (!dirTitle.trim() || !dirContent.trim()) {
+          showToast("يرجى إدخال عنوان ونص التوجيه الفني.");
+          return;
+        }
+        let recipientIds = [];
+        if (dirScope === "unit") {
+          recipientIds = deptCadres.filter(c => c.unit === dirUnit).map(c => c.id);
+        } else if (dirScope === "team") {
+          recipientIds = deptCadres.filter(c => (c.crossTeams || []).includes(dirTeamId)).map(c => c.id);
+        } else if (dirScope === "custom") {
+          recipientIds = dirUserIds;
+        }
+
+        const now = new Date();
+        const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+        const createdBul = {
+          id: "dir_" + Date.now(),
+          departmentId: currentDept.id,
+          departmentName: currentDept.name,
+          title: dirTitle.trim(),
+          content: dirContent.trim(),
+          category: `توجيه ${currentDept.shortName}`,
+          senderName: currentUser.name,
+          senderRole: currentUser.jobTitle || `مدير ${currentDept.name}`,
+          createdAt: `اليوم • ${timeStr}`,
+          targetType: dirScope === "all" ? "all" : "custom",
+          recipientIds,
+          acknowledgedBy: {}
+        };
+
+        setDb(prev => ({
+          ...prev,
+          bulletins: [createdBul, ...(prev.bulletins || [])]
+        }));
+        setDirTitle("");
+        setDirContent("");
+        setDrawerMode(null);
+        showToast(`تم نشر التوجيه الفني لكوادر (${currentDept.shortName}) بنجاح ✓`);
+      };
+
+      // حالات اللوحة المنزلقة الخاصة بإدارة الموارد البشرية فقط: إنشاء حسابات الكوادر وتسكينهم (الإجابة ٢ و ٩)
+      const [hrCadreName, setHrCadreName] = useState("");
+      const [hrCadreTitle, setHrCadreTitle] = useState("");
+      const [hrCadreUnit, setHrCadreUnit] = useState(units[0]?.name || "وحدة التخطيط الاستراتيجي");
+      const [hrCadreTeams, setHrCadreTeams] = useState([]);
+      const [hrCadreUsername, setHrCadreUsername] = useState("");
+      const [hrCadrePassword, setHrCadrePassword] = useState("1234");
+      const [hrBulkText, setHrBulkText] = useState("");
+
+      const handleHrCreateCadre = (e) => {
+        e.preventDefault();
+        if (!hrCadreName.trim() || !hrCadreUsername.trim()) {
+          showToast("يرجى إدخال اسم الكادر واسم المستخدم.");
+          return;
+        }
+        const cleanU = hrCadreUsername.trim().toLowerCase();
+        if (db.users.some(u => u.username.toLowerCase() === cleanU)) {
+          showToast("اسم المستخدم مسجل مسبقاً.");
+          return;
+        }
+        const created = {
+          id: "u_hr_" + Date.now(),
+          username: hrCadreUsername.trim(),
+          password: hrCadrePassword.trim() || "1234",
+          roleType: "cadre",
+          assignedDepartments: ["dept_hr", "dept_tarbawi"],
+          crossTeams: hrCadreTeams,
+          mustChangePassword: true,
+          onboarded: false,
+          joinedAt: Date.now() - (24 * 3600 * 1000),
+          name: hrCadreName.trim(),
+          jobTitle: hrCadreTitle.trim() || "كادر تنظيمي",
+          unit: hrCadreUnit,
+          defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
+          weekOverrides: {},
+          tasksRecord: {
+            1: {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            }
+          }
+        };
+        setDb(prev => ({ ...prev, users: [...prev.users, created] }));
+        setHrCadreName("");
+        setHrCadreTitle("");
+        setHrCadreUsername("");
+        setHrCadreTeams([]);
+        setDrawerMode(null);
+        showToast(`تم إنشاء حساب الكادر (${created.name}) وتسكينه في (${created.unit}) ✓`);
+      };
+
+      const handleHrBulkImport = (e) => {
+        e.preventDefault();
+        const lines = hrBulkText.split("\n").map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) return;
+        const added = [];
+        lines.forEach((line, idx) => {
+          const parts = line.split(/[،,\t]/).map(p => p.trim()).filter(Boolean);
+          const name = parts[0] || `كادر ${idx + 1}`;
+          const uname = (parts[1] || `cadre_${Date.now().toString().slice(-4)}_${idx + 1}`).toLowerCase();
+          const uNameUnit = parts[2] || hrCadreUnit || (units[0]?.name || "وحدة التخطيط الاستراتيجي");
+          if (!db.users.some(u => u.username.toLowerCase() === uname)) {
+            added.push({
+              id: "u_hrb_" + Date.now() + "_" + idx,
+              username: uname,
+              password: "1234",
+              roleType: "cadre",
+              assignedDepartments: ["dept_hr", "dept_tarbawi"],
+              crossTeams: [],
+              mustChangePassword: true,
+              onboarded: false,
+              joinedAt: Date.now() - (24 * 3600 * 1000),
+              name,
+              jobTitle: "كادر تنظيمي",
+              unit: uNameUnit,
+              defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
+              weekOverrides: {},
+              tasksRecord: {
+                1: {
+                  lecture: { status: "pending" },
+                  agenda: { status: "pending" },
+                  attendance: { status: "pending" },
+                  minutes: { status: "pending" }
+                }
+              }
+            });
+          }
+        });
+        if (added.length > 0) {
+          setDb(prev => ({ ...prev, users: [...prev.users, ...added] }));
+          setHrBulkText("");
+          setDrawerMode(null);
+          showToast(`تم استيراد وتسكين (${added.length}) كوادر بنجاح ✓`);
+        }
+      };
+
+      // حالات اللوحة المنزلقة للبوصلة التربوية (خاص بالإدارة التربوية)
       const tarbawiFocus = db.systemConfig?.tarbawiWeeklyFocus || INITIAL_STATE.systemConfig.tarbawiWeeklyFocus;
-
       const [focusTitle, setFocusTitle] = useState(tarbawiFocus.title || "");
       const [focusBook, setFocusBook] = useState(tarbawiFocus.bookTitle || "");
       const [focusHint, setFocusHint] = useState(tarbawiFocus.hint || "");
 
-      // نموذج إضافة أو تعديل مهمة تربوية
-      const [editingId, setEditingId] = useState(null);
-      const [tTitle, setTTitle] = useState("");
-      const [tSubtitle, setTSubtitle] = useState("");
-      const [tInstructions, setTInstructions] = useState("");
-      const [tBadge, setTBadge] = useState("بناء تربوي");
-      const [tIcon, setTIcon] = useState("🌱");
-      const [tDuration, setTDuration] = useState(30);
-      const [tTrackType, setTTrackType] = useState("check"); // 'check' | 'daily_days'
-      const [tTargetDays, setTTargetDays] = useState(5);
-      const [tTargetScope, setTTargetScope] = useState("all"); // 'all' | 'unit' | 'custom'
-      const [tTargetUnit, setTTargetUnit] = useState(units[0] || "");
-      const [tTargetUserIds, setTTargetUserIds] = useState([]);
-
-      const resetForm = () => {
-        setEditingId(null);
-        setTTitle("");
-        setTSubtitle("");
-        setTInstructions("");
-        setTBadge("بناء تربوي");
-        setTIcon("🌱");
-        setTDuration(30);
-        setTTrackType("check");
-        setTTargetDays(5);
-        setTTargetScope("all");
-        setTTargetUnit(units[0] || "");
-        setTTargetUserIds([]);
-      };
-
-      const startEditTask = (task) => {
-        setEditingId(task.id);
-        setTTitle(task.title || "");
-        setTSubtitle(task.subtitle || "");
-        setTInstructions(task.instructions || "");
-        setTBadge(task.badge || "بناء تربوي");
-        setTIcon(task.icon || "🌱");
-        setTDuration(task.durationMinutes || 30);
-        setTTrackType(task.trackType || "check");
-        setTTargetDays(task.targetDays || 5);
-        setTTargetScope(task.targetScope || "all");
-        setTTargetUnit(task.targetUnit || units[0] || "");
-        setTTargetUserIds(Array.isArray(task.targetUserIds) ? task.targetUserIds : []);
-      };
-
-      const handleSaveFocus = (e) => {
+      const handleSaveTarbawiFocus = (e) => {
         e.preventDefault();
         setDb(prev => ({
           ...prev,
@@ -5665,646 +5773,1049 @@ CREATE POLICY "Allow public upload on madyan-media"
             }
           }
         }));
-        showToast("تم حفظ بوصلة الأسبوع التربوية بنجاح 🌿");
+        setDrawerMode(null);
+        showToast("تم تحديث بوصلة الفترة والمقرر القرائي للإدارة التربوية ✓");
       };
 
-      const handleSaveTarbawiTask = (e) => {
+      // حالات اللوحة المنزلقة لإعداد المحاضرة والاختبار
+      const defaultCurr = db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
+      const [lecTitle, setLecTitle] = useState(defaultCurr.lectureTitle || "");
+      const [lecDesc, setLecDesc] = useState(defaultCurr.lectureDesc || "");
+      const [lecVideoType, setLecVideoType] = useState(defaultCurr.videoType || "youtube");
+      const [lecVideoUrl, setLecVideoUrl] = useState(defaultCurr.videoUrl || "");
+      const [lecQuestions, setLecQuestions] = useState(defaultCurr.questions || []);
+
+      const handleSaveCurriculumDrawer = (e) => {
         e.preventDefault();
-        if (!tTitle.trim()) {
-          showToast("يرجى كتابة عنوان المهمة التربوية.");
-          return;
-        }
-        const taskPayload = {
-          id: editingId || ("tarbawi_" + Date.now()),
-          title: tTitle.trim(),
-          subtitle: tSubtitle.trim() || "مهمة ضمن المحور التربوي الأسبوعي",
-          instructions: tInstructions.trim() || "أتمّ المهمة وفق المقرر الأسبوعي ثم سجل إنجازك.",
-          badge: tBadge.trim() || "بناء تربوي",
-          icon: tIcon || "🌱",
-          durationMinutes: parseInt(tDuration, 10) || 25,
-          trackType: tTrackType,
-          targetDays: parseInt(tTargetDays, 10) || 5,
-          targetScope: tTargetScope,
-          targetUnit: tTargetScope === "unit" ? tTargetUnit : "",
-          targetUserIds: tTargetScope === "custom" ? tTargetUserIds : [],
-          enabled: true
-        };
-
-        setDb(prev => {
-          const currentList = prev.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
-          const nextList = editingId
-            ? currentList.map(item => item.id === editingId ? taskPayload : item)
-            : [...currentList, taskPayload];
-          return {
-            ...prev,
-            systemConfig: {
-              ...prev.systemConfig,
-              tarbawiTaskDefinitions: nextList
-            }
-          };
-        });
-
-        resetForm();
-        showToast(editingId ? "تم تحديث المهمة التربوية بنجاح ✓" : "تمت إضافة المهمة الجديدة للمحور التربوي 🌱");
-      };
-
-      const handleDeleteTarbawiTask = (id) => {
-        setDb(prev => ({
-          ...prev,
-          systemConfig: {
-            ...prev.systemConfig,
-            tarbawiTaskDefinitions: (prev.systemConfig?.tarbawiTaskDefinitions || []).filter(t => t.id !== id)
-          }
-        }));
-        if (editingId === id) resetForm();
-        showToast("تم حذف المهمة التربوية.");
-      };
-
-      const toggleCustomUser = (uid) => {
-        setTTargetUserIds(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
-      };
-
-      return (
-        <div className="space-y-6">
-          {/* بوصلة الأسبوع التربوية */}
-          <form onSubmit={handleSaveFocus} className="bg-white rounded-3xl p-6 border border-emerald-200 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <span className="text-xs font-bold text-emerald-700">🌿 التوجيه التربوي الأسبوعي</span>
-                <h2 className="text-lg font-black text-stone-900">ضبط بوصلة الأسبوع التربوية والكتاب المقرر</h2>
-              </div>
-              <button
-                type="submit"
-                className="px-5 py-2.5 rounded-2xl tarbawi-gradient text-white text-xs font-black shadow-sm"
-              >
-                حفظ البوصلة التربوية ✓
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">قيمة / عنوان الأسبوع التربوي</label>
-                <input
-                  value={focusTitle}
-                  onChange={e => setFocusTitle(e.target.value)}
-                  placeholder="مثال: الإتقان والأمانة في العمل"
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">المقرر القرائي / الورد الأسبوعي</label>
-                <input
-                  value={focusBook}
-                  onChange={e => setFocusBook(e.target.value)}
-                  placeholder="مثال: فصل فقه الأولويات (ص 15 - 35)"
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">رسالة تذكيرية مختصرة</label>
-                <input
-                  value={focusHint}
-                  onChange={e => setFocusHint(e.target.value)}
-                  placeholder="توجيه قصير يظهر للكادر..."
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                />
-              </div>
-            </div>
-          </form>
-
-          {/* تخصيص وإضافة مهمات المحور التربوي */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-emerald-700">تخصيص المحور التربوي</span>
-                  <h3 className="text-base font-black text-stone-900">
-                    {editingId ? "✏️ تعديل المهمة التربوية" : "🌱 إضافة مهمة تربوية جديدة"}
-                  </h3>
-                </div>
-                {editingId && (
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="text-xs font-bold text-stone-500 hover:text-stone-800 underline"
-                  >
-                    إلغاء التعديل
-                  </button>
-                )}
-              </div>
-
-              <form onSubmit={handleSaveTarbawiTask} className="space-y-3.5">
-                <div className="grid grid-cols-4 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة</label>
-                    <select
-                      value={tIcon}
-                      onChange={e => setTIcon(e.target.value)}
-                      className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-base text-center"
-                    >
-                      {["📖", "📚", "🌿", "✨", "🕌", "🤲", "💡", "🎯", "🤝"].map(ic => (
-                        <option key={ic} value={ic}>{ic}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="col-span-3">
-                    <label className="block text-xs font-bold text-stone-700 mb-1">اسم المهمة التربوية</label>
-                    <input
-                      value={tTitle}
-                      onChange={e => setTTitle(e.target.value)}
-                      placeholder="مثال: الورد القرآني / قراءة الكتاب المقرر..."
-                      className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الوصف المختصر (يظهر تحت العنوان مباشرة)</label>
-                  <input
-                    value={tSubtitle}
-                    onChange={e => setTSubtitle(e.target.value)}
-                    placeholder="وصف واضح من سطر واحد..."
-                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">إرشادات التنفيذ التفصيلية</label>
-                  <textarea
-                    rows="2"
-                    value={tInstructions}
-                    onChange={e => setTInstructions(e.target.value)}
-                    placeholder="كيف ينجز الكادر هذه المهمة؟"
-                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">الشارة (Badge)</label>
-                    <input
-                      value={tBadge}
-                      onChange={e => setTBadge(e.target.value)}
-                      placeholder="زاد روحي / بناء فكري"
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">الوقت التقديري (دقيقة)</label>
-                    <input
-                      type="number"
-                      min="5"
-                      max="240"
-                      value={tDuration}
-                      onChange={e => setTDuration(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                    />
-                  </div>
-                </div>
-
-                {/* طريقة تتبع الإنجاز */}
-                <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-200 space-y-2.5">
-                  <label className="block text-xs font-black text-emerald-950">طريقة قياس وإنجاز المهمة:</label>
-                  <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                    <button
-                      type="button"
-                      onClick={() => setTTrackType("check")}
-                      className={`py-2 px-2.5 rounded-xl border transition ${
-                        tTrackType === "check" ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-stone-600"
-                      }`}
-                    >
-                      ✓ إنجاز أسبوعي مباشر
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTTrackType("daily_days")}
-                      className={`py-2 px-2.5 rounded-xl border transition ${
-                        tTrackType === "daily_days" ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-stone-600"
-                      }`}
-                    >
-                      📅 متتبع يومي (7 أيام)
-                    </button>
-                  </div>
-
-                  {tTrackType === "daily_days" && (
-                    <div className="flex items-center justify-between pt-1 text-xs">
-                      <span className="font-bold text-emerald-900">عدد الأيام المستهدفة أسبوعياً:</span>
-                      <select
-                        value={tTargetDays}
-                        onChange={e => setTTargetDays(e.target.value)}
-                        className="rounded-xl border border-emerald-300 bg-white px-3 py-1 font-black text-emerald-900"
-                      >
-                        {[3, 4, 5, 6, 7].map(n => <option key={n} value={n}>{n} أيام في الأسبوع</option>)}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                {/* لمن توجه هذه المهمة التربوية؟ */}
-                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5">
-                  <label className="block text-xs font-black text-stone-800">🎯 نطاق التخصيص (لمن تظهر هذه المهمة؟)</label>
-                  <div className="grid grid-cols-3 gap-1.5 text-[11px] font-bold">
-                    <button
-                      type="button"
-                      onClick={() => setTTargetScope("all")}
-                      className={`py-2 rounded-xl border ${tTargetScope === "all" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
-                    >
-                      جميع الكوادر
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTTargetScope("unit")}
-                      className={`py-2 rounded-xl border ${tTargetScope === "unit" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
-                    >
-                      وحدة محددة
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTTargetScope("custom")}
-                      className={`py-2 rounded-xl border ${tTargetScope === "custom" ? "bg-stone-900 text-white" : "bg-white text-stone-600"}`}
-                    >
-                      كوادر محددين
-                    </button>
-                  </div>
-
-                  {tTargetScope === "unit" && (
-                    <select
-                      value={tTargetUnit}
-                      onChange={e => setTTargetUnit(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
-                    >
-                      {units.map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
-                  )}
-
-                  {tTargetScope === "custom" && (
-                    <div className="max-h-32 overflow-y-auto space-y-1 pt-1">
-                      {cadres.map(c => {
-                        const checked = tTargetUserIds.includes(c.id);
-                        return (
-                          <div
-                            key={c.id}
-                            onClick={() => toggleCustomUser(c.id)}
-                            className={`p-2 rounded-xl border text-xs cursor-pointer flex items-center justify-between ${
-                              checked ? "bg-emerald-50 border-emerald-400 font-black" : "bg-white border-stone-200"
-                            }`}
-                          >
-                            <span>{c.name} ({c.unit})</span>
-                            <span>{checked ? "✓ مضاف" : "+"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3.5 rounded-2xl tarbawi-gradient text-white text-xs font-black shadow-md hover:opacity-95"
-                >
-                  {editingId ? "💾 حفظ تعديلات المهمة التربوية" : "+ إضافة المهمة إلى المحور التربوي"}
-                </button>
-              </form>
-            </div>
-
-            {/* قائمة المهمات التربوية الحالية */}
-            <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <div>
-                <span className="text-xs font-bold text-emerald-700">قائمة العادات والمهمات التربوية ({tarbawiTasks.length})</span>
-                <h3 className="text-base font-black text-stone-900">المهمات المفعلة في المحور التربوي</h3>
-                <p className="text-xs text-stone-500">يمكنك تعديل أي مهمة أو تخصيصها لوحدة معينة أو إضافة مهمات جديدة.</p>
-              </div>
-
-              <div className="space-y-3">
-                {tarbawiTasks.map((t, i) => (
-                  <div key={t.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex items-start gap-3 flex-1">
-                      <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg flex-shrink-0">
-                        {t.icon || "🌱"}
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-sm font-black text-stone-900">{i + 1}. {t.title}</span>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                            {t.badge}
-                          </span>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700">
-                            {t.trackType === "daily_days" ? `متتبع يومي (${t.targetDays || 5} أيام)` : "إنجاز أسبوعي مباشر"}
-                          </span>
-                          {t.targetScope === "unit" && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
-                              لوحدة: {t.targetUnit}
-                            </span>
-                          )}
-                          {t.targetScope === "custom" && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
-                              مخصص لـ {(t.targetUserIds || []).length} كادر
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-stone-500">{t.subtitle}</p>
-                        <p className="text-[11px] text-stone-400">💡 {t.instructions}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => startEditTask(t)}
-                        className="px-3 py-1.5 rounded-xl bg-white border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-bold"
-                      >
-                        تعديل
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTarbawiTask(t.id)}
-                        className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-xs font-bold"
-                      >
-                        حذف
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* تعديل عناوين وإرشادات مهمات المحور الإداري الأربع */}
-          <div className="bg-white rounded-3xl p-6 border border-orange-200 shadow-sm space-y-4">
-            <div>
-              <span className="text-xs font-bold text-orange-600">🏛️ تخصيص المحور الإداري</span>
-              <h3 className="text-base font-black text-stone-900">تعديل مسميات وإرشادات العادات الإدارية الأربع</h3>
-              <p className="text-xs text-stone-500">يمكنك تعديل العنوان أو الوصف أو خطوات التنفيذ أو الوقت التقديري لأي مهمة إدارية:</p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {['lecture', 'agenda', 'attendance', 'minutes'].map((k, idx) => {
-                const def = db.systemConfig?.taskDefinitions?.[k] || INITIAL_STATE.systemConfig.taskDefinitions[k];
-                const updateAdminDef = (field, value) => {
-                  setDb(prev => ({
-                    ...prev,
-                    systemConfig: {
-                      ...prev.systemConfig,
-                      taskDefinitions: {
-                        ...(prev.systemConfig?.taskDefinitions || {}),
-                        [k]: {
-                          ...def,
-                          [field]: value
-                        }
-                      }
-                    }
-                  }));
-                };
-                return (
-                  <div key={k} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-orange-800">المهمة الإدارية #{idx + 1} ({k})</span>
-                      <span className="text-[11px] font-bold text-stone-500">⏱ {def.durationMinutes} د</span>
-                    </div>
-                    <input
-                      value={def.title}
-                      onChange={e => updateAdminDef("title", e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black"
-                      placeholder="عنوان المهمة"
-                    />
-                    <input
-                      value={def.subtitle}
-                      onChange={e => updateAdminDef("subtitle", e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-600"
-                      placeholder="الوصف المختصر"
-                    />
-                    <textarea
-                      rows="2"
-                      value={def.instructions}
-                      onChange={e => updateAdminDef("instructions", e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-white p-2.5 text-xs text-stone-600"
-                      placeholder="خطوات التنفيذ الإرشادية"
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================================================
-    // 12. ADMIN CURRICULUM & QUIZ BUILDER SECTION
-    // ============================================================================
-    function AdminCurriculumSection({ db, setDb, showToast }) {
-      const availableWeeks = db.systemConfig?.availableCurriculumWeeks || [1, 2, 3, 4, 5, 6, 7, 8];
-      const [selectedKey, setSelectedKey] = useState("default");
-
-      const currentCurr = useMemo(() => {
-        return db.weeklyCurriculums?.[selectedKey] || db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
-      }, [db.weeklyCurriculums, selectedKey]);
-
-      const [lectureTitle, setLectureTitle] = useState(currentCurr.lectureTitle || "");
-      const [lectureDesc, setLectureDesc] = useState(currentCurr.lectureDesc || "");
-      const [videoType, setVideoType] = useState(currentCurr.videoType || "mp4");
-      const [videoUrl, setVideoUrl] = useState(currentCurr.videoUrl || "");
-      const [questions, setQuestions] = useState(currentCurr.questions || []);
-      const [videoUploading, setVideoUploading] = useState(false);
-      const [videoUploadNotice, setVideoUploadNotice] = useState("");
-
-      useEffect(() => {
-        setLectureTitle(currentCurr.lectureTitle || "");
-        setLectureDesc(currentCurr.lectureDesc || "");
-        setVideoType(currentCurr.videoType || "mp4");
-        setVideoUrl(currentCurr.videoUrl || "");
-        setVideoUploadNotice("");
-        setQuestions(
-          Array.isArray(currentCurr.questions)
-            ? currentCurr.questions.map(q => ({ ...q, options: [...(q.options || ["", "", "", ""])] }))
-            : []
-        );
-      }, [currentCurr, selectedKey]);
-
-      const handleDirectVideoUpload = async (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-
-        const cfg = loadCloudConfig();
-        if (cfg.supabaseUrl && cfg.supabaseAnonKey && window.supabase) {
-          setVideoUploading(true);
-          setVideoUploadNotice("جارٍ رفع الفيديو إلى سحابة سوبابيس...");
-          try {
-            const client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
-            const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
-            const safePath = `lectures/week_${selectedKey}_${Date.now()}.${ext}`;
-            const { error: uploadErr } = await client.storage
-              .from("madyan-media")
-              .upload(safePath, file, { cacheControl: "3600", upsert: true });
-
-            if (uploadErr) {
-              setVideoUploadNotice("تعذر الرفع السحابي: تأكد من تشغيل كود قاعدة البيانات لإنشاء حاوية الفيديوهات.");
-              showToast("يرجى تشغيل كود قاعدة البيانات في سوبابيس لتفعيل رفع الفيديوهات.");
-            } else {
-              const { data: pubData } = client.storage.from("madyan-media").getPublicUrl(safePath);
-              if (pubData && pubData.publicUrl) {
-                setVideoType("mp4");
-                setVideoUrl(pubData.publicUrl);
-                setVideoUploadNotice("تم رفع الفيديو في سحابة سوبابيس بنجاح وربطه بالمحاضرة ✓");
-                showToast("تم رفع الفيديو السحابي بنجاح ✓ اضغط حفظ واعتماد المحاضرة.");
-              }
-            }
-          } catch (err) {
-            setVideoUploadNotice("حدث خطأ أثناء الاتصال بسحابة سوبابيس.");
-          } finally {
-            setVideoUploading(false);
-          }
-          return;
-        }
-
-        // في حال عدم تفعيل الربط السحابي بعد، ننشئ رابط معاينة محلي مع تنبيه واضح
-        const localPreviewUrl = URL.createObjectURL(file);
-        setVideoType("mp4");
-        setVideoUrl(localPreviewUrl);
-        setVideoUploadNotice("تم تحميل الفيديو للمعاينة على هذا المتصفح فقط. لحفظ الفيديو لكل المستخدمين، اربط سحابة سوبابيس أو ضع رابط يوتيوب.");
-        showToast("تم تجهيز الفيديو للمعاينة المحلية ✓");
-      };
-
-      const handleQuestionChange = (qIdx, field, val) => {
-        setQuestions(prev => prev.map((q, idx) => idx === qIdx ? { ...q, [field]: val } : q));
-      };
-
-      const handleOptionChange = (qIdx, optIdx, val) => {
-        setQuestions(prev => prev.map((q, idx) => {
-          if (idx !== qIdx) return q;
-          const nextOpts = [...(q.options || [])];
-          nextOpts[optIdx] = val;
-          return { ...q, options: nextOpts };
-        }));
-      };
-
-      const addQuestion = () => {
-        setQuestions(prev => [
-          ...prev,
-          {
-            id: "q_" + Date.now(),
-            text: "سؤال جديد حول المحاضرة الأسبوعية؟",
-            options: ["الخيار الأول", "الخيار الثاني", "الخيار الثالث", "الخيار الرابع"],
-            correctIndex: 0
-          }
-        ]);
-      };
-
-      const removeQuestion = (qIdx) => {
-        if (questions.length <= 1) {
-          showToast("يجب أن يحتوي الاختبار على سؤال واحد على الأقل.");
-          return;
-        }
-        setQuestions(prev => prev.filter((_, idx) => idx !== qIdx));
-      };
-
-      const handleSaveCurriculum = (e) => {
-        e.preventDefault();
-        if (!lectureTitle.trim() || !videoUrl.trim()) {
-          showToast("يرجى إدخال عنوان المحاضرة ورابط الفيديو.");
-          return;
-        }
-
         const updatedCurr = {
-          lectureTitle: lectureTitle.trim(),
-          lectureDesc: lectureDesc.trim(),
-          videoType,
-          videoUrl: videoUrl.trim(),
-          questions
+          lectureTitle: lecTitle.trim(),
+          lectureDesc: lecDesc.trim(),
+          videoType: lecVideoType,
+          videoUrl: lecVideoUrl.trim(),
+          questions: lecQuestions
         };
-
         setDb(prev => ({
           ...prev,
           weeklyCurriculums: {
             ...(prev.weeklyCurriculums || {}),
-            [selectedKey]: updatedCurr
+            default: updatedCurr
           }
         }));
-
-        showToast(
-          selectedKey === "default"
-            ? "تم حفظ المنهج الافتراضي لجميع الأسابيع بنجاح ✓"
-            : `تم حفظ محاضرة واختبار الأسبوع ${selectedKey} بنجاح ✓`
-        );
+        setDrawerMode(null);
+        showToast("تم حفظ واعتماد مادة المحاضرة واختبار الاستيعاب ✓");
       };
 
-      const addNewWeekSlot = () => {
-        const nextWeekNum = availableWeeks.length > 0 ? Math.max(...availableWeeks) + 1 : 1;
-        setDb(prev => ({
-          ...prev,
-          systemConfig: {
-            ...prev.systemConfig,
-            availableCurriculumWeeks: [...availableWeeks, nextWeekNum]
-          }
-        }));
-        setSelectedKey(String(nextWeekNum));
-        showToast(`تمت إضافة الأسبوع ${nextWeekNum} إلى خطة المحاضرات ✓`);
-      };
+      // عناصر القائمة الجانبية الثابتة (الشاشات الأربع المستقلة حسب الإجابة ١٦)
+      const navItems = [
+        {
+          id: "overview",
+          icon: "🧭",
+          label: "١. نظرة عامة وتنبيهات",
+          sub: `${urgentCadresCount} حالات تحتاج متابعة`
+        },
+        {
+          id: "cadres",
+          icon: "👥",
+          label: "٢. جدول الكوادر والتقييم",
+          sub: `${deptCadres.length} كوادر في مسارك`
+        },
+        {
+          id: "tasks",
+          icon: isTarbawi ? "🌱" : "📋",
+          label: "٣. إدارة المحتوى والمهام",
+          sub: `${deptTasksList.length} من ${currentDept.maxTotalTasks || 6} مهمات نشطة`
+        },
+        {
+          id: "reports",
+          icon: "📊",
+          label: "٤. التقارير",
+          sub: `متوسط المسار ${deptAveragePct}٪`
+        }
+      ];
+
+      const accentBadgeClass = isTarbawi
+        ? "bg-emerald-800 text-white"
+        : "bg-stone-900 text-white";
+
+      const accentBarClass = isTarbawi ? "bg-emerald-500" : "bg-orange-500";
 
       return (
-        <div className="space-y-6">
-          <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <span className="text-xs font-bold text-orange-600">إدارة المحتوى المعرفي والاختبارات</span>
-                <h2 className="text-lg font-black text-stone-900">تخصيص المحاضرات الأسبوعية وأسئلة الاستيعاب</h2>
-                <p className="text-xs text-stone-500 mt-0.5">
-                  اختر «المنهج الافتراضي» لتطبيقه تلقائياً، أو خصص محاضرة واختباراً مستقلاً لكل أسبوع.
-                </p>
+        <div className="min-h-screen bg-[#F6F5F2] flex flex-col lg:flex-row">
+          {/* القائمة الجانبية الثابتة والواضحة (تقسم واجهة الإدارة إلى ٤ شاشات مستقلة تماماً) */}
+          <aside className="w-full lg:w-72 bg-white border-b lg:border-b-0 lg:border-l border-stone-200/80 lg:min-h-screen lg:sticky lg:top-0 lg:h-screen flex flex-col justify-between p-5 sm:p-6 z-30">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between lg:block space-y-2">
+                <MadyanWordmark size="text-2xl sm:text-3xl" />
+                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black ${accentBadgeClass}`}>
+                  <span>{currentDept.icon}</span>
+                  <span>بوابة {currentDept.name}</span>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={addNewWeekSlot}
-                className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 transition"
-              >
-                + إضافة أسبوع جديد للخطة
-              </button>
+
+              <nav className="grid grid-cols-2 lg:grid-cols-1 gap-2">
+                {navItems.map(item => {
+                  const active = activeScreen === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveScreen(item.id)}
+                      className={`text-right p-3.5 rounded-2xl transition flex items-start gap-3 border ${
+                        active
+                          ? (isTarbawi
+                              ? "bg-emerald-900 text-white border-emerald-900 shadow-md"
+                              : "bg-stone-900 text-white border-stone-900 shadow-md")
+                          : "bg-stone-50/80 text-stone-700 border-stone-200/60 hover:bg-stone-100"
+                      }`}
+                    >
+                      <span className="text-lg leading-none mt-0.5">{item.icon}</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate">{item.label}</div>
+                        <div className={`text-[10px] mt-0.5 truncate ${active ? "text-stone-300" : "text-stone-400"}`}>
+                          {item.sub}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </nav>
             </div>
 
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-              <button
-                type="button"
-                onClick={() => setSelectedKey("default")}
-                className={`px-4 py-2.5 rounded-2xl text-xs font-black border transition flex-shrink-0 ${
-                  selectedKey === "default"
-                    ? "madyan-gradient text-white border-transparent shadow-sm"
-                    : "bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100"
-                }`}
-              >
-                🌟 المنهج الافتراضي العام
-              </button>
-              {availableWeeks.map(w => {
-                const isCustom = Boolean(db.weeklyCurriculums?.[w]);
-                return (
+            <div className="hidden lg:flex flex-col gap-3 pt-6 border-t border-stone-100">
+              <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-1">
+                <div className="text-[10px] font-bold text-stone-400">نطاق الرؤية والصلاحية</div>
+                <div className="text-xs font-black text-stone-800">
+                  {currentDept.icon} معزول تماماً لـ {currentDept.shortName}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between px-1">
+                <div className="text-xs font-bold text-stone-600 truncate">{currentUser.name}</div>
+                <button
+                  onClick={onLogout}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-black transition"
+                >
+                  خروج
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* مساحة العمل المستقلة والهادئة للإدارة التشغيلية */}
+          <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
+
+            {/* ===================================================================== */}
+            {/* الشاشة الأولى: ١. نظرة عامة وتنبيهات (الهيت ماب ونظام الأولويات الثلاث) */}
+            {/* ===================================================================== */}
+            {activeScreen === "overview" && (
+              <div className="space-y-8">
+                {/* البؤرة البصرية الأولى (أول ٣ ثوانٍ): التعميم السياسي الأحدث + شريط التقدم العام لمسار الإدارة */}
+                <section className="bg-stone-900 text-white rounded-[32px] p-6 sm:p-8 shadow-lg space-y-6">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-1.5 max-w-2xl">
+                      <span className="inline-block text-xs font-black px-3 py-1 rounded-full bg-orange-500/20 text-orange-300 border border-orange-400/30">
+                        📢 التعميم السياسي الأحدث من الإدارة العليا
+                      </span>
+                      <h1 className="text-lg sm:text-xl font-black text-white">
+                        {latestExecutiveBulletin ? latestExecutiveBulletin.title : "لا توجد تعميمات سياسية نشطة حالياً"}
+                      </h1>
+                      {latestExecutiveBulletin && (
+                        <p className="text-xs sm:text-sm text-stone-300 leading-relaxed">
+                          {latestExecutiveBulletin.content}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setDrawerMode("dept_directive")}
+                      className="px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-black border border-white/15 transition"
+                    >
+                      + إصدار توجيه فني لمسار {currentDept.shortName}
+                    </button>
+                  </div>
+
+                  {/* شريط التقدم العام لمسار هذه الإدارة فقط للفترة الحالية */}
+                  <div className="pt-5 border-t border-white/10 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-stone-300">
+                        شريط التقدم العام لـ «{currentDept.name}» للفترة الحالية (منفصل تماماً عن باقي الإدارات)
+                      </span>
+                      <span className="text-white font-black">{deptAveragePct}٪</span>
+                    </div>
+                    <div className="w-full h-3 rounded-full bg-white/10 overflow-hidden">
+                      <div style={{ width: `${deptAveragePct}%` }} className={`h-full rounded-full ${accentBarClass}`} />
+                    </div>
+                  </div>
+                </section>
+
+                {/* البؤرة الثانية: ٣ بطاقات ملخص نظيفة جداً (بحد أقصى ٣ معلومات في البطاقة) */}
+                <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">١. الحالات الحرجة والتقييم المطلوب</span>
+                    <div className={`text-2xl font-black ${urgentCadresCount > 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                      {urgentCadresCount > 0 ? `${urgentCadresCount} كوادر بحاجة لتدخل` : "لا توجد حالات متأخرة"}
+                    </div>
+                    <button
+                      onClick={() => {
+                        setPriorityFilter("urgent");
+                        setActiveScreen("cadres");
+                      }}
+                      className="text-xs font-black text-rose-600 hover:text-rose-700 text-right"
+                    >
+                      فرز الحالات العاجلة وتقييمها ←
+                    </button>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">٢. حصة المهمات النشطة في الإدارة</span>
+                    <div className="text-2xl font-black text-stone-900">
+                      {deptTasksList.length} من {currentDept.maxTotalTasks || 6} مهمات
+                    </div>
+                    <button
+                      onClick={() => setActiveScreen("tasks")}
+                      className="text-xs font-black text-orange-600 hover:text-orange-700 text-right"
+                    >
+                      إدارة المحتوى والمهام ←
+                    </button>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">٣. الكوادر الخاضعون لإدارتك</span>
+                    <div className="text-2xl font-black text-stone-900">{deptCadres.length} كادر مسجل</div>
+                    <button
+                      onClick={() => {
+                        setPriorityFilter("all");
+                        setActiveScreen("cadres");
+                      }}
+                      className="text-xs font-black text-stone-900 hover:text-orange-600 text-right"
+                    >
+                      فتح جدول الكوادر والتقييم ←
+                    </button>
+                  </div>
+                </section>
+
+                {/* البؤرة الثالثة: قائمة المتابعة السريعة بنظام الأولويات الثلاث (الهيت ماب) */}
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-orange-600">نظام الأولويات الثلاث لتوجيه الانتباه</span>
+                      <h2 className="text-lg font-black text-stone-900">🎯 متابعة كوادر «{currentDept.name}» حسب الأولوية</h2>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {cadresWithDeptMetrics.map(({ cadre, deptMetrics }) => {
+                      const isUrgent = deptMetrics.priorityLevel === "urgent";
+                      const isActive = deptMetrics.priorityLevel === "active";
+
+                      // تطبيق الإجابة ١٨ حرفياً:
+                      // ١. إبراز بصري قوي للمتأخر والعاجل
+                      // ٢. بروز متوسط للمطلوب اليوم
+                      // ٣. تهدئة بصرية كاملة (لون باهت هادئ) لكل ما تم إنجازه وانتهى
+                      const cardStyle = isUrgent
+                        ? "bg-white border-2 border-rose-400 shadow-md"
+                        : isActive
+                        ? "bg-white border border-stone-300 shadow-sm"
+                        : "bg-stone-100/70 border border-stone-200/60 opacity-65";
+
+                      return (
+                        <div
+                          key={cadre.id}
+                          className={`rounded-3xl p-5 transition flex flex-wrap items-center justify-between gap-4 ${cardStyle}`}
+                        >
+                          {/* المعلومة ١: اسم الكادر وحالة الأولوية */}
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-black text-stone-900">{cadre.name}</span>
+                              <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
+                                isUrgent
+                                  ? "bg-rose-100 text-rose-800"
+                                  : isActive
+                                  ? "bg-amber-100 text-amber-900"
+                                  : "bg-stone-200 text-stone-600"
+                              }`}>
+                                {isUrgent
+                                  ? (deptMetrics.pendingManagerEvalCount > 0
+                                      ? `ينتظر تقييم المدير (${deptMetrics.pendingManagerEvalCount})`
+                                      : "متأخر - يتطلب متابعة")
+                                  : isActive
+                                  ? `قيد الإنجاز (${deptMetrics.pendingCount} متبقية)`
+                                  : "✓ مكتمل بالكامل"}
+                              </span>
+                            </div>
+                            <div className="text-xs text-stone-500">{cadre.unit} • {cadre.jobTitle}</div>
+                          </div>
+
+                          {/* المعلومة ٢: مؤشر هذا المسار فقط (بدون أي خلط مع إدارات أخرى) */}
+                          <div className="flex items-center gap-3 min-w-[180px]">
+                            <div className="flex-1 h-2.5 rounded-full bg-stone-200 overflow-hidden">
+                              <div
+                                style={{ width: `${deptMetrics.scorePct}%` }}
+                                className={`h-full rounded-full ${isUrgent ? "bg-rose-500" : isTarbawi ? "bg-emerald-600" : "bg-orange-500"}`}
+                              />
+                            </div>
+                            <span className="text-sm font-black text-stone-900">{deptMetrics.scorePct}٪</span>
+                          </div>
+
+                          {/* المعلومة ٣: زر التقييم المباشر في اللوحة المنزلقة */}
+                          <button
+                            onClick={() => {
+                              setSelectedCadreId(cadre.id);
+                              setDrawerMode("evaluate_cadre");
+                            }}
+                            className={`px-4 py-2 rounded-2xl text-xs font-black transition ${
+                              isUrgent
+                                ? "bg-rose-600 text-white hover:bg-rose-700"
+                                : "bg-stone-900 text-white hover:bg-stone-800"
+                            }`}
+                          >
+                            📋 تقييم وفحص المهام
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الثانية: ٢. جدول الكوادر والتقييم (مع قنوات الانضمام للـ HR)   */}
+            {/* ===================================================================== */}
+            {activeScreen === "cadres" && (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <span className="text-xs font-bold text-orange-600">تقييم ومتابعة المسار المعزول</span>
+                    <h1 className="text-xl font-black text-stone-900">
+                      👥 جدول كوادر «{currentDept.name}» ({filteredCadres.length})
+                    </h1>
+                  </div>
+
+                  {/* حصرياً لإدارة الموارد البشرية (الإجابة ٢ و ٩): إنشاء حسابات الكوادر وتسكينهم */}
+                  {isHr && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => setDrawerMode("hr_add_cadre")}
+                        className="px-4 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-sm"
+                      >
+                        + إضافة كادر وتسكينه
+                      </button>
+                      <button
+                        onClick={() => setDrawerMode("hr_bulk_import")}
+                        className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+                      >
+                        📥 استيراد جماعي
+                      </button>
+                      <button
+                        onClick={() => setDrawerMode("hr_unit_invites")}
+                        className="px-4 py-2.5 rounded-2xl bg-white border border-stone-300 text-stone-800 text-xs font-black"
+                      >
+                        🔗 رموز انضمام الوحدات
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* شريط الفلاتر الهادئ (حسب الأولوية، الوحدة الأساسية، أو الفريق العابر للوحدات) */}
+                <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: "all", label: "كل الأولويات" },
+                      { id: "urgent", label: "🔴 عاجل / ينتظر تقييم المدير" },
+                      { id: "active", label: "🔵 مطلوب اليوم" },
+                      { id: "done", label: "⚪ مكتمل" }
+                    ].map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => setPriorityFilter(p.id)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
+                          priorityFilter === p.id
+                            ? "bg-stone-900 text-white"
+                            : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={unitFilter}
+                      onChange={e => setUnitFilter(e.target.value)}
+                      className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-bold text-stone-700"
+                    >
+                      <option value="all">جميع الوحدات الأساسية</option>
+                      {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                    </select>
+
+                    <select
+                      value={teamFilter}
+                      onChange={e => setTeamFilter(e.target.value)}
+                      className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-bold text-stone-700"
+                    >
+                      <option value="all">جميع فرق العمل العابرة</option>
+                      {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* جدول الكوادر المعزول (لا يعرض إلا درجة ومهام هذه الإدارة فقط) */}
+                <div className="bg-white rounded-3xl border border-stone-200/80 shadow-sm overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-right text-xs">
+                      <thead>
+                        <tr className="bg-stone-50 border-b border-stone-200 text-stone-500 font-black">
+                          <th className="py-4 px-4">الكادر والوحدة</th>
+                          <th className="py-4 px-4">فرق العمل العابرة</th>
+                          <th className="py-4 px-4">إنجاز مهمات الفترة</th>
+                          <th className="py-4 px-4">درجة {currentDept.shortName} فقط</th>
+                          <th className="py-4 px-4 text-left">الإجراء</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100">
+                        {filteredCadres.map(({ cadre, deptMetrics }) => {
+                          const cadreTeams = teams.filter(t => (cadre.crossTeams || []).includes(t.id));
+                          const isDone = deptMetrics.priorityLevel === "done";
+                          return (
+                            <tr key={cadre.id} className={`hover:bg-stone-50/80 transition ${isDone ? "opacity-70" : ""}`}>
+                              <td className="py-4 px-4">
+                                <div className="font-black text-stone-900 text-sm">{cadre.name}</div>
+                                <div className="text-[11px] text-stone-500 mt-0.5">{cadre.unit} • {cadre.jobTitle}</div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="flex flex-wrap gap-1">
+                                  {cadreTeams.length > 0 ? cadreTeams.map(t => (
+                                    <span key={t.id} className="px-2.5 py-0.5 rounded-lg bg-orange-50 text-orange-800 border border-orange-200 text-[11px] font-bold">
+                                      🤝 {t.name}
+                                    </span>
+                                  )) : (
+                                    <span className="text-stone-400">وحدة أساسية فقط</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <span className="font-black text-stone-800">
+                                  {deptMetrics.completedCount} من {deptMetrics.applicableTasks.length} مهمات
+                                </span>
+                                {deptMetrics.pendingManagerEvalCount > 0 && (
+                                  <span className="mr-2 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-black">
+                                    {deptMetrics.pendingManagerEvalCount} بانتظار تقييمك
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-4 px-4">
+                                <span className={`text-sm font-black px-3 py-1 rounded-full ${
+                                  deptMetrics.scorePct >= 80
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : deptMetrics.scorePct >= 50
+                                    ? "bg-amber-100 text-amber-800"
+                                    : "bg-rose-100 text-rose-800"
+                                }`}>
+                                  {deptMetrics.scorePct}٪
+                                </span>
+                              </td>
+                              <td className="py-4 px-4 text-left">
+                                <button
+                                  onClick={() => {
+                                    setSelectedCadreId(cadre.id);
+                                    setDrawerMode("evaluate_cadre");
+                                  }}
+                                  className="px-4 py-2 rounded-xl bg-stone-900 text-white font-black hover:bg-orange-600 transition"
+                                >
+                                  📋 تقييم وفحص
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الثالثة: ٣. إدارة المحتوى والمهام (مكتبة المهمات والحصص)        */}
+            {/* ===================================================================== */}
+            {activeScreen === "tasks" && (
+              <div className="space-y-8">
+                {/* شريط حصة المهمات الحاكمة للإدارة (تطبيقاً للإجابة ٤) */}
+                <section className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-bold text-orange-600">مكتبة المهمات وحصة الإدارة المعتمدة من المنصة</span>
+                      <h1 className="text-xl font-black text-stone-900">
+                        {currentDept.icon} إدارة المحتوى والمهام — {currentDept.name}
+                      </h1>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isTarbawi && (
+                        <button
+                          onClick={() => setDrawerMode("tarbawi_compass")}
+                          className="px-4 py-2.5 rounded-2xl bg-emerald-50 text-emerald-900 border border-emerald-200 text-xs font-black hover:bg-emerald-100"
+                        >
+                          🧭 بوصلة الفترة والمقرر القرائي
+                        </button>
+                      )}
+                      {(currentDept.allowedTaskTypes || []).includes("lecture_quiz") && (
+                        <button
+                          onClick={() => setDrawerMode("curriculum_builder")}
+                          className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800"
+                        >
+                          🎬 إعداد المحاضرة والاختبار
+                        </button>
+                      )}
+                      <button
+                        onClick={openAddTaskDrawer}
+                        className="px-5 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-sm"
+                      >
+                        + إضافة مهمة جديدة للمسار
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* مقياس حصة المهمات */}
+                  <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="text-xs font-black text-stone-800">
+                        حصة المهمات المستخدمة: {deptTasksList.length} من أصل {currentDept.maxTotalTasks || 6} مهمات مسموحة للإدارة
+                      </div>
+                      <div className="text-[11px] text-stone-500">
+                        الحد الأقصى المسموح إسناده للفرد الواحد من كل نوع مهمة: {currentDept.maxPerTypePerCadre || 2} مهمات
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {allowedTemplates.map(t => (
+                        <span key={t.id} className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-white border border-stone-200 text-stone-700">
+                          {t.icon} {t.title}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+
+                {/* بطاقات المهمات النشطة حالياً في الإدارة (بحد أقصى ٣ معلومات في البطاقة الواحدة) */}
+                <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {deptTasksList.map(task => {
+                    const tpl = TASK_TEMPLATES_LIBRARY.find(t => t.id === task.templateType);
+                    const isManagerEval = task.evalMode === "manager";
+                    return (
+                      <div
+                        key={task.id}
+                        className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-5"
+                      >
+                        {/* المعلومة ١: عنوان المهمة ونوعها وتاريخ استحقاقها */}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <span className="text-2xl">{task.icon || "📋"}</span>
+                            <div>
+                              <h3 className="text-base font-black text-stone-900">{task.title}</h3>
+                              <p className="text-xs text-stone-500 mt-0.5">{task.subtitle}</p>
+                            </div>
+                          </div>
+                          <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 flex-shrink-0">
+                            📅 {task.dueDate || "مسار مستمر"}
+                          </span>
+                        </div>
+
+                        {/* المعلومة ٢: من يقيم المهمة (الكادر بنفسه أم مدير القسم) + نطاق الإسناد */}
+                        <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-2">
+                          <span className={`text-xs font-black px-3 py-1 rounded-xl ${
+                            isManagerEval
+                              ? "bg-orange-100 text-orange-900 border border-orange-200"
+                              : "bg-emerald-50 text-emerald-900 border border-emerald-200"
+                          }`}>
+                            {isManagerEval ? "🛡️ يقيمها مدير القسم بنفسه" : "👤 يرصدها الكادر بنفسه"}
+                          </span>
+
+                          <span className="text-[11px] font-bold text-stone-500">
+                            {tpl ? `${tpl.icon} ${tpl.title}` : "مهمة تخصصية"}
+                            {task.targetScope === "unit" && ` • ${task.targetUnit}`}
+                            {task.targetScope === "team" && " • فريق عابر"}
+                          </span>
+                        </div>
+
+                        {/* المعلومة ٣: زر الإجراء (تعديل طريقة التقييم أو التفاصيل في اللوحة المنزلقة) */}
+                        <div className="flex items-center justify-between pt-1">
+                          <button
+                            onClick={() => openEditTaskDrawer(task)}
+                            className="px-4 py-2 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800 transition"
+                          >
+                            ⚙️ تعديل المهمة وطريقة التقييم
+                          </button>
+
+                          {!task.isCoreAdmin && (
+                            <button
+                              onClick={() => handleDeleteDeptTask(task.id)}
+                              className="px-3 py-2 rounded-xl bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100"
+                            >
+                              حذف
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </section>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الرابعة: ٤. التقارير (معزولة لمسار هذه الإدارة فقط)             */}
+            {/* ===================================================================== */}
+            {activeScreen === "reports" && (
+              <div className="space-y-8">
+                <div>
+                  <span className="text-xs font-bold text-orange-600">تقارير الأداء المعزولة</span>
+                  <h1 className="text-xl font-black text-stone-900">📊 تقارير وإحصائيات «{currentDept.name}»</h1>
+                </div>
+
+                {/* ٣ بطاقات ملخص هادئة */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2">
+                    <span className="text-xs font-bold text-stone-400">متوسط إنجاز المسار العام</span>
+                    <div className="text-3xl font-black text-stone-900">{deptAveragePct}٪</div>
+                    <div className="text-xs text-stone-500">خاص بمهمات {currentDept.shortName} حصراً</div>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2">
+                    <span className="text-xs font-bold text-stone-400">الكوادر المكملون لمهام الفترة</span>
+                    <div className="text-3xl font-black text-emerald-700">
+                      {cadresWithDeptMetrics.filter(x => x.deptMetrics.priorityLevel === "done").length} من {deptCadres.length}
+                    </div>
+                    <div className="text-xs text-stone-500">أتموا جميع واجبات المسار الحالية</div>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2">
+                    <span className="text-xs font-bold text-stone-400">التوجيهات الفنية الصادرة</span>
+                    <div className="text-3xl font-black text-orange-600">{deptDirectives.length} توجيهات</div>
+                    <div className="text-xs text-stone-500">خاصة بكوادر {currentDept.shortName}</div>
+                  </div>
+                </div>
+
+                {/* تقارير الوحدات التنظيمية وفرق العمل العابرة في هذا المسار */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <h3 className="text-base font-black text-stone-900">🗂️ أداء الوحدات التنظيمية في {currentDept.shortName}</h3>
+                    <div className="space-y-3">
+                      {units.map(u => {
+                        const unitCadres = cadresWithDeptMetrics.filter(x => x.cadre.unit === u.name);
+                        const avg = unitCadres.length
+                          ? Math.round(unitCadres.reduce((s, x) => s + x.deptMetrics.scorePct, 0) / unitCadres.length)
+                          : 0;
+                        return (
+                          <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2">
+                            <div className="flex items-center justify-between text-xs font-black">
+                              <span className="text-stone-800">{u.name} ({unitCadres.length} كوادر)</span>
+                              <span className="text-stone-900">{avg}٪</span>
+                            </div>
+                            <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden">
+                              <div style={{ width: `${avg}%` }} className={`h-full rounded-full ${accentBarClass}`} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <h3 className="text-base font-black text-stone-900">📋 نسب الإنجاز حسب كل مهمة في {currentDept.shortName}</h3>
+                    <div className="space-y-3">
+                      {deptTasksList.map(task => {
+                        const totalAssigned = cadresWithDeptMetrics.filter(x =>
+                          x.deptMetrics.applicableTasks.some(t => t.id === task.id)
+                        );
+                        const doneCount = totalAssigned.filter(x => {
+                          const st = x.deptMetrics.currentPeriodRec?.[task.id]?.status;
+                          return st === "on_time" || st === "late";
+                        }).length;
+                        const rate = totalAssigned.length ? Math.round((doneCount / totalAssigned.length) * 100) : 0;
+
+                        return (
+                          <div key={task.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2">
+                            <div className="flex items-center justify-between text-xs font-black">
+                              <span className="text-stone-800">{task.icon} {task.title}</span>
+                              <span className="text-stone-900">{rate}٪ ({doneCount}/{totalAssigned.length})</span>
+                            </div>
+                            <div className="w-full h-2.5 rounded-full bg-stone-200 overflow-hidden">
+                              <div style={{ width: `${rate}%` }} className={`h-full rounded-full ${accentBarClass}`} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* ========================================================================= */}
+          {/* اللوحات الجانبية المنزلقة (Slide-over Drawers) لبوابة الإدارة التشغيلية     */}
+          {/* ========================================================================= */}
+
+          {/* ١. لوحة منزلقة: تقييم وفحص مهام الكادر في هذه الإدارة فقط (الإجابة ٦ و ١٧) */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "evaluate_cadre" && Boolean(selectedCadre)}
+            onClose={() => setDrawerMode(null)}
+            badge={`سجل وتقييم ${currentDept.name}`}
+            title={selectedCadre ? `${selectedCadre.name} (${selectedCadre.unit})` : ""}
+          >
+            {selectedCadre && (() => {
+              const m = getCadreDeptMetrics(selectedCadre);
+              return (
+                <div className="space-y-5">
+                  <div className="p-4 rounded-2xl bg-stone-900 text-white flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-stone-300">درجة الكادر في {currentDept.shortName}</div>
+                      <div className="text-2xl font-black mt-0.5">{m.scorePct}٪</div>
+                    </div>
+                    <div className="text-left text-xs text-stone-300">
+                      <div>منجز: {m.completedCount} من {m.applicableTasks.length}</div>
+                      {m.avgQuizPct !== null && isHr && <div>متوسط الاختبار: {m.avgQuizPct}٪</div>}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="text-xs font-black text-stone-900">
+                      مهام الكادر في «{currentDept.name}» (قيّم أو راجع الإنجاز):
+                    </div>
+
+                    {m.applicableTasks.map(task => {
+                      const rec = m.currentPeriodRec?.[task.id] || { status: "pending" };
+                      const isManagerEval = task.evalMode === "manager";
+                      return (
+                        <div key={task.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-black text-stone-900">{task.icon} {task.title}</div>
+                              <div className="text-[11px] text-stone-500 mt-0.5">
+                                {isManagerEval ? "🛡️ مهمة يقيمها مدير القسم بنفسه" : "👤 مهمة يرصدها الكادر بنفسه"}
+                              </div>
+                            </div>
+                            <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
+                              rec.status === "on_time"
+                                ? "bg-emerald-100 text-emerald-800"
+                                : rec.status === "late"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-stone-200 text-stone-600"
+                            }`}>
+                              {rec.status === "on_time" ? "✓ في الموعد" : rec.status === "late" ? "⏳ متأخر" : "• غير منجز"}
+                            </span>
+                          </div>
+
+                          {rec.note && (
+                            <div className="text-[11px] bg-white p-2.5 rounded-xl border border-stone-200 text-stone-700">
+                              📌 ملاحظة الكادر: {rec.note}
+                            </div>
+                          )}
+
+                          {/* أزرار التقييم المباشر لمدير القسم */}
+                          <div className="grid grid-cols-3 gap-1.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleManagerEvaluateTask(selectedCadre.id, task.id, "on_time")}
+                              className={`py-2 rounded-xl text-[11px] font-black border transition ${
+                                rec.status === "on_time"
+                                  ? "bg-emerald-700 text-white border-emerald-700"
+                                  : "bg-white text-stone-700 border-stone-200 hover:bg-emerald-50"
+                              }`}
+                            >
+                              ✓ في الموعد
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleManagerEvaluateTask(selectedCadre.id, task.id, "late")}
+                              className={`py-2 rounded-xl text-[11px] font-black border transition ${
+                                rec.status === "late"
+                                  ? "bg-amber-600 text-white border-amber-600"
+                                  : "bg-white text-stone-700 border-stone-200 hover:bg-amber-50"
+                              }`}
+                            >
+                              ⏳ متأخر
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleManagerEvaluateTask(selectedCadre.id, task.id, "pending")}
+                              className={`py-2 rounded-xl text-[11px] font-black border transition ${
+                                rec.status === "pending"
+                                  ? "bg-stone-800 text-white border-stone-800"
+                                  : "bg-white text-stone-600 border-stone-200 hover:bg-stone-100"
+                              }`}
+                            >
+                              • غير منجز
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
                   <button
-                    key={w}
-                    type="button"
-                    onClick={() => setSelectedKey(String(w))}
-                    className={`px-4 py-2.5 rounded-2xl text-xs font-black border transition flex-shrink-0 ${
-                      String(selectedKey) === String(w)
-                        ? "bg-stone-900 text-white border-stone-900 shadow-sm"
-                        : "bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100"
-                    }`}
+                    onClick={() => setDrawerMode(null)}
+                    className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
                   >
-                    الأسبوع {w} {isCustom && <span className="text-orange-500 mr-1">• مخصص</span>}
+                    إغلاق لوحة التقييم ✓
                   </button>
-                );
-              })}
-            </div>
-          </div>
+                </div>
+              );
+            })()}
+          </SlideOverDrawer>
 
-          <form onSubmit={handleSaveCurriculum} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
-              <h3 className="text-base font-black text-stone-900">
-                🎬 بيانات الفيديو والمحاضرة ({selectedKey === "default" ? "الافتراضي" : `الأسبوع ${selectedKey}`})
-              </h3>
+          {/* ٢. لوحة منزلقة: إضافة أو تعديل مهمة في الإدارة مع تحديد طريقة التقييم (الإجابة ٤ و ٦ و ٨) */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "add_task" || drawerMode === "edit_task"}
+            onClose={() => setDrawerMode(null)}
+            badge={`مكتبة مهمات ${currentDept.name}`}
+            title={editingTaskKey ? "تعديل المهمة وطريقة التقييم" : "إضافة مهمة جديدة للمسار"}
+          >
+            <form onSubmit={handleSaveDeptTask} className="space-y-4">
+              <div>
+                <label className="block text-xs font-black text-stone-800 mb-1">١. نوع المهمة من المكتبة المتاحة لإدارتك</label>
+                <select
+                  value={taskTemplateType}
+                  onChange={e => setTaskTemplateType(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  {allowedTemplates.map(t => (
+                    <option key={t.id} value={t.id}>{t.icon} {t.title}</option>
+                  ))}
+                </select>
+              </div>
 
+              {/* الاختيار الجوهري في الإجابة ٦: من يقيم المهمة؟ */}
+              <div className="p-4 rounded-2xl bg-orange-50/70 border border-orange-200 space-y-2.5">
+                <label className="block text-xs font-black text-orange-950">
+                  ٢. طريقة رصد وتقييم هذه المهمة:
+                </label>
+                <div className="grid grid-cols-1 gap-2">
+                  <label className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer ${
+                    taskEvalMode === "self" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200"
+                  }`}>
+                    <span className="text-xs font-black">👤 الكادر يعلم عليها بنفسه عند الإنجاز (رصد ذاتي)</span>
+                    <input
+                      type="radio"
+                      name="taskEvalMode"
+                      checked={taskEvalMode === "self"}
+                      onChange={() => setTaskEvalMode("self")}
+                      className="accent-orange-500"
+                    />
+                  </label>
+                  <label className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer ${
+                    taskEvalMode === "manager" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200"
+                  }`}>
+                    <span className="text-xs font-black">🛡️ مدير القسم هو من يقيمها بنفسه للكادر</span>
+                    <input
+                      type="radio"
+                      name="taskEvalMode"
+                      checked={taskEvalMode === "manager"}
+                      onChange={() => setTaskEvalMode("manager")}
+                      className="accent-orange-500"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة</label>
+                  <select
+                    value={taskIcon}
+                    onChange={e => setTaskIcon(e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-base text-center"
+                  >
+                    {["📋", "🎬", "📖", "📚", "🌿", "✨", "🤝", "📝", "🎯"].map(ic => (
+                      <option key={ic} value={ic}>{ic}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-span-3">
+                  <label className="block text-xs font-bold text-stone-700 mb-1">عنوان المهمة</label>
+                  <input
+                    value={taskTitle}
+                    onChange={e => setTaskTitle(e.target.value)}
+                    placeholder="عنوان واضح للمهمة..."
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">الوصف المختصر</label>
+                <input
+                  value={taskSubtitle}
+                  onChange={e => setTaskSubtitle(e.target.value)}
+                  placeholder="سطر توضيحي يظهر للكادر..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">تاريخ الاستحقاق الفعلي (مسار مستمر بالتاريخ)</label>
+                <input
+                  value={taskDueDate}
+                  onChange={e => setTaskDueDate(e.target.value)}
+                  placeholder="مثال: ٢٥ نوفمبر ٢٠٢٦ أو مستمر يومياً"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">نطاق الإسناد (لمن توجه هذه المهمة؟)</label>
+                <select
+                  value={taskTargetScope}
+                  onChange={e => setTaskTargetScope(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  <option value="all">جميع كوادر المسار</option>
+                  <option value="unit">وحدة تنظيمية محددة</option>
+                  <option value="team">فريق عمل عابر للوحدات</option>
+                  <option value="custom">كوادر محددين بالاسم</option>
+                </select>
+              </div>
+
+              {taskTargetScope === "unit" && (
+                <select
+                  value={taskTargetUnit}
+                  onChange={e => setTaskTargetUnit(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+                >
+                  {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                </select>
+              )}
+
+              {taskTargetScope === "team" && (
+                <select
+                  value={taskTargetTeamId}
+                  onChange={e => setTaskTargetTeamId(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+                >
+                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
+
+              {taskTargetScope === "custom" && (
+                <div className="max-h-36 overflow-y-auto space-y-1.5 p-2 rounded-2xl bg-stone-50 border border-stone-200">
+                  {deptCadres.map(c => {
+                    const checked = taskTargetUserIds.includes(c.id);
+                    return (
+                      <label key={c.id} className="flex items-center justify-between p-2 rounded-xl bg-white border border-stone-200 text-xs font-bold cursor-pointer">
+                        <span>{c.name} ({c.unit})</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setTaskTargetUserIds(prev =>
+                              checked ? prev.filter(x => x !== c.id) : [...prev, c.id]
+                            );
+                          }}
+                          className="w-4 h-4 accent-stone-900"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+              >
+                حفظ واعتماد المهمة ✓
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٣. لوحة منزلقة: إصدار توجيه فني خاص بكوادر مسار هذه الإدارة فقط (الإجابة ٧) */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "dept_directive"}
+            onClose={() => setDrawerMode(null)}
+            badge={`توجيه فني معزول — ${currentDept.name}`}
+            title="إصدار توجيه أو تكليف لكوادر مسارك"
+          >
+            <form onSubmit={handlePublishDirective} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">عنوان التوجيه الفني</label>
+                <input
+                  value={dirTitle}
+                  onChange={e => setDirTitle(e.target.value)}
+                  placeholder="عنوان التوجيه أو الإعلان..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">نص التوجيه</label>
+                <textarea
+                  rows="4"
+                  value={dirContent}
+                  onChange={e => setDirContent(e.target.value)}
+                  placeholder="اكتب تفاصيل التوجيه الفني الخاص بكوادر إدارتك..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs leading-relaxed"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">توجيه إلى:</label>
+                <select
+                  value={dirScope}
+                  onChange={e => setDirScope(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  <option value="all">جميع كوادر {currentDept.shortName}</option>
+                  <option value="unit">وحدة تنظيمية محددة</option>
+                  <option value="team">فريق عمل عابر للوحدات</option>
+                </select>
+              </div>
+
+              {dirScope === "unit" && (
+                <select
+                  value={dirUnit}
+                  onChange={e => setDirUnit(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+                >
+                  {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                </select>
+              )}
+
+              {dirScope === "team" && (
+                <select
+                  value={dirTeamId}
+                  onChange={e => setDirTeamId(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+                >
+                  {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black"
+              >
+                📢 نشر التوجيه الفني لكوادر المسار
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٤. لوحة منزلقة: إعداد المحاضرة والاختبار */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "curriculum_builder"}
+            onClose={() => setDrawerMode(null)}
+            badge="إدارة المادة المعرفية والاختبار"
+            title="🎬 إعداد المحاضرة وأسئلة الاستيعاب"
+          >
+            <form onSubmit={handleSaveCurriculumDrawer} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">عنوان المحاضرة</label>
                 <input
-                  value={lectureTitle}
-                  onChange={e => setLectureTitle(e.target.value)}
+                  value={lecTitle}
+                  onChange={e => setLecTitle(e.target.value)}
                   className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
                   required
                 />
@@ -6313,298 +6824,147 @@ CREATE POLICY "Allow public upload on madyan-media"
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">وصف المحاضرة</label>
                 <textarea
-                  rows="3"
-                  value={lectureDesc}
-                  onChange={e => setLectureDesc(e.target.value)}
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs leading-relaxed"
+                  rows="2"
+                  value={lecDesc}
+                  onChange={e => setLecDesc(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">نوع الفيديو</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">المصدر</label>
                   <select
-                    value={videoType}
-                    onChange={e => setVideoType(e.target.value)}
-                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs font-bold"
+                    value={lecVideoType}
+                    onChange={e => setLecVideoType(e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-xs font-bold"
                   >
-                    <option value="mp4">ملف فيديو مباشر</option>
-                    <option value="youtube">رابط يوتيوب</option>
-                    <option value="gdrive">رابط جوجل درايف</option>
+                    <option value="youtube">يوتيوب غير مدرج</option>
+                    <option value="gdrive">جوجل درايف</option>
+                    <option value="mp4">ملف مباشر</option>
                   </select>
                 </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط الفيديو (يوتيوب أو جوجل درايف أو مباشر)</label>
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط الفيديو</label>
                   <input
-                    value={videoUrl}
-                    onChange={e => setVideoUrl(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono"
+                    value={lecVideoUrl}
+                    onChange={e => setLecVideoUrl(e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs font-mono"
                     dir="ltr"
                     required
                   />
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-dashed border-orange-300 bg-orange-50/50 p-3.5 space-y-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-black text-stone-800">
-                    📤 أو ارفع ملف فيديو من جهازك إلى سحابة سوبابيس
-                  </span>
-                  <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 transition">
-                    {videoUploading ? "جارٍ الرفع..." : "اختيار ملف فيديو"}
-                    <input
-                      type="file"
-                      accept="video/mp4,video/webm,video/quicktime,video/*"
-                      onChange={handleDirectVideoUpload}
-                      disabled={videoUploading}
-                      className="hidden"
-                    />
-                  </label>
+              <div className="space-y-2.5 pt-2 border-t border-stone-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-stone-900">أسئلة الاختبار ({lecQuestions.length})</span>
+                  <button
+                    type="button"
+                    onClick={() => setLecQuestions(prev => [
+                      ...prev,
+                      { id: "q_" + Date.now(), text: "سؤال استيعاب جديد؟", options: ["خيار ١", "خيار ٢", "خيار ٣", "خيار ٤"], correctIndex: 0 }
+                    ])}
+                    className="px-3 py-1 rounded-xl bg-stone-100 text-stone-800 text-[11px] font-black"
+                  >
+                    + سؤال
+                  </button>
                 </div>
-                {videoUploadNotice && (
-                  <p className="text-[11px] font-bold text-orange-800 leading-relaxed">
-                    {videoUploadNotice}
-                  </p>
-                )}
-              </div>
 
-              <div className="rounded-2xl overflow-hidden bg-stone-950 aspect-video border border-stone-800">
-                {isIframeVideo(videoType, videoUrl) ? (
-                  <iframe
-                    src={getYoutubeEmbedUrl(videoUrl)}
-                    title="معاينة المحاضرة"
-                    className="w-full h-full"
-                    allowFullScreen
-                  />
-                ) : (
-                  <video src={videoUrl} controls className="w-full h-full object-contain" />
-                )}
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95 transition"
-              >
-                💾 حفظ واعتماد المحاضرة والاختبار
-              </button>
-            </div>
-
-            <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-black text-stone-900">📝 أسئلة الاختبار القصير ({questions.length})</h3>
-                  <p className="text-xs text-stone-500">حدد السؤال والخيارات الأربعة والإجابة الصحيحة لكل سؤال</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={addQuestion}
-                  className="px-3.5 py-2 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 text-xs font-black hover:bg-orange-100"
-                >
-                  + إضافة سؤال
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {questions.map((q, qIdx) => (
-                  <div key={q.id || qIdx} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black text-stone-800">السؤال #{qIdx + 1}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeQuestion(qIdx)}
-                        className="text-[11px] font-bold text-rose-600 hover:underline"
-                      >
-                        حذف السؤال
-                      </button>
-                    </div>
-
+                {lecQuestions.map((q, qIdx) => (
+                  <div key={q.id || qIdx} className="p-3 rounded-2xl bg-stone-50 border border-stone-200 space-y-2">
                     <input
                       value={q.text}
-                      onChange={e => handleQuestionChange(qIdx, "text", e.target.value)}
-                      placeholder="نص السؤال..."
-                      className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
+                      onChange={e => setLecQuestions(prev => prev.map((item, idx) => idx === qIdx ? { ...item, text: e.target.value } : item))}
+                      className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-bold"
                     />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {(q.options || []).map((opt, optIdx) => {
-                        const isCorrect = Number(q.correctIndex) === optIdx;
-                        return (
-                          <div
-                            key={optIdx}
-                            className={`p-2 rounded-xl border flex items-center gap-2 ${
-                              isCorrect ? "bg-emerald-50 border-emerald-400" : "bg-white border-stone-200"
-                            }`}
-                          >
-                            <input
-                              type="radio"
-                              name={`correct_${qIdx}`}
-                              checked={isCorrect}
-                              onChange={() => handleQuestionChange(qIdx, "correctIndex", optIdx)}
-                            />
-                            <input
-                              value={opt}
-                              onChange={e => handleOptionChange(qIdx, optIdx, e.target.value)}
-                              className="flex-1 bg-transparent text-xs font-semibold focus:outline-none"
-                              placeholder={`خيار ${optIdx + 1}`}
-                            />
-                          </div>
-                        );
-                      })}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {(q.options || []).map((opt, oIdx) => (
+                        <label key={oIdx} className="flex items-center gap-1.5 bg-white p-1.5 rounded-lg border border-stone-200 text-[11px]">
+                          <input
+                            type="radio"
+                            name={`lec_q_${qIdx}`}
+                            checked={Number(q.correctIndex) === oIdx}
+                            onChange={() => setLecQuestions(prev => prev.map((item, idx) => idx === qIdx ? { ...item, correctIndex: oIdx } : item))}
+                          />
+                          <input
+                            value={opt}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setLecQuestions(prev => prev.map((item, idx) => {
+                                if (idx !== qIdx) return item;
+                                const nextOpts = [...(item.options || [])];
+                                nextOpts[oIdx] = val;
+                                return { ...item, options: nextOpts };
+                              }));
+                            }}
+                            className="w-full bg-transparent focus:outline-none"
+                          />
+                        </label>
+                      ))}
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-          </form>
-        </div>
-      );
-    }
 
-    // ============================================================================
-    // 13. ADMIN USERS & SYSTEM SETTINGS SECTION
-    // ============================================================================
-    function AdminSettingsAndUsersSection({ db, setDb, cadres, showToast }) {
-      const [newName, setNewName] = useState("");
-      const [newJobTitle, setNewJobTitle] = useState("");
-      const [newUnit, setNewUnit] = useState("وحدة التخطيط الاستراتيجي");
-      const [newUsername, setNewUsername] = useState("");
-      const [newPassword, setNewPassword] = useState("1234");
-      const [newRoleType, setNewRoleType] = useState("cadre");
-      const [newWeeksAgo, setNewWeeksAgo] = useState(1);
-      const [newMeetDay, setNewMeetDay] = useState(2);
-      const [newMeetTime, setNewMeetTime] = useState("19:00");
+              <button type="submit" className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black">
+                حفظ واعتماد المحاضرة والاختبار ✓
+              </button>
+            </form>
+          </SlideOverDrawer>
 
-      const [quoteText, setQuoteText] = useState("");
-      const [quoteAuthor, setQuoteAuthor] = useState("منهجية Madyan");
-
-      const handleCreateUser = (e) => {
-        e.preventDefault();
-        if (!newName.trim() || !newUsername.trim() || !newPassword.trim()) {
-          showToast("يرجى إدخال الاسم واسم المستخدم وكلمة المرور.");
-          return;
-        }
-        const cleanUser = newUsername.trim().toLowerCase();
-        if (db.users.some(u => u.username.toLowerCase() === cleanUser)) {
-          showToast("اسم المستخدم هذا مسجل بالفعل، اختر اسماً آخر.");
-          return;
-        }
-
-        const weeksNum = Math.max(1, parseInt(newWeeksAgo, 10) || 1);
-        const joinedTimestamp = Date.now() - ((weeksNum - 1) * MS_PER_WEEK) - (24 * 3600 * 1000);
-
-        const initialTasks = {};
-        if (newRoleType === "cadre") {
-          for (let w = 1; w <= weeksNum; w++) {
-            initialTasks[w] = {
-              lecture: { status: "pending" },
-              agenda: { status: "pending" },
-              attendance: { status: "pending" },
-              minutes: { status: "pending" }
-            };
-          }
-        }
-
-        const created = {
-          id: "u_" + Date.now(),
-          username: newUsername.trim(),
-          password: newPassword.trim(),
-          roleType: newRoleType,
-          onboarded: false,
-          joinedAt: joinedTimestamp,
-          name: newName.trim(),
-          jobTitle: newJobTitle.trim() || (newRoleType === "executive" ? "عضو المكتب التنفيذي" : "كادر إداري"),
-          unit: newUnit.trim() || "الإدارة العامة",
-          defaultSchedule: {
-            meetDay: parseInt(newMeetDay, 10),
-            meetTime: newMeetTime,
-            meetDuration: 90
-          },
-          weekOverrides: {},
-          tasksRecord: initialTasks
-        };
-
-        setDb(prev => ({
-          ...prev,
-          users: [...prev.users, created]
-        }));
-
-        setNewName("");
-        setNewJobTitle("");
-        setNewUsername("");
-        showToast(`تم إنشاء الحساب (${created.name}) بنجاح ✓`);
-      };
-
-      const handleDeleteUser = (userId) => {
-        const target = db.users.find(u => u.id === userId);
-        if (!target) return;
-        if (target.roleType === "admin" && db.users.filter(u => u.roleType === "admin").length <= 1) {
-          showToast("لا يمكن حذف حساب المدير الوحيد في النظام.");
-          return;
-        }
-        setDb(prev => ({
-          ...prev,
-          users: prev.users.filter(u => u.id !== userId)
-        }));
-        showToast("تم حذف الحساب من المنصة.");
-      };
-
-      const handleAddQuote = (e) => {
-        e.preventDefault();
-        if (!quoteText.trim()) return;
-        const nextQuote = {
-          id: Date.now(),
-          text: quoteText.trim(),
-          author: quoteAuthor.trim() || "منهجية Madyan"
-        };
-        setDb(prev => ({
-          ...prev,
-          systemConfig: {
-            ...prev.systemConfig,
-            quotes: [nextQuote, ...(prev.systemConfig?.quotes || [])]
-          }
-        }));
-        setQuoteText("");
-        showToast("تمت إضافة الاقتباس التحفيزي بنجاح 🌱");
-      };
-
-      const handleDeleteQuote = (id) => {
-        setDb(prev => ({
-          ...prev,
-          systemConfig: {
-            ...prev.systemConfig,
-            quotes: (prev.systemConfig?.quotes || []).filter(q => q.id !== id)
-          }
-        }));
-      };
-
-      return (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
-            <div>
-              <span className="text-xs font-bold text-orange-600">إدارة الحسابات والصلاحيات</span>
-              <h2 className="text-lg font-black text-stone-900">توليد حساب جديد (كادر / تنفيذي / مدير)</h2>
-            </div>
-
-            <form onSubmit={handleCreateUser} className="space-y-3.5">
+          {/* ٥. لوحة منزلقة: بوصلة الفترة والمقرر القرائي (للإدارة التربوية) */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "tarbawi_compass"}
+            onClose={() => setDrawerMode(null)}
+            badge="الإدارة التربوية"
+            title="🧭 بوصلة الفترة والمقرر القرائي"
+          >
+            <form onSubmit={handleSaveTarbawiFocus} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">نوع الصلاحية (Role)</label>
-                <select
-                  value={newRoleType}
-                  onChange={e => setNewRoleType(e.target.value)}
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
-                >
-                  <option value="cadre">👤 كادر إداري (Cadre)</option>
-                  <option value="executive">🏛️ عضو المكتب التنفيذي (Executive)</option>
-                  <option value="admin">🛡️ مدير النظام والـ HR (Admin)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">القيمة التربوية الحالية</label>
                 <input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
+                  value={focusTitle}
+                  onChange={e => setFocusTitle(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">المقرر القرائي المعتمد</label>
+                <input
+                  value={focusBook}
+                  onChange={e => setFocusBook(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">رسالة تذكيرية للكوادر</label>
+                <textarea
+                  rows="3"
+                  value={focusHint}
+                  onChange={e => setFocusHint(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+                />
+              </div>
+              <button type="submit" className="w-full py-3.5 rounded-2xl tarbawi-gradient text-white text-xs font-black">
+                حفظ البوصلة التربوية ✓
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٦. لوحات منزلقة خاصة بإدارة الموارد البشرية: إنشاء حسابات الكوادر وتسكينهم (الإجابة ٢ و ٩) */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "hr_add_cadre"}
+            onClose={() => setDrawerMode(null)}
+            badge="صلاحية إدارة الموارد البشرية"
+            title="إضافة كادر جديد وتسكينه"
+          >
+            <form onSubmit={handleHrCreateCadre} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل للكادر</label>
+                <input
+                  value={hrCadreName}
+                  onChange={e => setHrCadreName(e.target.value)}
                   placeholder="مثال: خالد العتيبي"
                   className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
                   required
@@ -6615,40 +6975,60 @@ CREATE POLICY "Allow public upload on madyan-media"
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
                   <input
-                    value={newJobTitle}
-                    onChange={e => setNewJobTitle(e.target.value)}
-                    placeholder="منسق مشاريع"
+                    value={hrCadreTitle}
+                    onChange={e => setHrCadreTitle(e.target.value)}
+                    placeholder="منسق وحدة"
                     className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الإدارية</label>
-                  <input
-                    value={newUnit}
-                    onChange={e => setNewUnit(e.target.value)}
-                    placeholder="وحدة التخطيط"
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الأساسية</label>
+                  <select
+                    value={hrCadreUnit}
+                    onChange={e => setHrCadreUnit(e.target.value)}
                     className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                  />
+                  >
+                    {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                  </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-orange-50/60 border border-orange-200/80">
+              <div className="space-y-2">
+                <label className="block text-xs font-black text-stone-800">ضمه لفرق عمل أو لجان عابرة للوحدات (اختياري):</label>
+                {teams.map(t => {
+                  const checked = hrCadreTeams.includes(t.id);
+                  return (
+                    <label key={t.id} className="flex items-center justify-between p-3 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer">
+                      <span className="text-xs font-bold text-stone-800">🤝 {t.name}</span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setHrCadreTeams(prev => checked ? prev.filter(x => x !== t.id) : [...prev, t.id]);
+                        }}
+                        className="w-4 h-4 accent-orange-600"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200">
                 <div>
-                  <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم (Username)</label>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم</label>
                   <input
-                    value={newUsername}
-                    onChange={e => setNewUsername(e.target.value)}
-                    placeholder="khalid"
+                    value={hrCadreUsername}
+                    onChange={e => setHrCadreUsername(e.target.value)}
                     className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
                     dir="ltr"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور الابتدائية</label>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور المؤقتة</label>
                   <input
-                    value={newPassword}
-                    onChange={e => setNewPassword(e.target.value)}
+                    value={hrCadrePassword}
+                    onChange={e => setHrCadrePassword(e.target.value)}
                     className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
                     dir="ltr"
                     required
@@ -6656,259 +7036,65 @@ CREATE POLICY "Allow public upload on madyan-media"
                 </div>
               </div>
 
-              {newRoleType === "cadre" && (
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-700 mb-1">عدد الأسابيع</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="52"
-                      value={newWeeksAgo}
-                      onChange={e => setNewWeeksAgo(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-700 mb-1">يوم الاجتماع</label>
-                    <select
-                      value={newMeetDay}
-                      onChange={e => setNewMeetDay(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-xs font-bold"
-                    >
-                      {DAYS_AR.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-700 mb-1">الوقت</label>
-                    <input
-                      type="time"
-                      value={newMeetTime}
-                      onChange={e => setNewMeetTime(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-xs font-bold"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95"
-              >
-                + توليد الحساب وتفعيله فوراً
+              <button type="submit" className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black">
+                + إنشاء حساب الكادر وتسكينه
               </button>
             </form>
-          </div>
+          </SlideOverDrawer>
 
-          <div className="lg:col-span-7 space-y-6">
-            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <h3 className="text-base font-black text-stone-900">👥 الحسابات المسجلة بالنظام ({db.users.length})</h3>
-              <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
-                {db.users.map(u => (
-                  <div key={u.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-black text-stone-900">{u.name}</span>
-                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                          u.roleType === "admin"
-                            ? "bg-stone-900 text-white"
-                            : u.roleType === "executive"
-                            ? "bg-orange-100 text-orange-800"
-                            : "bg-emerald-100 text-emerald-800"
-                        }`}>
-                          {u.roleType === "admin" ? "مدير النظام" : u.roleType === "executive" ? "المكتب التنفيذي" : "كادر"}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-stone-500 mt-0.5">
-                        {u.unit} • {u.jobTitle}
-                      </div>
-                    </div>
+          <SlideOverDrawer
+            isOpen={drawerMode === "hr_bulk_import"}
+            onClose={() => setDrawerMode(null)}
+            badge="إدارة الموارد البشرية"
+            title="استيراد جماعي للكوادر وتسكينهم"
+          >
+            <form onSubmit={handleHrBulkImport} className="space-y-4">
+              <p className="text-xs text-stone-600 leading-relaxed">
+                أدخل كل كادر في سطر مستقل بالصيغة التالية:
+                <br />
+                <strong>الاسم الكامل ، اسم المستخدم ، اسم الوحدة</strong>
+              </p>
+              <textarea
+                rows="7"
+                value={hrBulkText}
+                onChange={e => setHrBulkText(e.target.value)}
+                placeholder={"سعد الدوسري، saad، وحدة التخطيط الاستراتيجي\nمعاذ الشمري، muath، وحدة العمل الميداني"}
+                className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-xs font-bold"
+              />
+              <button type="submit" className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black">
+                📥 استيراد وتوليد الحسابات
+              </button>
+            </form>
+          </SlideOverDrawer>
 
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-xl border border-stone-200 font-bold text-stone-700">
-                        {u.username} / {u.password}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteUser(u.id)}
-                        className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-bold"
-                      >
-                        حذف
-                      </button>
-                    </div>
+          <SlideOverDrawer
+            isOpen={drawerMode === "hr_unit_invites"}
+            onClose={() => setDrawerMode(null)}
+            badge="إدارة الموارد البشرية"
+            title="رموز وروابط انضمام الوحدات"
+          >
+            <div className="space-y-3">
+              {units.map(u => (
+                <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-black text-stone-900">{u.name}</div>
+                    <div className="text-xs font-mono font-bold text-orange-700 mt-1" dir="ltr">{u.inviteCode}</div>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-              <h3 className="text-base font-black text-stone-900">🌱 الاقتباسات والرسائل التحفيزية ({db.systemConfig?.quotes?.length || 0})</h3>
-              <form onSubmit={handleAddQuote} className="flex flex-wrap gap-2">
-                <input
-                  value={quoteText}
-                  onChange={e => setQuoteText(e.target.value)}
-                  placeholder="أضف حكمة أو رسالة تحفيزية أسبوعية..."
-                  className="flex-1 min-w-[200px] rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
-                />
-                <input
-                  value={quoteAuthor}
-                  onChange={e => setQuoteAuthor(e.target.value)}
-                  placeholder="المصدر"
-                  className="w-36 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                />
-                <button type="submit" className="px-4 py-2 rounded-2xl bg-stone-900 text-white text-xs font-bold">
-                  إضافة
-                </button>
-              </form>
-              <div className="space-y-2">
-                {(db.systemConfig?.quotes || []).map(q => (
-                  <div key={q.id} className="p-3 rounded-2xl bg-stone-50 border border-stone-200 flex items-center justify-between gap-2 text-xs">
-                    <div>
-                      <span className="font-bold text-stone-800">“{q.text}”</span>
-                      <span className="text-stone-400 mr-2">— {q.author}</span>
-                    </div>
-                    <button onClick={() => handleDeleteQuote(q.id)} className="text-rose-600 font-bold text-[11px]">حذف</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // ============================================================================
-    // 14. CADRE INSPECTOR MODAL (يعرض تفاصيل المحور الإداري + التربوي + الاختبار)
-    // ============================================================================
-    function CadreInspectorModal({ cadre, db, onClose }) {
-      if (!cadre) return null;
-      const totalWeeks = calculateWeeksSinceJoin(cadre.joinedAt);
-      const metrics = computeCadreMetrics(cadre, db.systemConfig);
-      const tarbawiTasks = getApplicableTarbawiTasks(cadre, db.systemConfig);
-
-      return (
-        <ModalContainer
-          isOpen={Boolean(cadre)}
-          onClose={onClose}
-          badge={`فحص السجل التفصيلي • ${cadre.unit}`}
-          title={`${cadre.name} (@${cadre.username})`}
-          maxWidth="max-w-3xl"
-        >
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
-              <div className="p-3 rounded-2xl bg-stone-50 border border-stone-200">
-                <div className="text-[11px] text-stone-400 font-bold">السكور العام</div>
-                <div className="text-xl font-black text-stone-900 mt-0.5">{metrics.overallScorePct}%</div>
-              </div>
-              <div className="p-3 rounded-2xl bg-orange-50 border border-orange-200">
-                <div className="text-[11px] text-orange-800 font-bold">🏛️ المحور الإداري</div>
-                <div className="text-xl font-black text-orange-700 mt-0.5">{metrics.adminScorePct}%</div>
-              </div>
-              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
-                <div className="text-[11px] text-emerald-800 font-bold">🌱 المحور التربوي</div>
-                <div className="text-xl font-black text-emerald-700 mt-0.5">{metrics.tarbawiScorePct}%</div>
-              </div>
-              <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200">
-                <div className="text-[11px] text-sky-800 font-bold">متوسط الاختبارات</div>
-                <div className="text-xl font-black text-sky-700 mt-0.5">
-                  {metrics.avgQuizPct !== null ? `${metrics.avgQuizPct}%` : "—"}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/?join=${u.inviteCode}`);
+                      showToast(`تم نسخ رابط انضمام (${u.name}) ✓`);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black"
+                  >
+                    نسخ الرابط
+                  </button>
                 </div>
-              </div>
+              ))}
             </div>
-
-            <div className="space-y-3 max-h-[58vh] overflow-y-auto pr-1">
-              {Array.from({ length: totalWeeks }, (_, idx) => {
-                const w = totalWeeks - idx;
-                const wRec = cadre.tasksRecord?.[w] || {};
-                const curr = db.weeklyCurriculums?.[w] || db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
-                const quizSub = wRec.lecture?.quizSubmission;
-
-                return (
-                  <div key={w} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-stone-900">
-                        📅 الأسبوع {w} ({getWeekDateRangeLabel(w, totalWeeks)})
-                      </span>
-                      {quizSub && (
-                        <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                          درجة الاختبار: {quizSub.score}/{quizSub.total}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* مهام المحور الإداري */}
-                    <div>
-                      <div className="text-[11px] font-black text-orange-800 mb-1.5">🏛️ المحور الإداري:</div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                        {['lecture', 'agenda', 'attendance', 'minutes'].map(k => {
-                          const t = wRec[k] || { status: "pending" };
-                          const labels = { lecture: "المحاضرة", agenda: "الأجندة", attendance: "الحضور", minutes: "المحضر" };
-                          return (
-                            <div key={k} className="p-2.5 rounded-xl bg-white border border-stone-200/80 space-y-1">
-                              <div className="font-black text-stone-700">{labels[k]}</div>
-                              <div className={`text-[11px] font-bold ${
-                                t.status === "on_time" ? "text-emerald-600" : t.status === "late" ? "text-amber-600" : "text-rose-500"
-                              }`}>
-                                {t.status === "on_time" ? "✓ في الموعد" : t.status === "late" ? "⚠️ متأخر" : "• غير منجز"}
-                              </div>
-                              {t.completedAt && <div className="text-[10px] text-stone-400">{t.completedAt}</div>}
-                              {t.note && <div className="text-[10px] text-amber-800 bg-amber-50 p-1 rounded">📌 {t.note}</div>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* مهام المحور التربوي */}
-                    <div>
-                      <div className="text-[11px] font-black text-emerald-800 mb-1.5">🌱 المحور التربوي:</div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                        {tarbawiTasks.map(td => {
-                          const t = wRec[td.id] || { status: "pending", daysCompleted: [] };
-                          const dCount = Array.isArray(t.daysCompleted) ? t.daysCompleted.length : 0;
-                          return (
-                            <div key={td.id} className="p-2.5 rounded-xl bg-white border border-emerald-200/60 space-y-1">
-                              <div className="font-black text-stone-700">{td.icon} {td.title}</div>
-                              <div className={`text-[11px] font-bold ${
-                                t.status === "on_time" ? "text-emerald-600" : "text-stone-400"
-                              }`}>
-                                {t.status === "on_time"
-                                  ? "✓ مكتمل"
-                                  : td.trackType === "daily_days" && dCount > 0
-                                  ? `⏳ ${dCount}/${td.targetDays || 5} أيام`
-                                  : "• قيد الإنجاز"}
-                              </div>
-                              {t.note && <div className="text-[10px] text-emerald-800 bg-emerald-50 p-1 rounded">✍️ {t.note}</div>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {quizSub && Array.isArray(curr.questions) && (
-                      <div className="pt-2 border-t border-stone-200/70 space-y-1.5">
-                        <div className="text-[11px] font-black text-stone-600">إجابات الكادر في اختبار المحاضرة:</div>
-                        {curr.questions.map((q, qIdx) => {
-                          const picked = quizSub.answers?.[qIdx];
-                          const isRight = picked === q.correctIndex;
-                          return (
-                            <div key={qIdx} className="text-[11px] flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-1.5 rounded-xl border border-stone-200/60">
-                              <span className="font-bold text-stone-700">{qIdx + 1}. {q.text}</span>
-                              <span className={isRight ? "text-emerald-700 font-black" : "text-rose-600 font-black"}>
-                                {isRight ? "✅ " : "❌ "}
-                                {q.options?.[picked] ?? "لم يجب"}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </ModalContainer>
+          </SlideOverDrawer>
+        </div>
       );
     }
 
