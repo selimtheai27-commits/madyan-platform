@@ -715,7 +715,19 @@ CREATE TABLE IF NOT EXISTS public.madyan_app_state (
 ALTER TABLE public.madyan_app_state ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow public read/write on madyan_app_state" ON public.madyan_app_state;
 CREATE POLICY "Allow public read/write on madyan_app_state"
-  ON public.madyan_app_state FOR ALL USING (true) WITH CHECK (true);`;
+  ON public.madyan_app_state FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('madyan-media', 'madyan-media', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "Allow public read on madyan-media" ON storage.objects;
+CREATE POLICY "Allow public read on madyan-media"
+  ON storage.objects FOR SELECT USING (bucket_id = 'madyan-media');
+
+DROP POLICY IF EXISTS "Allow public upload on madyan-media" ON storage.objects;
+CREATE POLICY "Allow public upload on madyan-media"
+  ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'madyan-media');`;
 
     function loadCloudConfig() {
       try {
@@ -4161,18 +4173,65 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
       const [videoType, setVideoType] = useState(currentCurr.videoType || "mp4");
       const [videoUrl, setVideoUrl] = useState(currentCurr.videoUrl || "");
       const [questions, setQuestions] = useState(currentCurr.questions || []);
+      const [videoUploading, setVideoUploading] = useState(false);
+      const [videoUploadNotice, setVideoUploadNotice] = useState("");
 
       useEffect(() => {
         setLectureTitle(currentCurr.lectureTitle || "");
         setLectureDesc(currentCurr.lectureDesc || "");
         setVideoType(currentCurr.videoType || "mp4");
         setVideoUrl(currentCurr.videoUrl || "");
+        setVideoUploadNotice("");
         setQuestions(
           Array.isArray(currentCurr.questions)
             ? currentCurr.questions.map(q => ({ ...q, options: [...(q.options || ["", "", "", ""])] }))
             : []
         );
       }, [currentCurr, selectedKey]);
+
+      const handleDirectVideoUpload = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        const cfg = loadCloudConfig();
+        if (cfg.supabaseUrl && cfg.supabaseAnonKey && window.supabase) {
+          setVideoUploading(true);
+          setVideoUploadNotice("جارٍ رفع الفيديو إلى سحابة سوبابيس...");
+          try {
+            const client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+            const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
+            const safePath = `lectures/week_${selectedKey}_${Date.now()}.${ext}`;
+            const { error: uploadErr } = await client.storage
+              .from("madyan-media")
+              .upload(safePath, file, { cacheControl: "3600", upsert: true });
+
+            if (uploadErr) {
+              setVideoUploadNotice("تعذر الرفع السحابي: تأكد من تشغيل كود قاعدة البيانات لإنشاء حاوية الفيديوهات.");
+              showToast("يرجى تشغيل كود قاعدة البيانات في سوبابيس لتفعيل رفع الفيديوهات.");
+            } else {
+              const { data: pubData } = client.storage.from("madyan-media").getPublicUrl(safePath);
+              if (pubData && pubData.publicUrl) {
+                setVideoType("mp4");
+                setVideoUrl(pubData.publicUrl);
+                setVideoUploadNotice("تم رفع الفيديو في سحابة سوبابيس بنجاح وربطه بالمحاضرة ✓");
+                showToast("تم رفع الفيديو السحابي بنجاح ✓ اضغط حفظ واعتماد المحاضرة.");
+              }
+            }
+          } catch (err) {
+            setVideoUploadNotice("حدث خطأ أثناء الاتصال بسحابة سوبابيس.");
+          } finally {
+            setVideoUploading(false);
+          }
+          return;
+        }
+
+        // في حال عدم تفعيل الربط السحابي بعد، ننشئ رابط معاينة محلي مع تنبيه واضح
+        const localPreviewUrl = URL.createObjectURL(file);
+        setVideoType("mp4");
+        setVideoUrl(localPreviewUrl);
+        setVideoUploadNotice("تم تحميل الفيديو للمعاينة على هذا المتصفح فقط. لحفظ الفيديو لكل المستخدمين، اربط سحابة سوبابيس أو ضع رابط يوتيوب.");
+        showToast("تم تجهيز الفيديو للمعاينة المحلية ✓");
+      };
 
       const handleQuestionChange = (qIdx, field, val) => {
         setQuestions(prev => prev.map((q, idx) => idx === qIdx ? { ...q, [field]: val } : q));
@@ -4336,12 +4395,12 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                     onChange={e => setVideoType(e.target.value)}
                     className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs font-bold"
                   >
-                    <option value="mp4">ملف MP4 مباشر</option>
-                    <option value="youtube">رابط YouTube</option>
+                    <option value="mp4">ملف فيديو مباشر</option>
+                    <option value="youtube">رابط يوتيوب</option>
                   </select>
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط الفيديو (URL)</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط الفيديو المباشر أو يوتيوب</label>
                   <input
                     value={videoUrl}
                     onChange={e => setVideoUrl(e.target.value)}
@@ -4351,6 +4410,29 @@ CREATE POLICY "Allow public read/write on madyan_app_state"
                     required
                   />
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-dashed border-orange-300 bg-orange-50/50 p-3.5 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-black text-stone-800">
+                    📤 أو ارفع ملف فيديو من جهازك إلى سحابة سوبابيس
+                  </span>
+                  <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 transition">
+                    {videoUploading ? "جارٍ الرفع..." : "اختيار ملف فيديو"}
+                    <input
+                      type="file"
+                      accept="video/mp4,video/webm,video/quicktime,video/*"
+                      onChange={handleDirectVideoUpload}
+                      disabled={videoUploading}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                {videoUploadNotice && (
+                  <p className="text-[11px] font-bold text-orange-800 leading-relaxed">
+                    {videoUploadNotice}
+                  </p>
+                )}
               </div>
 
               <div className="rounded-2xl overflow-hidden bg-stone-950 aspect-video border border-stone-800">

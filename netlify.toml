@@ -1,9 +1,7 @@
 [build]
+  command = "echo 'Madyan static deploy ready'"
   publish = "."
   functions = "netlify/functions"
-
-[functions]
-  node_bundler = "esbuild"
 
 [[redirects]]
   from = "/api/*"

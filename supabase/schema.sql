@@ -1,5 +1,5 @@
 -- ============================================================================
--- MADYAN PLATFORM - SUPABASE POSTGRESQL SCHEMA (REAL DATABASE + REALTIME)
+-- MADYAN PLATFORM - SUPABASE POSTGRESQL SCHEMA + VIDEO STORAGE BUCKET
 -- ============================================================================
 -- قم بنسخ هذا الملف وتشغيله مرة واحدة في Supabase -> SQL Editor -> New Query -> Run
 
@@ -80,7 +80,27 @@ CREATE POLICY "Allow public read/write on madyan_curriculums"
   ON public.madyan_curriculums FOR ALL
   USING (true) WITH CHECK (true);
 
--- 6. تفعيل التحديث اللحظي (Supabase Realtime)
+-- 6. إنشاء حاوية تخزين الفيديوهات والملفات (Supabase Storage Bucket: madyan-media)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('madyan-media', 'madyan-media', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "Allow public read on madyan-media" ON storage.objects;
+CREATE POLICY "Allow public read on madyan-media"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'madyan-media');
+
+DROP POLICY IF EXISTS "Allow public upload on madyan-media" ON storage.objects;
+CREATE POLICY "Allow public upload on madyan-media"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'madyan-media');
+
+DROP POLICY IF EXISTS "Allow public update on madyan-media" ON storage.objects;
+CREATE POLICY "Allow public update on madyan-media"
+  ON storage.objects FOR UPDATE
+  USING (bucket_id = 'madyan-media');
+
+-- 7. تفعيل التحديث اللحظي (Supabase Realtime)
 DO $$
 BEGIN
   IF NOT EXISTS (

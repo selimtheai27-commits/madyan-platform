@@ -1,14 +1,10 @@
 {
   "name": "madyan-platform",
-  "version": "2.0.0",
-  "description": "Madyan | محرك بناء العادات المؤسسية (React + Supabase PostgreSQL + Netlify Serverless API)",
+  "version": "3.0.0",
+  "description": "Madyan | محرك بناء العادات المؤسسية",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "npx serve .",
-    "dev": "npx netlify-cli dev"
-  },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.45.0"
+    "build": "echo 'Ready'"
   }
 }
