@@ -1007,6 +1007,17 @@ CREATE POLICY "Allow public upload on madyan-media"
         return null;
       });
       const [supervisoryAdminId, setSupervisoryAdminId] = useState(null);
+      // نسخة واجهة إدارة المنصة: v1 (جيميناي) أو v2 (كلاود) — للمقارنة بينهما
+      const [platformVariant, setPlatformVariant] = useState(() => {
+        try {
+          const v = new URLSearchParams(window.location.search).get("variant");
+          if (v === "v1" || v === "v2") return v;
+          return localStorage.getItem("MADYAN_PLATFORM_VARIANT") || "v1";
+        } catch (e) { return "v1"; }
+      });
+      useEffect(() => {
+        try { localStorage.setItem("MADYAN_PLATFORM_VARIANT", platformVariant); } catch (e) {}
+      }, [platformVariant]);
       const [toastMsg, setToastMsg] = useState(null);
       const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
       const [cloudStatus, setCloudStatus] = useState("checking");
@@ -1226,11 +1237,32 @@ CREATE POLICY "Allow public upload on madyan-media"
           {!currentUser ? (
             <LoginView
               users={db.users}
-              onLoginSuccess={(user) => {
+              onLoginSuccess={(user, variant) => {
                 setSupervisoryAdminId(null);
+                if (variant) setPlatformVariant(variant);
                 setCurrentUserId(user.id);
               }}
               onResetDemo={resetDemoData}
+            />
+          ) : currentUser.roleType === "platform_admin" && platformVariant === "v2" ? (
+            <PlatformAdminPortalV2
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              cloudStatus={cloudStatus}
+              lastSyncAt={lastSyncAt}
+              onOpenCloudSetup={() => setCloudModalOpen(true)}
+              onPreviewUser={(targetUserId) => {
+                setSupervisoryAdminId(currentUser.id);
+                setCurrentUserId(targetUserId);
+              }}
+              onResetDemo={resetDemoData}
+              onLogout={() => {
+                setSupervisoryAdminId(null);
+                setCurrentUserId(null);
+              }}
+              onSwitchVariant={() => setPlatformVariant("v1")}
+              showToast={showToast}
             />
           ) : currentUser.roleType === "platform_admin" ? (
             <PlatformAdminPortal
@@ -1368,11 +1400,11 @@ CREATE POLICY "Allow public upload on madyan-media"
         onLoginSuccess(found);
       };
 
-      const quickFill = (u, p) => {
+      const quickFill = (u, p, variant) => {
         setUsername(u);
         setPassword(p);
         const found = findMatchingUser(u, p);
-        if (found) onLoginSuccess(found);
+        if (found) onLoginSuccess(found, variant);
       };
 
       return (
@@ -1442,17 +1474,26 @@ CREATE POLICY "Allow public upload on madyan-media"
                 الدخول السريع للمستويات الأربعة:
               </div>
 
-              {/* المستوى الثالث (المحطة الأولى): مدير المنصة التقني */}
-              <button
-                onClick={() => quickFill("sysadmin", "1234")}
-                className="w-full p-3 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 text-right transition flex items-center justify-between shadow-md"
-              >
-                <div>
-                  <div className="text-xs font-black">🛠️ مستوى إدارة المنصة التقنية (المحطة 1)</div>
-                  <div className="text-[10px] text-stone-300 mt-0.5">تأسيس الإدارات والوحدات • الحسابات • الضوابط الحاكمة</div>
+              {/* المستوى الثالث (المحطة الأولى): مدير المنصة التقني — نسختان للمقارنة */}
+              <div className="rounded-2xl bg-stone-900 p-2.5 shadow-md">
+                <div className="text-[11px] text-stone-400 px-1.5 pb-2">🛠️ إدارة المنصة التقنية — اختر النسخة للمقارنة</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => quickFill("sysadmin", "1234", "v1")}
+                    className="p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-right transition"
+                  >
+                    <div className="text-xs font-bold text-white">نسخة جيميناي</div>
+                    <div className="text-[10px] text-stone-400 mt-0.5">التصميم السابق</div>
+                  </button>
+                  <button
+                    onClick={() => quickFill("sysadmin", "1234", "v2")}
+                    className="p-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-right transition"
+                  >
+                    <div className="text-xs font-bold text-white">نسخة كلاود</div>
+                    <div className="text-[10px] text-orange-100 mt-0.5">التصميم الجديد</div>
+                  </button>
                 </div>
-                <span className="text-xs font-bold bg-orange-500 text-white px-2.5 py-1 rounded-lg">دخول</span>
-              </button>
+              </div>
 
               {/* المستوى الثاني: الإدارات التشغيلية المعزولة */}
               <div className="grid grid-cols-2 gap-2">
@@ -5221,6 +5262,1326 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
+
+    // ============================================================================
+    // 9.6 PLATFORM ADMIN PORTAL V2 (نسخة كلاود — مستقلة تماماً عن النسخة السابقة)
+    // مبادئ: شاشة واحدة = سؤال واحد = إجراء أساسي واحد • بيانات حقيقية فقط • حفظ صريح
+    // ============================================================================
+    const PA2_PASTELS = [
+      { bg: "bg-[#FCEBD7]", ink: "text-[#9A4A12]", dot: "bg-[#E8833A]" },
+      { bg: "bg-[#DFF0E4]", ink: "text-[#246343]", dot: "bg-[#3E9B6A]" },
+      { bg: "bg-[#ECE7FA]", ink: "text-[#4F3E8F]", dot: "bg-[#7C68C9]" },
+      { bg: "bg-[#FBE3E0]", ink: "text-[#97382F]", dot: "bg-[#D9645A]" },
+      { bg: "bg-[#E4EEF7]", ink: "text-[#2D5579]", dot: "bg-[#4F86B8]" }
+    ];
+    const pa2DeptTone = (dept, idx) => {
+      if (dept.id === "dept_hr") return PA2_PASTELS[0];
+      if (dept.id === "dept_tarbawi") return PA2_PASTELS[1];
+      return PA2_PASTELS[[3, 4][idx % 2]];
+    };
+    const pa2TempPassword = () => {
+      const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+      let out = "";
+      for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+      return out;
+    };
+    const pa2Copy = (text) => {
+      try { navigator.clipboard && navigator.clipboard.writeText(text); } catch (e) {}
+    };
+    const pa2Short = (name) => (name || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
+    const pa2RoleLabel = (u) => {
+      if (!u) return "";
+      if (u.roleType === "platform_admin") return "إدارة المنصة";
+      if (u.roleType === "executive") return "الإدارة التنفيذية";
+      if (u.roleType === "operational_admin" || u.roleType === "admin") return "مدير إدارة";
+      return "كادر";
+    };
+
+    // ----- أيقونات خطية هادئة (بديل الإيموجي في التنقل) -----
+    function PA2Icon({ name, className = "w-[18px] h-[18px]" }) {
+      const p = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" };
+      const paths = {
+        home: <><path {...p} d="M3 10.5 12 3l9 7.5" /><path {...p} d="M5 9.5V20h14V9.5" /><path {...p} d="M10 20v-5h4v5" /></>,
+        tree: <><rect {...p} x="9" y="3" width="6" height="5" rx="1.5" /><rect {...p} x="3" y="16" width="6" height="5" rx="1.5" /><rect {...p} x="15" y="16" width="6" height="5" rx="1.5" /><path {...p} d="M12 8v4M6 16v-4h12v4" /></>,
+        users: <><circle {...p} cx="9" cy="8" r="3.5" /><path {...p} d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5" /><path {...p} d="M16 4.8a3.3 3.3 0 0 1 0 6.4M18 14.8c1.8.7 3 2.5 3.5 5.2" /></>,
+        sliders: <><path {...p} d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle {...p} cx="16" cy="6" r="2" /><circle {...p} cx="10" cy="12" r="2" /><circle {...p} cx="18" cy="18" r="2" /></>,
+        logout: <><path {...p} d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" /><path {...p} d="M10 16l-4-4 4-4M6 12h10" /></>,
+        plus: <path {...p} d="M12 5v14M5 12h14" />,
+        close: <path {...p} d="M6 6l12 12M18 6 6 18" />,
+        chevron: <path {...p} d="M15 6l-6 6 6 6" />,
+        search: <><circle {...p} cx="11" cy="11" r="6.5" /><path {...p} d="M20 20l-4-4" /></>,
+        copy: <><rect {...p} x="8" y="8" width="12" height="12" rx="2" /><path {...p} d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>,
+        eye: <><path {...p} d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle {...p} cx="12" cy="12" r="3" /></>,
+        spark: <path {...p} d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" />,
+        check: <path {...p} d="M5 12.5l4.5 4.5L19 7.5" />,
+        cloud: <path {...p} d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.75 4.75 0 0 1-.5 9.5H7Z" />,
+        key: <><circle {...p} cx="8" cy="15" r="4" /><path {...p} d="M11 12l9-9M17 6l2.5 2.5M14.5 8.5 16.5 10.5" /></>,
+        swap: <><path {...p} d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5" /></>
+      };
+      return <svg viewBox="0 0 24 24" className={className} aria-hidden="true">{paths[name]}</svg>;
+    }
+
+    // ----- عناصر تحكم أساسية -----
+    function PA2Label({ children, hint }) {
+      return (
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <span className="text-[13px] text-stone-500">{children}</span>
+          {hint && <span className="text-[12px] text-stone-400">{hint}</span>}
+        </div>
+      );
+    }
+
+    const pa2InputCls = "w-full h-11 rounded-2xl bg-[#F4F2EE] border border-transparent px-4 text-[15px] text-stone-900 placeholder:text-stone-400 focus:outline-none focus:bg-white focus:border-stone-300 transition";
+
+    function PA2Stepper({ value, onChange, min = 0, max = 99, suffix }) {
+      const v = Number(value) || 0;
+      return (
+        <div className="inline-flex items-center h-11 rounded-2xl bg-[#F4F2EE] p-1">
+          <button type="button" onClick={() => onChange(Math.min(max, v + 1))} className="w-9 h-9 rounded-xl bg-white text-stone-700 text-lg leading-none hover:bg-stone-50 shadow-sm">+</button>
+          <span className="min-w-[56px] text-center text-[15px] font-semibold text-stone-900 tabular-nums">
+            {v}{suffix ? <span className="text-stone-400 font-normal text-[13px]"> {suffix}</span> : null}
+          </span>
+          <button type="button" onClick={() => onChange(Math.max(min, v - 1))} className="w-9 h-9 rounded-xl bg-white text-stone-700 text-lg leading-none hover:bg-stone-50 shadow-sm">−</button>
+        </div>
+      );
+    }
+
+    function PA2Segmented({ options, value, onChange, size = "md" }) {
+      return (
+        <div className="inline-flex rounded-full bg-[#ECE9E3] p-1">
+          {options.map(o => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onChange(o.value)}
+              className={`${size === "sm" ? "h-8 px-3.5 text-[13px]" : "h-9 px-4 text-[14px]"} rounded-full transition ${
+                value === o.value ? "bg-white text-stone-900 font-semibold shadow-sm" : "text-stone-500 hover:text-stone-800"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function PA2Switch({ checked, onChange }) {
+      return (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          onClick={() => onChange(!checked)}
+          className={`relative w-12 h-7 rounded-full transition shrink-0 ${checked ? "bg-stone-900" : "bg-stone-300"}`}
+        >
+          <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${checked ? "left-1" : "left-6"}`} />
+        </button>
+      );
+    }
+
+    function PA2Avatar({ user, size = "w-10 h-10" }) {
+      const tone = user?.roleType === "executive" ? PA2_PASTELS[2]
+        : user?.roleType === "platform_admin" ? { bg: "bg-stone-900", ink: "text-white" }
+        : user?.departmentId === "dept_tarbawi" ? PA2_PASTELS[1]
+        : user?.roleType === "cadre" ? PA2_PASTELS[4]
+        : PA2_PASTELS[0];
+      const clean = (user?.name || "؟").replace(/^(د\.|أ\.|م\.)\s*/, "");
+      return (
+        <span className={`${size} ${tone.bg} ${tone.ink} rounded-full inline-flex items-center justify-center text-[15px] font-semibold shrink-0`}>
+          {clean.charAt(0)}
+        </span>
+      );
+    }
+
+    function PA2PanelShell({ eyebrow, title, onClose, children, footer }) {
+      return (
+        <div className="bg-white rounded-[28px] shadow-[0_1px_2px_rgba(28,25,23,0.04),0_12px_32px_-12px_rgba(28,25,23,0.12)] flex flex-col lg:max-h-[calc(100vh-48px)]">
+          <div className="px-6 pt-6 pb-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[13px] text-orange-700 font-medium">{eyebrow}</div>
+              <h3 className="text-[22px] font-bold text-stone-900 mt-1 leading-snug break-words">{title}</h3>
+            </div>
+            <button onClick={onClose} className="w-9 h-9 rounded-full bg-[#F4F2EE] text-stone-500 hover:text-stone-900 inline-flex items-center justify-center shrink-0" aria-label="إغلاق">
+              <PA2Icon name="close" className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="px-6 pb-6 space-y-5 overflow-y-auto">{children}</div>
+          {footer && <div className="px-6 py-4 border-t border-stone-100 bg-white rounded-b-[28px]">{footer}</div>}
+        </div>
+      );
+    }
+
+    function PA2EmptyPanel({ title, text }) {
+      return (
+        <div className="rounded-[28px] border-2 border-dashed border-stone-200 p-8 text-center">
+          <div className="w-14 h-14 rounded-full bg-white mx-auto inline-flex items-center justify-center text-stone-400 shadow-sm">
+            <PA2Icon name="eye" className="w-6 h-6" />
+          </div>
+          <div className="text-[17px] font-semibold text-stone-800 mt-4">{title}</div>
+          <p className="text-[14px] text-stone-500 mt-1.5 leading-relaxed">{text}</p>
+        </div>
+      );
+    }
+
+    function PA2DangerAction({ label, confirmLabel, onConfirm }) {
+      const [armed, setArmed] = useState(false);
+      if (!armed) {
+        return (
+          <button type="button" onClick={() => setArmed(true)} className="text-[13px] text-rose-600 hover:text-rose-700">
+            {label}
+          </button>
+        );
+      }
+      return (
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onConfirm} className="h-9 px-4 rounded-full bg-rose-600 text-white text-[13px] font-semibold">{confirmLabel}</button>
+          <button type="button" onClick={() => setArmed(false)} className="h-9 px-3 rounded-full text-[13px] text-stone-500 hover:text-stone-800">تراجع</button>
+        </div>
+      );
+    }
+
+    function PA2SaveFooter({ dirty, onSave, saveLabel = "حفظ التغييرات", extra, danger }) {
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!dirty}
+              className={`h-11 px-6 rounded-full text-[14px] font-semibold transition ${dirty ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}
+            >
+              {saveLabel}
+            </button>
+            {extra}
+            <span className="mr-auto text-[12px] text-stone-400">{dirty ? "تغييرات غير محفوظة" : "لا توجد تغييرات"}</span>
+          </div>
+          {danger && <div>{danger}</div>}
+        </div>
+      );
+    }
+
+    // ----- لوحة تفاصيل الإدارة (إنشاء/تعديل بنفس اللوحة، بمسودة وحفظ صريح) -----
+    function PA2DeptPanel({ dept, isNew, managerId, managerOptions, cadreCount, onSave, onDelete, onPreview, onClose }) {
+      const [draft, setDraft] = useState(() => ({
+        name: dept?.name || "",
+        description: dept?.description || "",
+        managerId: managerId || "",
+        maxTotalTasks: dept?.maxTotalTasks ?? 6,
+        maxPerTypePerCadre: dept?.maxPerTypePerCadre ?? 2,
+        allowedTaskTypes: dept?.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"],
+        enabled: dept ? dept.enabled !== false : true
+      }));
+      const initial = React.useRef(JSON.stringify(draft));
+      const dirty = isNew ? draft.name.trim().length > 0 : JSON.stringify(draft) !== initial.current;
+      const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+      const toggleType = (id) => set("allowedTaskTypes",
+        draft.allowedTaskTypes.includes(id) ? draft.allowedTaskTypes.filter(t => t !== id) : [...draft.allowedTaskTypes, id]
+      );
+      const save = () => {
+        if (!draft.name.trim()) return;
+        onSave(draft);
+        initial.current = JSON.stringify(draft);
+      };
+      const selectedMgr = managerOptions.find(m => m.id === draft.managerId);
+
+      return (
+        <PA2PanelShell
+          eyebrow={isNew ? "إدارة جديدة" : (dept.isCore ? "إدارة تشغيلية أساسية" : "إدارة تشغيلية")}
+          title={isNew ? (draft.name.trim() || "تأسيس إدارة") : dept.name}
+          onClose={onClose}
+          footer={
+            <PA2SaveFooter
+              dirty={dirty}
+              onSave={save}
+              saveLabel={isNew ? "تأسيس الإدارة" : "حفظ التغييرات"}
+              extra={!isNew && managerId ? (
+                <button type="button" onClick={() => onPreview(managerId)} className="h-11 px-4 rounded-full bg-white border border-stone-200 text-[14px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5">
+                  <PA2Icon name="eye" className="w-4 h-4" /> معاينة
+                </button>
+              ) : null}
+              danger={!isNew && !dept.isCore ? <PA2DangerAction label="حذف هذه الإدارة" confirmLabel="تأكيد الحذف" onConfirm={onDelete} /> : null}
+            />
+          }
+        >
+          <div>
+            <PA2Label>اسم الإدارة</PA2Label>
+            <input className={pa2InputCls} value={draft.name} onChange={e => set("name", e.target.value)} placeholder="مثال: إدارة الإعلام" autoFocus={isNew} />
+          </div>
+          <div>
+            <PA2Label>الوصف</PA2Label>
+            <textarea rows={2} className={pa2InputCls + " h-auto py-3 leading-relaxed resize-none"} value={draft.description} onChange={e => set("description", e.target.value)} placeholder="ما الذي تتابعه هذه الإدارة؟" />
+          </div>
+          <div>
+            <PA2Label>مدير الإدارة</PA2Label>
+            <select className={pa2InputCls} value={draft.managerId} onChange={e => set("managerId", e.target.value)}>
+              <option value="">— بدون مدير حالياً —</option>
+              {managerOptions.map(m => (
+                <option key={m.id} value={m.id}>{m.name} · {m.hint}</option>
+              ))}
+            </select>
+            {selectedMgr && selectedMgr.id !== managerId && selectedMgr.willMove && (
+              <p className="text-[12px] text-amber-700 mt-2 leading-relaxed">سيُنقل هذا الحساب إلى مستوى مديري الإدارات ويتولى هذه الإدارة.</p>
+            )}
+          </div>
+
+          <div className="pt-1">
+            <div className="text-[15px] font-semibold text-stone-900 mb-3">حدود المهام</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <PA2Label>إجمالي المهام</PA2Label>
+                <PA2Stepper value={draft.maxTotalTasks} min={1} max={20} onChange={v => set("maxTotalTasks", v)} />
+              </div>
+              <div>
+                <PA2Label>لكل نوع للكادر</PA2Label>
+                <PA2Stepper value={draft.maxPerTypePerCadre} min={1} max={10} onChange={v => set("maxPerTypePerCadre", v)} />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <PA2Label hint={`${draft.allowedTaskTypes.length} من ${TASK_TEMPLATES_LIBRARY.length}`}>أنواع المهام المسموحة</PA2Label>
+            <div className="flex flex-wrap gap-2">
+              {TASK_TEMPLATES_LIBRARY.map(t => {
+                const on = draft.allowedTaskTypes.includes(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => toggleType(t.id)}
+                    className={`h-9 px-3.5 rounded-full text-[13px] border transition inline-flex items-center gap-1.5 ${
+                      on ? "bg-stone-900 border-stone-900 text-white" : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"
+                    }`}
+                  >
+                    <span>{t.icon}</span>{t.title}
+                  </button>
+                );
+              })}
+            </div>
+            {draft.allowedTaskTypes.length === 0 && (
+              <p className="text-[12px] text-amber-700 mt-2">بدون أنواع مسموحة لن يستطيع المدير إسناد أي مهمة.</p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[15px] font-semibold text-stone-900">حالة الإدارة</div>
+              {!isNew && <div className="text-[13px] text-stone-500 mt-0.5">{cadreCount} كادر مسجّل فيها</div>}
+            </div>
+            <PA2Segmented size="sm" value={draft.enabled ? "on" : "off"} onChange={v => set("enabled", v === "on")} options={[{ value: "on", label: "مفعّلة" }, { value: "off", label: "موقوفة" }]} />
+          </div>
+        </PA2PanelShell>
+      );
+    }
+
+    // ----- لوحة تفاصيل الوحدة -----
+    function PA2UnitPanel({ unit, isNew, leaderOptions, cadreCount, canDelete, onSave, onDelete, onClose, showToast }) {
+      const [draft, setDraft] = useState(() => ({
+        name: unit?.name || "",
+        leaderUserId: unit?.leaderUserId || "",
+        inviteCode: unit?.inviteCode || ""
+      }));
+      const initial = React.useRef(JSON.stringify(draft));
+      const dirty = isNew ? draft.name.trim().length > 0 : JSON.stringify(draft) !== initial.current;
+      const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+      const save = () => {
+        if (!draft.name.trim()) return;
+        onSave(draft);
+        initial.current = JSON.stringify(draft);
+      };
+      const joinLink = unit?.inviteCode ? `${window.location.origin}/?join=${unit.inviteCode}` : "";
+
+      return (
+        <PA2PanelShell
+          eyebrow={isNew ? "وحدة جديدة" : "وحدة تنظيمية"}
+          title={isNew ? (draft.name.trim() || "تأسيس وحدة") : unit.name}
+          onClose={onClose}
+          footer={
+            <PA2SaveFooter
+              dirty={dirty}
+              onSave={save}
+              saveLabel={isNew ? "تأسيس الوحدة" : "حفظ التغييرات"}
+              danger={!isNew && canDelete ? <PA2DangerAction label="حذف هذه الوحدة" confirmLabel="تأكيد الحذف" onConfirm={onDelete} /> : null}
+            />
+          }
+        >
+          <div>
+            <PA2Label>اسم الوحدة</PA2Label>
+            <input className={pa2InputCls} value={draft.name} onChange={e => set("name", e.target.value)} placeholder="مثال: وحدة الشباب" autoFocus={isNew} />
+          </div>
+          <div>
+            <PA2Label>قائد الوحدة</PA2Label>
+            <select className={pa2InputCls} value={draft.leaderUserId} onChange={e => set("leaderUserId", e.target.value)}>
+              <option value="">— بدون قائد حالياً —</option>
+              {leaderOptions.map(m => (
+                <option key={m.id} value={m.id}>{m.name} · {m.hint}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <PA2Label hint={isNew ? "يُولَّد تلقائياً إن تُرك فارغاً" : null}>رمز الانضمام</PA2Label>
+            <div className="flex items-center gap-2">
+              <input dir="ltr" className={pa2InputCls + " font-mono tracking-wider text-left uppercase"} value={draft.inviteCode} onChange={e => set("inviteCode", e.target.value.toUpperCase())} placeholder="MAYDAN-XXXX" />
+              {!isNew && (
+                <button
+                  type="button"
+                  onClick={() => { pa2Copy(joinLink); showToast("تم نسخ رابط الانضمام ✓"); }}
+                  className="h-11 px-4 rounded-2xl bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <PA2Icon name="copy" className="w-4 h-4" /> نسخ الرابط
+                </button>
+              )}
+            </div>
+            {!isNew && <p className="text-[12px] text-stone-400 mt-2">يرسل هذا الرابط للكوادر الجدد لينضموا للوحدة مباشرة.</p>}
+          </div>
+          {!isNew && (
+            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3.5 flex items-center justify-between">
+              <span className="text-[14px] text-stone-600">الكوادر المنضمّون</span>
+              <span className="text-[20px] font-bold text-stone-900 tabular-nums">{cadreCount}</span>
+            </div>
+          )}
+        </PA2PanelShell>
+      );
+    }
+
+    // ----- لوحة تفاصيل القائد -----
+    function PA2LeaderPanel({ user, isNew, isSelf, departments, deptManagers = {}, isUsernameTaken, onSave, onDelete, onPreview, onResetPassword, onClose, showToast }) {
+      const [draft, setDraft] = useState(() => ({
+        name: user?.name || "",
+        jobTitle: user?.jobTitle || "",
+        roleType: user ? (user.roleType === "admin" ? "operational_admin" : user.roleType) : "operational_admin",
+        departmentId: user?.departmentId || (departments.find(d => !deptManagers[d.id])?.id || ""),
+        username: user?.username || "",
+        password: isNew ? pa2TempPassword() : ""
+      }));
+      const [error, setError] = useState("");
+      const [revealedPassword, setRevealedPassword] = useState(null);
+      const initial = React.useRef(JSON.stringify(draft));
+      const dirty = isNew ? (draft.name.trim() && draft.username.trim()) : JSON.stringify(draft) !== initial.current;
+      const set = (k, v) => { setError(""); setDraft(d => ({ ...d, [k]: v })); };
+      const isPlatform = draft.roleType === "platform_admin";
+
+      const save = () => {
+        if (!draft.name.trim() || !draft.username.trim()) { setError("الاسم واسم المستخدم مطلوبان."); return; }
+        if (isUsernameTaken(draft.username, user?.id)) { setError("اسم المستخدم مستخدم لحساب آخر."); return; }
+        if (draft.roleType === "operational_admin" && !draft.departmentId) { setError("اختر الإدارة التي سيديرها."); return; }
+        onSave(draft);
+        initial.current = JSON.stringify(draft);
+      };
+
+      return (
+        <PA2PanelShell
+          eyebrow={isNew ? "حساب قيادي جديد" : (isSelf ? "حسابك" : pa2RoleLabel(user))}
+          title={isNew ? (draft.name.trim() || "إضافة قائد") : user.name}
+          onClose={onClose}
+          footer={
+            <PA2SaveFooter
+              dirty={!!dirty}
+              onSave={save}
+              saveLabel={isNew ? "إنشاء الحساب" : "حفظ التغييرات"}
+              extra={!isNew && !isSelf ? (
+                <button type="button" onClick={() => onPreview(user.id)} className="h-11 px-4 rounded-full bg-white border border-stone-200 text-[14px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5">
+                  <PA2Icon name="eye" className="w-4 h-4" /> معاينة
+                </button>
+              ) : null}
+              danger={!isNew && !isSelf ? <PA2DangerAction label="حذف هذا الحساب" confirmLabel="تأكيد الحذف" onConfirm={onDelete} /> : null}
+            />
+          }
+        >
+          <div>
+            <PA2Label>الاسم</PA2Label>
+            <input className={pa2InputCls} value={draft.name} onChange={e => set("name", e.target.value)} placeholder="الاسم كما يظهر في المنصة" autoFocus={isNew} />
+          </div>
+          <div>
+            <PA2Label>المسمى الوظيفي</PA2Label>
+            <input className={pa2InputCls} value={draft.jobTitle} onChange={e => set("jobTitle", e.target.value)} placeholder="مثال: عضو المكتب التنفيذي" />
+          </div>
+          {!isPlatform && (
+            <div>
+              <PA2Label>مستوى الصلاحية</PA2Label>
+              <PA2Segmented value={draft.roleType} onChange={v => set("roleType", v)} options={[{ value: "executive", label: "الإدارة التنفيذية" }, { value: "operational_admin", label: "مدير إدارة" }]} />
+            </div>
+          )}
+          {!isPlatform && draft.roleType === "operational_admin" && (
+            <div>
+              <PA2Label>الإدارة التي يديرها</PA2Label>
+              <select className={pa2InputCls} value={draft.departmentId || ""} onChange={e => set("departmentId", e.target.value)}>
+                <option value="">— اختر الإدارة —</option>
+                {departments.map(d => <option key={d.id} value={d.id}>{d.name}{deptManagers[d.id] && deptManagers[d.id].id !== user?.id ? " · لها مدير" : ""}</option>)}
+              </select>
+              {draft.departmentId && deptManagers[draft.departmentId] && deptManagers[draft.departmentId].id !== user?.id && (
+                <p className="text-[12px] text-amber-700 mt-2 leading-relaxed">سيحلّ محل {deptManagers[draft.departmentId].name} كمدير لهذه الإدارة.</p>
+              )}
+            </div>
+          )}
+          <div>
+            <PA2Label>اسم المستخدم</PA2Label>
+            <input dir="ltr" className={pa2InputCls + " text-left"} value={draft.username} onChange={e => set("username", e.target.value.replace(/\s/g, ""))} placeholder="username" />
+          </div>
+
+          {isNew ? (
+            <div>
+              <PA2Label hint="يُطلب تغييرها عند أول دخول">كلمة مرور مؤقتة</PA2Label>
+              <input dir="ltr" className={pa2InputCls + " font-mono text-left tracking-wider"} value={draft.password} onChange={e => set("password", e.target.value)} />
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-[#F4F2EE] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[14px] font-semibold text-stone-800">كلمة المرور</div>
+                  <div className="text-[12px] text-stone-500 mt-0.5">لا تُعرض كلمات المرور الحالية.</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRevealedPassword(onResetPassword(user.id))}
+                  className="h-9 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <PA2Icon name="key" className="w-4 h-4" /> إعادة تعيين
+                </button>
+              </div>
+              {revealedPassword && (
+                <div className="mt-3 rounded-xl bg-white p-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[12px] text-stone-500">كلمة المرور المؤقتة (تظهر مرة واحدة)</div>
+                    <div dir="ltr" className="font-mono text-[18px] font-semibold text-stone-900 tracking-widest text-right">{revealedPassword}</div>
+                  </div>
+                  <button type="button" onClick={() => { pa2Copy(revealedPassword); showToast("تم النسخ ✓"); }} className="w-9 h-9 rounded-full bg-[#F4F2EE] text-stone-600 inline-flex items-center justify-center">
+                    <PA2Icon name="copy" className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && <div className="text-[13px] text-rose-700 bg-rose-50 rounded-xl px-3.5 py-2.5">{error}</div>}
+        </PA2PanelShell>
+      );
+    }
+
+    // ============================================================================
+    function PlatformAdminPortalV2({
+      db,
+      setDb,
+      currentUser,
+      cloudStatus,
+      lastSyncAt,
+      onOpenCloudSetup,
+      onPreviewUser,
+      onResetDemo,
+      onLogout,
+      onSwitchVariant,
+      showToast
+    }) {
+      const qp = (k, d) => {
+        try { return new URLSearchParams(window.location.search).get(k) || d; } catch (e) { return d; }
+      };
+      const initialSelect = qp("select", null);
+      const [screen, setScreen] = useState(() => {
+        const s = qp("screen", "overview");
+        return ["overview", "structure", "leaders", "rules"].includes(s) ? s : "overview";
+      });
+      const [mapMode, setMapMode] = useState(() => qp("mode", "map"));
+      // التحديد في الهيكل: { kind: 'dept'|'unit', id } أو { kind: 'new_dept' | 'new_unit' }
+      const [structSel, setStructSel] = useState(() => {
+        if (!initialSelect) return null;
+        if (initialSelect.startsWith("dept_")) return { kind: "dept", id: initialSelect };
+        if (initialSelect.startsWith("unit_")) return { kind: "unit", id: initialSelect };
+        if (initialSelect === "new_dept" || initialSelect === "new_unit") return { kind: initialSelect };
+        return null;
+      });
+      const [leaderSel, setLeaderSel] = useState(() => (initialSelect && (initialSelect.startsWith("u_") || initialSelect === "new_leader")) ? initialSelect : null);
+      const [leaderFilter, setLeaderFilter] = useState("all");
+      const [leaderSearch, setLeaderSearch] = useState("");
+      const [showAllGaps, setShowAllGaps] = useState(false);
+      const [savedPulse, setSavedPulse] = useState(false);
+      const [resetArmed, setResetArmed] = useState(false);
+
+      const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+      const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+      const rules = { ...DEFAULT_GOVERNANCE_RULES, ...(db.systemConfig?.governanceRules || {}) };
+      const leaders = useMemo(() => db.users.filter(u => u.roleType !== "cadre"), [db.users]);
+      const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+      const executives = leaders.filter(u => u.roleType === "executive");
+
+      const isOperational = (u) => u.roleType === "operational_admin" || u.roleType === "admin";
+      const findDeptManager = (deptId) =>
+        leaders.find(u => isOperational(u) && (u.departmentId || (u.roleType === "admin" ? "dept_hr" : null)) === deptId) || null;
+      const findUnitLeader = (unit) => (unit.leaderUserId ? db.users.find(u => u.id === unit.leaderUserId) : null) || null;
+      const unitCadreCount = (unit) => cadres.filter(c => c.unit === unit.name).length;
+      const deptCadreCount = (dept) => cadres.filter(c => Array.isArray(c.assignedDepartments) ? c.assignedDepartments.includes(dept.id) : dept.isCore).length;
+
+      // ---------- فحوصات الجاهزية (حقيقية بالكامل) ----------
+      const gaps = [];
+      if (executives.length === 0) gaps.push({ key: "exec", text: "لا يوجد حساب في الإدارة التنفيذية", go: () => { setScreen("leaders"); setLeaderSel("new_leader"); } });
+      departments.forEach(d => {
+        if (!findDeptManager(d.id)) gaps.push({ key: "m_" + d.id, text: `${d.name} بدون مدير`, go: () => { setScreen("structure"); setStructSel({ kind: "dept", id: d.id }); } });
+        if (d.enabled !== false && (!d.allowedTaskTypes || d.allowedTaskTypes.length === 0)) gaps.push({ key: "t_" + d.id, text: `${d.name} بلا أنواع مهام مسموحة`, go: () => { setScreen("structure"); setStructSel({ kind: "dept", id: d.id }); } });
+      });
+      units.forEach(u => {
+        if (!findUnitLeader(u)) gaps.push({ key: "l_" + u.id, text: `${u.name} بدون قائد`, go: () => { setScreen("structure"); setStructSel({ kind: "unit", id: u.id }); } });
+      });
+      const deptsWithMgr = departments.filter(d => findDeptManager(d.id)).length;
+      const unitsWithLeader = units.filter(u => findUnitLeader(u)).length;
+      const deptsWithTypes = departments.filter(d => (d.allowedTaskTypes || []).length > 0).length;
+      const totalChecks = departments.length * 2 + units.length + 1;
+      const passedChecks = deptsWithMgr + deptsWithTypes + unitsWithLeader + (executives.length > 0 ? 1 : 0);
+      const readiness = totalChecks ? Math.round((passedChecks / totalChecks) * 100) : 100;
+
+      // ---------- عمليات التعديل ----------
+      const patchConfig = (patch) => setDb(prev => ({ ...prev, systemConfig: { ...prev.systemConfig, ...patch(prev.systemConfig || {}) } }));
+      const pulseSaved = () => { setSavedPulse(true); clearTimeout(window.__pa2SavedT); window.__pa2SavedT = setTimeout(() => setSavedPulse(false), 1600); };
+
+      const managerOptions = leaders
+        .filter(u => u.roleType !== "platform_admin")
+        .map(u => {
+          const d = isOperational(u) ? departments.find(x => x.id === u.departmentId) : null;
+          return { id: u.id, name: pa2Short(u.name), hint: d ? `يدير ${d.shortName || d.name}` : pa2RoleLabel(u), willMove: true };
+        });
+      const unitLeaderOptions = db.users
+        .filter(u => u.roleType !== "platform_admin")
+        .map(u => ({ id: u.id, name: pa2Short(u.name), hint: u.roleType === "cadre" ? (u.unit || "كادر") : pa2RoleLabel(u) }));
+
+      const applyManager = (users, deptId, deptName, newMgrId) =>
+        users.map(u => {
+          if (u.id === newMgrId) return { ...u, roleType: "operational_admin", departmentId: deptId, jobTitle: `مدير ${deptName}` };
+          if (isOperational(u) && u.departmentId === deptId && u.id !== newMgrId) return { ...u, departmentId: null };
+          return u;
+        });
+
+      const saveDept = (deptId, draft) => {
+        const isNew = !deptId;
+        const id = deptId || ("dept_" + Date.now());
+        const name = draft.name.trim();
+        setDb(prev => {
+          const list = prev.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+          const fields = {
+            name,
+            shortName: name.replace(/^(إدارة|الإدارة)\s+/, "") || name,
+            description: draft.description.trim(),
+            maxTotalTasks: draft.maxTotalTasks,
+            maxPerTypePerCadre: draft.maxPerTypePerCadre,
+            allowedTaskTypes: draft.allowedTaskTypes,
+            enabled: draft.enabled
+          };
+          const nextList = isNew
+            ? [...list, { id, icon: "🏛️", isCore: false, ...fields }]
+            : list.map(d => d.id === id ? { ...d, ...fields } : d);
+          const currentMgr = prev.users.find(u => isOperational(u) && u.departmentId === id);
+          let users = prev.users;
+          if ((draft.managerId || "") !== (currentMgr?.id || "")) {
+            users = draft.managerId
+              ? applyManager(prev.users, id, name, draft.managerId)
+              : prev.users.map(u => (currentMgr && u.id === currentMgr.id) ? { ...u, departmentId: null } : u);
+          }
+          return { ...prev, users, systemConfig: { ...prev.systemConfig, departments: nextList } };
+        });
+        if (isNew) setStructSel({ kind: "dept", id });
+        showToast(isNew ? "تم تأسيس الإدارة ✓" : "تم حفظ التغييرات ✓");
+      };
+
+      const deleteDept = (deptId) => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => (isOperational(u) && u.departmentId === deptId) ? { ...u, departmentId: null } : u),
+          systemConfig: { ...prev.systemConfig, departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).filter(d => d.id !== deptId) }
+        }));
+        setStructSel(null);
+        showToast("تم حذف الإدارة");
+      };
+
+      const saveUnit = (unitId, draft) => {
+        const isNew = !unitId;
+        const id = unitId || ("unit_" + Date.now());
+        const name = draft.name.trim();
+        if (units.some(u => u.name === name && u.id !== unitId)) { showToast("يوجد وحدة بنفس الاسم"); return; }
+        const code = (draft.inviteCode || "").trim().toUpperCase() || ("MAYDAN-U" + (units.length + 1));
+        setDb(prev => {
+          const list = prev.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+          const old = list.find(u => u.id === id);
+          const nextList = isNew
+            ? [...list, { id, name, inviteCode: code, leaderUserId: draft.leaderUserId || null, defaultDepartments: ["dept_hr", "dept_tarbawi"] }]
+            : list.map(u => u.id === id ? { ...u, name, inviteCode: code, leaderUserId: draft.leaderUserId || null } : u);
+          // إعادة تسمية الوحدة تنعكس على كوادرها
+          const users = (old && old.name !== name) ? prev.users.map(u => u.unit === old.name ? { ...u, unit: name } : u) : prev.users;
+          return { ...prev, users, systemConfig: { ...prev.systemConfig, organizationalUnits: nextList } };
+        });
+        if (isNew) setStructSel({ kind: "unit", id });
+        showToast(isNew ? "تم تأسيس الوحدة ✓" : "تم حفظ التغييرات ✓");
+      };
+
+      const deleteUnit = (unitId) => {
+        if (units.length <= 1) { showToast("يجب الإبقاء على وحدة واحدة على الأقل"); return; }
+        patchConfig(cfg => ({ organizationalUnits: (cfg.organizationalUnits || DEFAULT_UNITS).filter(u => u.id !== unitId) }));
+        setStructSel(null);
+        showToast("تم حذف الوحدة");
+      };
+
+      const isUsernameTaken = (name, ignoreId) => {
+        const clean = name.trim().toLowerCase();
+        return db.users.some(u => u.id !== ignoreId && (u.username || "").toLowerCase() === clean);
+      };
+
+      const saveLeader = (userId, draft) => {
+        const isNew = !userId;
+        const id = userId || ("u_" + Date.now());
+        setDb(prev => {
+          let users = prev.users;
+          const role = draft.roleType;
+          const deptId = role === "operational_admin" ? draft.departmentId : null;
+          // مدير واحد لكل إدارة: يُفك ارتباط المدير السابق
+          if (deptId) users = users.map(u => (u.id !== id && isOperational(u) && u.departmentId === deptId) ? { ...u, departmentId: null } : u);
+          const deptObj = (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).find(d => d.id === deptId);
+          const base = {
+            name: draft.name.trim(),
+            jobTitle: draft.jobTitle.trim() || (deptObj ? `مدير ${deptObj.name}` : pa2RoleLabel({ roleType: role })),
+            roleType: role,
+            departmentId: deptId,
+            username: draft.username.trim(),
+            unit: role === "executive" ? "القيادة التنفيذية" : role === "platform_admin" ? "إدارة المنصة التقنية" : (deptObj?.name || "")
+          };
+          if (isNew) return { ...prev, users: [...users, { id, ...base, password: draft.password || pa2TempPassword(), mustChangePassword: true }] };
+          return { ...prev, users: users.map(u => u.id === id ? { ...u, ...base } : u) };
+        });
+        if (isNew) setLeaderSel(id);
+        showToast(isNew ? "تم إنشاء الحساب ✓" : "تم حفظ التغييرات ✓");
+      };
+
+      const deleteLeader = (userId) => {
+        if (userId === currentUser.id) return;
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.filter(u => u.id !== userId),
+          systemConfig: {
+            ...prev.systemConfig,
+            organizationalUnits: (prev.systemConfig?.organizationalUnits || DEFAULT_UNITS).map(un => un.leaderUserId === userId ? { ...un, leaderUserId: null } : un)
+          }
+        }));
+        setLeaderSel(null);
+        showToast("تم حذف الحساب");
+      };
+
+      const resetPassword = (userId) => {
+        const temp = pa2TempPassword();
+        setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === userId ? { ...u, password: temp, mustChangePassword: true } : u) }));
+        return temp;
+      };
+
+      const setRule = (key, value) => {
+        patchConfig(cfg => ({ governanceRules: { ...DEFAULT_GOVERNANCE_RULES, ...(cfg.governanceRules || {}), [key]: value } }));
+        pulseSaved();
+      };
+
+      const go = (s) => { setScreen(s); window.scrollTo({ top: 0 }); };
+
+      // ---------- الهيكل العام ----------
+      const NAV = [
+        { id: "overview", label: "نظرة عامة", icon: "home", badge: gaps.length || null },
+        { id: "structure", label: "الهيكل التنظيمي", icon: "tree" },
+        { id: "leaders", label: "القادة والصلاحيات", icon: "users" },
+        { id: "rules", label: "ضوابط النظام", icon: "sliders" }
+      ];
+      const cloudOk = cloudStatus === "connected";
+      const firstName = pa2Short(currentUser.name);
+
+      const Header = ({ eyebrow, title, desc, actions }) => (
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-8">
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium text-orange-700">{eyebrow}</div>
+            <h1 className="text-[30px] sm:text-[34px] font-bold text-stone-900 leading-tight mt-1.5">{title}</h1>
+            {desc && <p className="text-[15px] text-stone-500 mt-2 leading-relaxed max-w-xl">{desc}</p>}
+          </div>
+          {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+        </div>
+      );
+
+      const PrimaryBtn = ({ onClick, children }) => (
+        <button onClick={onClick} className="h-11 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 inline-flex items-center gap-2 transition">
+          {children}
+        </button>
+      );
+
+      // ---------- شاشة: نظرة عامة ----------
+      const renderOverview = () => {
+        const bars = [
+          { label: "إدارات لها مدير", done: deptsWithMgr, total: departments.length },
+          { label: "وحدات لها قائد", done: unitsWithLeader, total: units.length },
+          { label: "إدارات حُددت مهامها", done: deptsWithTypes, total: departments.length }
+        ];
+        const visibleGaps = showAllGaps ? gaps : gaps.slice(0, 1);
+        return (
+          <>
+            <Header
+              eyebrow="إدارة المنصة"
+              title={`أهلاً، ${firstName}`}
+              desc="هذا هيكل ميدان كما هو الآن، وما يحتاج انتباهك قبل أن يبدأ الكوادر."
+              actions={<PrimaryBtn onClick={() => { go("structure"); setStructSel({ kind: "new_dept" }); }}><PA2Icon name="plus" className="w-4 h-4" /> إدارة جديدة</PrimaryBtn>}
+            />
+
+            {/* مساعد الإعداد */}
+            {gaps.length > 0 ? (
+              <div className="rounded-[24px] bg-[#FFF3E2] px-6 py-5 mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                  <span className="w-11 h-11 rounded-full bg-white text-orange-600 inline-flex items-center justify-center shrink-0">
+                    <PA2Icon name="spark" className="w-5 h-5" />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium text-orange-700">مساعد الإعداد</div>
+                    <div className="text-[17px] font-semibold text-stone-900 mt-0.5">{gaps.length} {gaps.length === 1 ? "نقطة تحتاج" : "نقاط تحتاج"} انتباهك</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={gaps[0].go} className="h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">معالجة الآن</button>
+                    {gaps.length > 1 && (
+                      <button onClick={() => setShowAllGaps(v => !v)} className="h-10 px-4 rounded-full text-[14px] text-stone-700 hover:bg-white/70">
+                        {showAllGaps ? "إخفاء" : "عرض الكل"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 sm:mr-[60px] divide-y divide-orange-200/60">
+                  {visibleGaps.map(g => (
+                    <button key={g.key} onClick={g.go} className="w-full flex items-center justify-between py-2.5 text-right group">
+                      <span className="flex items-center gap-2.5 text-[14px] text-stone-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />{g.text}
+                      </span>
+                      <span className="text-[13px] text-orange-700 opacity-70 group-hover:opacity-100 inline-flex items-center gap-1">معالجة <PA2Icon name="chevron" className="w-3.5 h-3.5" /></span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-[24px] bg-[#E3F1E8] px-6 py-5 mb-6 flex items-center gap-4">
+                <span className="w-11 h-11 rounded-full bg-white text-emerald-600 inline-flex items-center justify-center"><PA2Icon name="check" className="w-5 h-5" /></span>
+                <div>
+                  <div className="text-[13px] font-medium text-emerald-700">مساعد الإعداد</div>
+                  <div className="text-[17px] font-semibold text-stone-900 mt-0.5">الهيكل مكتمل وجاهز للتشغيل</div>
+                </div>
+              </div>
+            )}
+
+            {/* بطاقة الجاهزية */}
+            <div className="bg-white rounded-[28px] p-3 mb-10 flex flex-col md:flex-row gap-3">
+              <div className="md:w-[300px] rounded-[22px] bg-[#1C1917] text-white p-6 flex flex-col justify-between min-h-[200px]">
+                <div className="text-[14px] text-stone-400">جاهزية الهيكل</div>
+                <div>
+                  <div className="text-[56px] font-bold leading-none tabular-nums">{readiness}<span className="text-[28px] text-stone-500">%</span></div>
+                  <div className="text-[13px] text-stone-400 mt-3">{passedChecks} من {totalChecks} فحوصات مكتملة</div>
+                </div>
+              </div>
+              <div className="flex-1 px-4 py-4 md:px-6 flex flex-col justify-between gap-6">
+                <div className="space-y-4">
+                  {bars.map(b => {
+                    const pct = b.total ? Math.round((b.done / b.total) * 100) : 100;
+                    return (
+                      <div key={b.label}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[14px] text-stone-600">{b.label}</span>
+                          <span className="text-[14px] font-semibold text-stone-900 tabular-nums">{b.done} من {b.total}</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-[#F1EEE9] overflow-hidden">
+                          <div className={`h-full rounded-full ${pct === 100 ? "bg-emerald-500" : "bg-orange-500"}`} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-3 divide-x divide-x-reverse divide-stone-200 border-t border-stone-100 pt-4">
+                  {[
+                    { n: departments.length, l: "إدارات" },
+                    { n: units.length, l: "وحدات" },
+                    { n: cadres.length, l: "كوادر" }
+                  ].map(s => (
+                    <div key={s.l} className="px-3 first:pr-0 text-right">
+                      <div className="text-[24px] font-bold text-stone-900 tabular-nums">{s.n}</div>
+                      <div className="text-[13px] text-stone-500">{s.l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* مستويات المنصة */}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-stone-900">مستويات المنصة</h2>
+              <button onClick={() => go("structure")} className="text-[14px] text-stone-500 hover:text-stone-900">عرض الهيكل</button>
+            </div>
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className={`${PA2_PASTELS[2].bg} rounded-[24px] p-6 flex flex-col min-h-[180px]`}>
+                <div className={`text-[13px] font-medium ${PA2_PASTELS[2].ink}`}>المستوى الأعلى</div>
+                <div className="text-[19px] font-bold text-stone-900 mt-1">الإدارة التنفيذية</div>
+                <div className="text-[14px] text-stone-600 mt-1.5">{executives.length ? pa2Short(executives[0].name) + (executives.length > 1 ? ` و${executives.length - 1} آخرون` : "") : "لا يوجد حساب بعد"}</div>
+                <div className="mt-auto pt-5 flex items-center justify-between">
+                  <span className="text-[13px] text-stone-500">المكتب التنفيذي</span>
+                  {executives[0] && (
+                    <button onClick={() => onPreviewUser(executives[0].id)} className="h-8 px-3.5 rounded-full bg-white text-[13px] text-stone-800 hover:bg-white/80">معاينة الواجهة</button>
+                  )}
+                </div>
+              </div>
+              {departments.map((d, i) => {
+                const tone = pa2DeptTone(d, i);
+                const mgr = findDeptManager(d.id);
+                return (
+                  <div key={d.id} className={`${tone.bg} rounded-[24px] p-6 flex flex-col min-h-[180px] ${d.enabled === false ? "opacity-60" : ""}`}>
+                    <div className={`text-[13px] font-medium ${tone.ink}`}>{d.enabled === false ? "إدارة موقوفة" : "إدارة تشغيلية"}</div>
+                    <button onClick={() => { go("structure"); setStructSel({ kind: "dept", id: d.id }); }} className="text-[19px] font-bold text-stone-900 mt-1 text-right hover:underline underline-offset-4 decoration-stone-300">{d.name}</button>
+                    <div className={`text-[14px] mt-1.5 ${mgr ? "text-stone-600" : "text-orange-800"}`}>{mgr ? pa2Short(mgr.name) : "بدون مدير"}</div>
+                    <div className="mt-auto pt-5 flex items-center justify-between">
+                      <span className="text-[13px] text-stone-500">{(d.allowedTaskTypes || []).length} أنواع مهام · {deptCadreCount(d)} كادر</span>
+                      {mgr && <button onClick={() => onPreviewUser(mgr.id)} className="h-8 px-3.5 rounded-full bg-white text-[13px] text-stone-800 hover:bg-white/80">معاينة الواجهة</button>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      };
+
+      // ---------- شاشة: الهيكل التنظيمي ----------
+      const renderStructurePanel = () => {
+        if (!structSel) return <PA2EmptyPanel title="اختر عنصراً من الهيكل" text="تظهر تفاصيل الإدارة أو الوحدة هنا لتعديلها، دون مغادرة الصفحة." />;
+        if (structSel.kind === "new_dept") {
+          return <PA2DeptPanel key="new_dept" isNew managerOptions={managerOptions} onSave={d => saveDept(null, d)} onClose={() => setStructSel(null)} onPreview={onPreviewUser} />;
+        }
+        if (structSel.kind === "new_unit") {
+          return <PA2UnitPanel key="new_unit" isNew leaderOptions={unitLeaderOptions} onSave={d => saveUnit(null, d)} onClose={() => setStructSel(null)} showToast={showToast} />;
+        }
+        if (structSel.kind === "dept") {
+          const d = departments.find(x => x.id === structSel.id);
+          if (!d) return null;
+          const mgr = findDeptManager(d.id);
+          return (
+            <PA2DeptPanel
+              key={d.id + (mgr?.id || "")}
+              dept={d}
+              managerId={mgr?.id || ""}
+              managerOptions={managerOptions}
+              cadreCount={deptCadreCount(d)}
+              onSave={draft => saveDept(d.id, draft)}
+              onDelete={() => deleteDept(d.id)}
+              onPreview={onPreviewUser}
+              onClose={() => setStructSel(null)}
+            />
+          );
+        }
+        const u = units.find(x => x.id === structSel.id);
+        if (!u) return null;
+        return (
+          <PA2UnitPanel
+            key={u.id}
+            unit={u}
+            leaderOptions={unitLeaderOptions}
+            cadreCount={unitCadreCount(u)}
+            canDelete={units.length > 1}
+            onSave={draft => saveUnit(u.id, draft)}
+            onDelete={() => deleteUnit(u.id)}
+            onClose={() => setStructSel(null)}
+            showToast={showToast}
+          />
+        );
+      };
+
+      const isSel = (kind, id) => structSel && structSel.kind === kind && structSel.id === id;
+
+      const TreeNode = ({ selected, onClick, tone, title, sub, subWarn, meta, dashed }) => (
+        <div className="relative">
+          <span className="absolute top-1/2 -right-7 w-7 h-[2px] bg-stone-200" />
+          <button
+            onClick={onClick}
+            className={`w-full text-right rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 transition ${
+              dashed ? "border-2 border-dashed border-stone-300 text-stone-500 hover:border-stone-400 hover:text-stone-800 bg-transparent"
+                : selected ? "bg-white ring-2 ring-stone-900 shadow-sm" : "bg-white hover:shadow-[0_6px_20px_-10px_rgba(28,25,23,0.25)]"
+            }`}
+          >
+            {dashed ? (
+              <span className="w-10 h-10 rounded-full bg-white inline-flex items-center justify-center shrink-0"><PA2Icon name="plus" className="w-4 h-4" /></span>
+            ) : (
+              <span className={`w-10 h-10 rounded-full ${tone.bg} inline-flex items-center justify-center shrink-0`}><span className={`w-2.5 h-2.5 rounded-full ${tone.dot}`} /></span>
+            )}
+            <span className="flex-1 min-w-0">
+              <span className={`block text-[15px] ${dashed ? "" : "font-semibold text-stone-900"} truncate`}>{title}</span>
+              {sub && <span className={`block text-[13px] mt-0.5 truncate ${subWarn ? "text-orange-700" : "text-stone-500"}`}>{sub}</span>}
+            </span>
+            {meta && <span className="text-[12px] text-stone-400 shrink-0">{meta}</span>}
+          </button>
+        </div>
+      );
+
+      const GroupLabel = ({ children, count }) => (
+        <div className="relative flex items-center gap-2 py-1">
+          <span className="absolute top-1/2 -right-[35px] w-3 h-3 rounded-full bg-[#F4F2EE] border-2 border-stone-300 -translate-y-1/2" />
+          <span className="text-[13px] font-medium text-stone-500">{children}</span>
+          <span className="text-[12px] text-stone-400">· {count}</span>
+        </div>
+      );
+
+      const renderMap = () => (
+        <div className="bg-[#EFECE6] rounded-[28px] p-5 sm:p-7">
+          <div className="rounded-[22px] bg-[#1C1917] text-white px-5 py-4 flex items-center gap-4 max-w-md">
+            <span className="w-11 h-11 rounded-full bg-white/10 inline-flex items-center justify-center"><PA2Icon name="tree" className="w-5 h-5" /></span>
+            <div className="min-w-0">
+              <div className="text-[16px] font-semibold">ميدان</div>
+              <div className="text-[13px] text-stone-400 truncate">الإدارة التنفيذية · {executives.length} حساب</div>
+            </div>
+          </div>
+          <div className="mr-[41px] pr-7 border-r-2 border-stone-200 pt-5 space-y-3">
+            <GroupLabel count={departments.length}>الإدارات التشغيلية</GroupLabel>
+            {departments.map((d, i) => {
+              const mgr = findDeptManager(d.id);
+              return (
+                <TreeNode
+                  key={d.id}
+                  selected={isSel("dept", d.id)}
+                  onClick={() => setStructSel({ kind: "dept", id: d.id })}
+                  tone={pa2DeptTone(d, i)}
+                  title={d.name}
+                  sub={mgr ? pa2Short(mgr.name) : "بدون مدير"}
+                  subWarn={!mgr}
+                  meta={d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع`}
+                />
+              );
+            })}
+            <TreeNode dashed title="إضافة إدارة" onClick={() => setStructSel({ kind: "new_dept" })} />
+            <div className="pt-4">
+              <GroupLabel count={units.length}>الوحدات التنظيمية</GroupLabel>
+            </div>
+            {units.map(u => {
+              const ld = findUnitLeader(u);
+              return (
+                <TreeNode
+                  key={u.id}
+                  selected={isSel("unit", u.id)}
+                  onClick={() => setStructSel({ kind: "unit", id: u.id })}
+                  tone={PA2_PASTELS[4]}
+                  title={u.name}
+                  sub={ld ? pa2Short(ld.name) : "بدون قائد"}
+                  subWarn={!ld}
+                  meta={`${unitCadreCount(u)} كادر`}
+                />
+              );
+            })}
+            <TreeNode dashed title="إضافة وحدة" onClick={() => setStructSel({ kind: "new_unit" })} />
+          </div>
+        </div>
+      );
+
+      const ListSection = ({ title, rows, onAdd, addLabel }) => (
+        <div className="bg-white rounded-[28px] p-2">
+          <div className="flex items-center justify-between px-4 pt-3 pb-2">
+            <h2 className="text-[17px] font-bold text-stone-900">{title}</h2>
+            <button onClick={onAdd} className="h-9 px-3.5 rounded-full text-[13px] text-stone-600 hover:bg-[#F4F2EE] inline-flex items-center gap-1.5"><PA2Icon name="plus" className="w-4 h-4" />{addLabel}</button>
+          </div>
+          <div>
+            {rows.map(r => (
+              <button key={r.key} onClick={r.onClick} className={`w-full text-right px-4 py-3.5 rounded-[18px] flex items-center gap-3.5 transition ${r.selected ? "bg-[#F4F2EE]" : "hover:bg-[#FAF9F7]"}`}>
+                <span className={`w-9 h-9 rounded-full ${r.tone.bg} inline-flex items-center justify-center shrink-0`}><span className={`w-2 h-2 rounded-full ${r.tone.dot}`} /></span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[15px] font-semibold text-stone-900 truncate">{r.title}</span>
+                  <span className={`block text-[13px] mt-0.5 truncate ${r.warn ? "text-orange-700" : "text-stone-500"}`}>{r.sub}</span>
+                </span>
+                <span className="text-[13px] text-stone-400 shrink-0 hidden sm:block">{r.meta}</span>
+                <PA2Icon name="chevron" className="w-4 h-4 text-stone-300 shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+
+      const renderList = () => (
+        <div className="space-y-5">
+          <ListSection
+            title="الإدارات التشغيلية"
+            addLabel="إدارة"
+            onAdd={() => setStructSel({ kind: "new_dept" })}
+            rows={departments.map((d, i) => {
+              const mgr = findDeptManager(d.id);
+              return {
+                key: d.id, tone: pa2DeptTone(d, i), title: d.name, sub: mgr ? pa2Short(mgr.name) : "بدون مدير", warn: !mgr,
+                meta: d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع مهام`,
+                selected: isSel("dept", d.id), onClick: () => setStructSel({ kind: "dept", id: d.id })
+              };
+            })}
+          />
+          <ListSection
+            title="الوحدات التنظيمية"
+            addLabel="وحدة"
+            onAdd={() => setStructSel({ kind: "new_unit" })}
+            rows={units.map(u => {
+              const ld = findUnitLeader(u);
+              return {
+                key: u.id, tone: PA2_PASTELS[4], title: u.name, sub: ld ? pa2Short(ld.name) : "بدون قائد", warn: !ld,
+                meta: `${unitCadreCount(u)} كادر`, selected: isSel("unit", u.id), onClick: () => setStructSel({ kind: "unit", id: u.id })
+              };
+            })}
+          />
+        </div>
+      );
+
+      const renderStructure = () => (
+        <>
+          <Header
+            eyebrow="الهيكل التنظيمي"
+            title="الإدارات والوحدات"
+            desc="اختر أي عنصر لتعديله في اللوحة الجانبية. لا يُحفظ شيء حتى تضغط حفظ."
+            actions={<>
+              <PA2Segmented value={mapMode} onChange={setMapMode} options={[{ value: "map", label: "خريطة" }, { value: "list", label: "قائمة" }]} />
+              <PrimaryBtn onClick={() => setStructSel({ kind: "new_dept" })}><PA2Icon name="plus" className="w-4 h-4" /> إدارة جديدة</PrimaryBtn>
+            </>}
+          />
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
+            <div>{mapMode === "map" ? renderMap() : renderList()}</div>
+            <div className="lg:sticky lg:top-6">{renderStructurePanel()}</div>
+          </div>
+        </>
+      );
+
+      // ---------- شاشة: القادة والصلاحيات ----------
+      const renderLeaders = () => {
+        const q = leaderSearch.trim().toLowerCase();
+        const rows = leaders
+          .filter(u => leaderFilter === "all" || (leaderFilter === "executive" ? u.roleType === "executive" : isOperational(u)))
+          .filter(u => !q || (u.name || "").toLowerCase().includes(q) || (u.username || "").toLowerCase().includes(q))
+          .sort((a, b) => {
+            const rank = r => r === "platform_admin" ? 0 : r === "executive" ? 1 : 2;
+            return rank(a.roleType) - rank(b.roleType);
+          });
+        const selUser = leaderSel && leaderSel !== "new_leader" ? db.users.find(u => u.id === leaderSel) : null;
+        const deptManagers = {};
+        departments.forEach(d => { const m = findDeptManager(d.id); if (m) deptManagers[d.id] = { id: m.id, name: pa2Short(m.name) }; });
+        return (
+          <>
+            <Header
+              eyebrow="القادة والصلاحيات"
+              title="حسابات القيادة"
+              desc="من يدخل المنصة بصلاحيات قيادية. حسابات الكوادر تديرها إدارة الموارد البشرية."
+              actions={<PrimaryBtn onClick={() => setLeaderSel("new_leader")}><PA2Icon name="plus" className="w-4 h-4" /> قائد جديد</PrimaryBtn>}
+            />
+            <div className="grid lg:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
+              <div className="bg-white rounded-[28px] p-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 pt-3 pb-3">
+                  <PA2Segmented size="sm" value={leaderFilter} onChange={setLeaderFilter} options={[{ value: "all", label: "الكل" }, { value: "executive", label: "التنفيذية" }, { value: "operational", label: "مديرو الإدارات" }]} />
+                  <label className="relative block sm:w-60">
+                    <PA2Icon name="search" className="w-4 h-4 text-stone-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
+                    <input value={leaderSearch} onChange={e => setLeaderSearch(e.target.value)} placeholder="بحث بالاسم أو المستخدم" className="w-full h-10 rounded-full bg-[#F4F2EE] pr-10 pl-4 text-[14px] focus:outline-none focus:bg-white focus:ring-1 focus:ring-stone-300" />
+                  </label>
+                </div>
+                <div className="hidden md:grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.1fr)_96px] gap-4 px-4 py-2.5 text-[12px] text-stone-400 border-b border-stone-100">
+                  <span>الاسم</span><span>المستوى</span><span>الإدارة</span><span className="text-left">المستخدم</span>
+                </div>
+                <div>
+                  {rows.map(u => {
+                    const d = isOperational(u) ? departments.find(x => x.id === u.departmentId) : null;
+                    const selected = leaderSel === u.id;
+                    return (
+                      <button key={u.id} onClick={() => setLeaderSel(u.id)} className={`w-full text-right grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.1fr)_96px] gap-4 items-center px-4 py-3.5 rounded-[18px] transition ${selected ? "bg-[#F4F2EE]" : "hover:bg-[#FAF9F7]"}`}>
+                        <span className="flex items-center gap-3 min-w-0">
+                          <PA2Avatar user={u} />
+                          <span className="min-w-0">
+                            <span className="flex items-center gap-2">
+                              <span className="text-[15px] font-semibold text-stone-900 truncate">{pa2Short(u.name)}</span>
+                              {u.id === currentUser.id && <span className="text-[11px] px-2 py-0.5 rounded-full bg-stone-900 text-white shrink-0">حسابك</span>}
+                            </span>
+                            <span className="block text-[13px] text-stone-500 truncate mt-0.5">{u.jobTitle}</span>
+                          </span>
+                        </span>
+                        <span className="hidden md:block text-[14px] text-stone-600">{pa2RoleLabel(u)}</span>
+                        <span className={`hidden md:block text-[14px] truncate ${isOperational(u) && !d ? "text-orange-700" : "text-stone-600"}`}>{d ? d.name : (isOperational(u) ? "بلا إدارة" : "—")}</span>
+                        <span dir="ltr" className="text-[13px] text-stone-400 font-mono text-left truncate">{u.username}</span>
+                      </button>
+                    );
+                  })}
+                  {rows.length === 0 && <div className="text-center text-[14px] text-stone-400 py-10">لا توجد نتائج</div>}
+                </div>
+              </div>
+              <div className="lg:sticky lg:top-6">
+                {leaderSel === "new_leader" ? (
+                  <PA2LeaderPanel key="new_leader" isNew departments={departments} deptManagers={deptManagers} isUsernameTaken={isUsernameTaken} onSave={d => saveLeader(null, d)} onClose={() => setLeaderSel(null)} showToast={showToast} />
+                ) : selUser ? (
+                  <PA2LeaderPanel
+                    key={selUser.id}
+                    user={selUser}
+                    isSelf={selUser.id === currentUser.id}
+                    departments={departments}
+                    deptManagers={deptManagers}
+                    isUsernameTaken={isUsernameTaken}
+                    onSave={d => saveLeader(selUser.id, d)}
+                    onDelete={() => deleteLeader(selUser.id)}
+                    onPreview={onPreviewUser}
+                    onResetPassword={resetPassword}
+                    onClose={() => setLeaderSel(null)}
+                    showToast={showToast}
+                  />
+                ) : (
+                  <PA2EmptyPanel title="اختر حساباً" text="تظهر بيانات الحساب وصلاحياته هنا، مع إعادة تعيين كلمة المرور بأمان." />
+                )}
+              </div>
+            </div>
+          </>
+        );
+      };
+
+      // ---------- شاشة: ضوابط النظام ----------
+      const RuleRow = ({ title, desc, children }) => (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4">
+          <div className="min-w-0">
+            <div className="text-[15px] font-medium text-stone-900">{title}</div>
+            {desc && <div className="text-[13px] text-stone-500 mt-0.5 leading-relaxed">{desc}</div>}
+          </div>
+          <div className="shrink-0">{children}</div>
+        </div>
+      );
+      const RuleCard = ({ title, desc, children }) => (
+        <div className="bg-white rounded-[28px] px-6 pt-5 pb-2">
+          <h2 className="text-[17px] font-bold text-stone-900">{title}</h2>
+          {desc && <p className="text-[13px] text-stone-500 mt-1">{desc}</p>}
+          <div className="divide-y divide-stone-100 mt-2">{children}</div>
+        </div>
+      );
+
+      const renderRules = () => (
+        <>
+          <Header
+            eyebrow="ضوابط النظام"
+            title="القواعد العامة"
+            desc="تسري على جميع الإدارات والكوادر. أي تغيير هنا يُحفظ فوراً."
+            actions={
+              <span className={`h-9 px-4 rounded-full text-[13px] inline-flex items-center gap-1.5 transition ${savedPulse ? "bg-emerald-50 text-emerald-700" : "bg-white text-stone-400"}`}>
+                <PA2Icon name="check" className="w-4 h-4" /> {savedPulse ? "تم الحفظ" : "يُحفظ تلقائياً"}
+              </span>
+            }
+          />
+          <div className="grid xl:grid-cols-2 gap-5 items-start">
+            <div className="space-y-5">
+              <RuleCard title="التقييم والنقاط" desc="كيف تُحسب إنجازات الكوادر.">
+                <RuleRow title="نقاط التسليم المتأخر" desc="نسبة النقاط التي يحصل عليها الكادر عند التأخر.">
+                  <PA2Stepper value={rules.latePointsPct} min={0} max={100} suffix="%" onChange={v => setRule("latePointsPct", v)} />
+                </RuleRow>
+                <RuleRow title="حد النجاح في الاختبار" desc="أقل نسبة لاعتبار اختبار المحاضرة ناجحاً.">
+                  <PA2Stepper value={rules.quizPassThresholdPct} min={0} max={100} suffix="%" onChange={v => setRule("quizPassThresholdPct", v)} />
+                </RuleRow>
+                <RuleRow title="أيام الورد اليومي المطلوبة" desc="عدد الأيام في الأسبوع لاكتمال العادة اليومية.">
+                  <PA2Stepper value={rules.dailyTaskTargetDays} min={1} max={7} suffix="أيام" onChange={v => setRule("dailyTaskTargetDays", v)} />
+                </RuleRow>
+              </RuleCard>
+              <RuleCard title="الأمان">
+                <RuleRow title="تغيير كلمة المرور عند أول دخول" desc="يُطلب من كل حساب جديد تعيين كلمة مرور خاصة.">
+                  <PA2Switch checked={!!rules.forcePasswordChangeOnFirstLogin} onChange={v => setRule("forcePasswordChangeOnFirstLogin", v)} />
+                </RuleRow>
+              </RuleCard>
+            </div>
+            <div className="space-y-5">
+              <RuleCard title="صلاحيات الكادر" desc="ما يستطيع الكادر تعديله بنفسه.">
+                <RuleRow title="تعديل الاسم">
+                  <PA2Switch checked={!!rules.allowCadreNameEdit} onChange={v => setRule("allowCadreNameEdit", v)} />
+                </RuleRow>
+                <RuleRow title="تغيير كلمة المرور">
+                  <PA2Switch checked={!!rules.allowCadrePasswordChange} onChange={v => setRule("allowCadrePasswordChange", v)} />
+                </RuleRow>
+                <RuleRow title="تغيير موعد اللقاء الأسبوعي" desc={rules.allowCadreScheduleChange ? `حتى ${rules.maxScheduleChangesPerMonth} مرات في الشهر` : "الموعد يحدده المدير فقط"}>
+                  <div className="flex items-center gap-3">
+                    {rules.allowCadreScheduleChange && <PA2Stepper value={rules.maxScheduleChangesPerMonth} min={1} max={10} onChange={v => setRule("maxScheduleChangesPerMonth", v)} />}
+                    <PA2Switch checked={!!rules.allowCadreScheduleChange} onChange={v => setRule("allowCadreScheduleChange", v)} />
+                  </div>
+                </RuleRow>
+                <RuleRow title="التسليم المتأخر" desc={rules.allowLateSubmissions ? `للأسابيع الماضية حتى ${rules.maxPastWeeksEditable} أسابيع` : "لا يُقبل بعد انتهاء الأسبوع"}>
+                  <div className="flex items-center gap-3">
+                    {rules.allowLateSubmissions && <PA2Stepper value={rules.maxPastWeeksEditable} min={1} max={12} onChange={v => setRule("maxPastWeeksEditable", v)} />}
+                    <PA2Switch checked={!!rules.allowLateSubmissions} onChange={v => setRule("allowLateSubmissions", v)} />
+                  </div>
+                </RuleRow>
+              </RuleCard>
+              <RuleCard title="البيانات">
+                <RuleRow title="المزامنة السحابية" desc={cloudOk ? `متصلة${lastSyncAt ? ` · آخر مزامنة ${lastSyncAt}` : ""}` : "البيانات محفوظة على هذا الجهاز فقط"}>
+                  <button onClick={onOpenCloudSetup} className="h-9 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50">{cloudOk ? "الإعدادات" : "ربط سحابي"}</button>
+                </RuleRow>
+                <RuleRow title="استعادة البيانات التجريبية" desc="يمسح كل التعديلات ويعيد النظام لحالته الأولى.">
+                  {resetArmed ? (
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setResetArmed(false); onResetDemo(); }} className="h-9 px-4 rounded-full bg-rose-600 text-white text-[13px] font-semibold">تأكيد الاستعادة</button>
+                      <button onClick={() => setResetArmed(false)} className="h-9 px-3 text-[13px] text-stone-500">تراجع</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setResetArmed(true)} className="h-9 px-4 rounded-full text-[13px] text-rose-600 hover:bg-rose-50">استعادة</button>
+                  )}
+                </RuleRow>
+              </RuleCard>
+            </div>
+          </div>
+        </>
+      );
+
+      // ---------- الإطار ----------
+      return (
+        <div dir="rtl" className="min-h-screen bg-[#F4F2EE] text-stone-900 lg:pr-[264px] -mb-20 pb-20">
+          {/* العمود الجانبي */}
+          <aside className="hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30">
+            <div className="px-2">
+              <div className="text-[24px] font-bold text-white leading-none">ميدان</div>
+              <div className="text-[13px] text-stone-500 mt-2 flex items-center gap-2">
+                إدارة المنصة
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300">نسخة كلاود</span>
+              </div>
+            </div>
+            <nav className="mt-10 space-y-1">
+              {NAV.map(n => (
+                <button
+                  key={n.id}
+                  onClick={() => go(n.id)}
+                  className={`w-full h-11 px-4 rounded-full flex items-center gap-3 text-[14px] transition ${
+                    screen === n.id ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  <PA2Icon name={n.icon} />
+                  <span className="flex-1 text-right">{n.label}</span>
+                  {n.badge ? <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-orange-500 text-white text-[12px] font-semibold inline-flex items-center justify-center">{n.badge}</span> : null}
+                </button>
+              ))}
+            </nav>
+            <div className="mt-auto space-y-3">
+              <button onClick={onOpenCloudSetup} className="w-full flex items-center gap-2.5 px-4 h-10 rounded-full bg-white/5 text-[13px] text-stone-400 hover:text-white">
+                <span className={`w-2 h-2 rounded-full ${cloudOk ? "bg-emerald-400" : "bg-amber-400"}`} />
+                {cloudOk ? "متصل بالسحابة" : "حفظ محلي فقط"}
+              </button>
+              {onSwitchVariant && (
+                <button onClick={onSwitchVariant} className="w-full flex items-center gap-2.5 px-4 h-10 rounded-full text-[13px] text-stone-500 hover:text-white">
+                  <PA2Icon name="swap" className="w-4 h-4" /> التبديل لنسخة جيميناي
+                </button>
+              )}
+              <div className="flex items-center gap-3 px-2 pt-3 border-t border-white/10">
+                <PA2Avatar user={{ ...currentUser, roleType: "executive" }} size="w-9 h-9" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] text-white truncate">{firstName}</div>
+                  <div className="text-[12px] text-stone-500">مدير المنصة</div>
+                </div>
+                <button onClick={onLogout} className="w-9 h-9 rounded-full text-stone-400 hover:text-white hover:bg-white/10 inline-flex items-center justify-center" title="تسجيل الخروج">
+                  <PA2Icon name="logout" />
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* شريط الجوال */}
+          <div className="lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[18px] font-bold">ميدان <span className="text-[12px] font-normal text-stone-400">· إدارة المنصة</span></div>
+              <button onClick={onLogout} className="w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center"><PA2Icon name="logout" /></button>
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto mt-3 -mx-1 px-1">
+              {NAV.map(n => (
+                <button key={n.id} onClick={() => go(n.id)} className={`h-9 px-3.5 rounded-full text-[13px] whitespace-nowrap ${screen === n.id ? "bg-white text-stone-900 font-semibold" : "text-stone-400 bg-white/5"}`}>
+                  {n.label}{n.badge ? ` · ${n.badge}` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <main className="px-5 sm:px-8 xl:px-12 py-8 lg:py-12 max-w-[1240px]">
+            {screen === "overview" && renderOverview()}
+            {screen === "structure" && renderStructure()}
+            {screen === "leaders" && renderLeaders()}
+            {screen === "rules" && renderRules()}
+          </main>
+        </div>
+      );
+    }
 
     // ============================================================================
     // 10. EXECUTIVE OFFICE MEMBER PORTAL (بوابة عضو المكتب التنفيذي - النشرة الإدارية)
