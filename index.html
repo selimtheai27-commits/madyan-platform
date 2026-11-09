@@ -556,7 +556,9 @@
       }
       const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
       const match = url.match(regExp);
-      return (match && match[2].length === 11) ? `https://www.youtube.com/embed/${match[2]}` : url;
+      return (match && match[2].length === 11)
+        ? `https://www.youtube.com/embed/${match[2]}?rel=0&modestbranding=1&playsinline=1`
+        : url;
     }
 
     function isIframeVideo(videoType, url) {
@@ -2461,17 +2463,20 @@ CREATE POLICY "Allow public upload on madyan-media"
             <p className="text-xs text-stone-500 leading-relaxed">{safeCurr.lectureDesc}</p>
 
             <div className="rounded-2xl overflow-hidden bg-stone-950 border border-stone-800 aspect-video relative">
-              {safeCurr.videoType === "youtube" ? (
+              {isIframeVideo(safeCurr.videoType, safeCurr.videoUrl) ? (
                 <iframe
                   src={getYoutubeEmbedUrl(safeCurr.videoUrl)}
                   title={safeCurr.lectureTitle}
                   className="w-full h-full"
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
                   allowFullScreen
                 />
               ) : (
                 <video
                   src={safeCurr.videoUrl}
                   controls
+                  controlsList="nodownload"
+                  onContextMenu={e => e.preventDefault()}
                   className="w-full h-full object-contain"
                 />
               )}
