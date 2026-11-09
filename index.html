@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Madyan | محرك بناء العادات المؤسسية والتربوية</title>
+  <title>ميدان | محرك بناء العادات المؤسسية والتربوية</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Google Fonts: Cairo (Arabic) & Plus Jakarta Sans (Bold Sans-Serif for Madyan Logo) -->
+  <!-- Google Fonts: Cairo (Arabic) & Plus Jakarta Sans (Bold Sans-Serif for Maydan Logo) -->
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@800;900&display=swap" rel="stylesheet">
   <!-- React 18 & Babel Standalone -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -47,13 +47,69 @@
     const { useState, useEffect, useMemo } = React;
 
     // ============================================================================
-    // 1. CONSTANTS & INITIAL DATABASE SEED (DUAL-PILLAR: ADMIN + TARBAWI)
+    // 1. CONSTANTS & INITIAL DATABASE SEED (MAYDAN 4-TIER ARCHITECTURE)
     // ============================================================================
     const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
     const DAYS_SHORT_AR = ['أحد', 'اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
     const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
     const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
     const SYSTEM_ANCHOR_DATE = new Date().getTime();
+
+    const DEFAULT_DEPARTMENTS = [
+      {
+        id: "dept_hr",
+        name: "إدارة الموارد البشرية",
+        shortName: "الموارد البشرية",
+        icon: "🏛️",
+        theme: "orange",
+        description: "تختص بمتابعة الانضباط الإداري، المحاضرات الأسبوعية، الأجندة، الحضور، وتوثيق المحاضر.",
+        isCore: true,
+        enabled: true
+      },
+      {
+        id: "dept_tarbawi",
+        name: "الإدارة التربوية",
+        shortName: "الإدارة التربوية",
+        icon: "🌱",
+        theme: "emerald",
+        description: "تختص بمتابعة البناء الذاتي والتزكية، الورد اليومي، القراءة المنهجية، واللقاء التربوي.",
+        isCore: true,
+        enabled: true
+      }
+    ];
+
+    const DEFAULT_UNITS = [
+      {
+        id: "unit_strategy",
+        name: "وحدة التخطيط الاستراتيجي",
+        defaultDepartments: ["dept_hr", "dept_tarbawi"]
+      },
+      {
+        id: "unit_ops",
+        name: "وحدة المتابعة والتنسيق",
+        defaultDepartments: ["dept_hr", "dept_tarbawi"]
+      },
+      {
+        id: "unit_field",
+        name: "وحدة العمل الميداني",
+        defaultDepartments: ["dept_hr", "dept_tarbawi"]
+      }
+    ];
+
+    const DEFAULT_GOVERNANCE_RULES = {
+      allowCadreScheduleChange: true,
+      allowWeekSpecificOverride: true,
+      maxScheduleChangesPerMonth: 2,
+      allowLateSubmissions: true,
+      maxPastWeeksEditable: 4,
+      allowCadreNameEdit: true,
+      allowCadrePasswordChange: true,
+      allowCadreJobTitleEdit: false,
+      allowCadreUnitEdit: false,
+      latePointsPct: 50,
+      quizPassThresholdPct: 60,
+      dailyTaskTargetDays: 5
+    };
 
     const DEFAULT_TARBAWI_TASKS = [
       {
@@ -120,6 +176,9 @@
 
     const INITIAL_STATE = {
       systemConfig: {
+        departments: DEFAULT_DEPARTMENTS,
+        organizationalUnits: DEFAULT_UNITS,
+        governanceRules: DEFAULT_GOVERNANCE_RULES,
         availableCurriculumWeeks: [1, 2, 3, 4, 5, 6, 7, 8],
         tarbawiWeeklyFocus: {
           title: "الإتقان والأمانة في العمل المؤسسي",
@@ -127,7 +186,7 @@
           hint: "تذكّر أن توازن الكادر يجمع بين انضباطه الإداري وزاده التربوي."
         },
         quotes: [
-          { id: 1, text: "الانضباط المؤسسي ليس قيداً، بل هو الجسر الذي يحول الأهداف الاستراتيجية إلى واقع يومي ملموس.", author: "منهجية Madyan" },
+          { id: 1, text: "الانضباط المؤسسي ليس قيداً، بل هو الجسر الذي يحول الأهداف الاستراتيجية إلى واقع يومي ملموس.", author: "منهجية ميدان" },
           { id: 2, text: "التحضير الجيد قبل الاجتماع بـ 24 ساعة يختصر نصف وقت النقاش ويضاعف جودة القرار.", author: "إدارة العمليات" },
           { id: 3, text: "قليلٌ دائمٌ خيرٌ من كثيرٍ منقطع؛ العادة التربوية تُبنى بالمداومة اليومية الهادئة.", author: "المحور التربوي" }
         ],
@@ -213,7 +272,7 @@
             {
               id: "q3",
               text: "عند إنجاز محاضرة أسبوع سابق بعد انتهاء أسبوعها، كيف يتعامل النظام معها؟",
-              options: ["يرفض النظام فتحها نهائياً", "تُحتسب مكتملة في الموعد بـ 100%", "تُوسم كمكتملة متأخراً وتأخذ نصف السكور (50%)", "تحذف جميع نقاط الكادر"],
+              options: ["يرفض النظام فتحها نهائياً", "تُحتسب مكتملة في الموعد بـ 100%", "تُوسم كمكتملة متأخراً وتأخذ نسبة نقاط التأخير المقررة", "تحذف جميع نقاط الكادر"],
               correctIndex: 2
             }
           ]
@@ -222,13 +281,13 @@
 
       users: [
         {
-          id: "u_admin",
-          username: "admin",
-          password: "admin123",
-          roleType: "admin",
-          name: "مدير النظام والـ HR",
-          jobTitle: "المدير التنفيذي للموارد البشرية",
-          unit: "الإدارة العليا"
+          id: "u_platform",
+          username: "sysadmin",
+          password: "1234",
+          roleType: "platform_admin",
+          name: "م. سليم (مدير المنصة التقني)",
+          jobTitle: "مدير المنصة والنظم التقنية",
+          unit: "إدارة المنصة التقنية"
         },
         {
           id: "u_exec",
@@ -237,11 +296,31 @@
           roleType: "executive",
           name: "د. طارق المنصور",
           jobTitle: "عضو المكتب التنفيذي",
-          unit: "المكتب التنفيذي"
+          unit: "القيادة التنفيذية"
+        },
+        {
+          id: "u_admin",
+          username: "admin",
+          password: "admin123",
+          roleType: "operational_admin",
+          departmentId: "dept_hr",
+          name: "أ. خالد الراشد (الموارد البشرية)",
+          jobTitle: "مدير إدارة الموارد البشرية",
+          unit: "إدارة الموارد البشرية"
+        },
+        {
+          id: "u_tarbawi",
+          username: "tarbawi",
+          password: "1234",
+          roleType: "operational_admin",
+          departmentId: "dept_tarbawi",
+          name: "د. عبدالله السالم (الإدارة التربوية)",
+          jobTitle: "مدير الإدارة التربوية",
+          unit: "الإدارة التربوية"
         },
         {
           id: "u_1",
-          username: "madyan",
+          username: "maydan",
           password: "1234",
           roleType: "cadre",
           onboarded: true,
@@ -249,6 +328,7 @@
           name: "أحمد المنصور",
           jobTitle: "منسق وحدة التطوير",
           unit: "وحدة التخطيط الاستراتيجي",
+          assignedDepartments: ["dept_hr", "dept_tarbawi"],
           defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
           weekOverrides: {},
           tasksRecord: {
@@ -430,8 +510,19 @@
       };
     }
 
+    function isCadreDepartmentEnabled(user, deptId) {
+      if (!user || user.roleType !== "cadre") return true;
+      const assigned = Array.isArray(user.assignedDepartments) && user.assignedDepartments.length > 0
+        ? user.assignedDepartments
+        : ["dept_hr", "dept_tarbawi"];
+      return assigned.includes(deptId);
+    }
+
     // جلب المهمات التربوية المفعلة والموجهة لهذا الكادر تحديداً (عامة أو لوحدته أو مخصصة له)
     function getApplicableTarbawiTasks(user, systemConfig) {
+      if (user && user.roleType === "cadre" && !isCadreDepartmentEnabled(user, "dept_tarbawi")) {
+        return [];
+      }
       const list = Array.isArray(systemConfig?.tarbawiTaskDefinitions)
         ? systemConfig.tarbawiTaskDefinitions
         : DEFAULT_TARBAWI_TASKS;
@@ -445,27 +536,31 @@
       });
     }
 
-    function getTaskScorePoints(taskObj) {
+    function getTaskScorePoints(taskObj, governanceRules = DEFAULT_GOVERNANCE_RULES) {
+      const targetDays = Math.max(1, parseInt(governanceRules?.dailyTaskTargetDays, 10) || 5);
+      const latePct = Math.max(0, Math.min(100, parseInt(governanceRules?.latePointsPct, 10) ?? 50));
       if (!taskObj || taskObj.status === 'pending') {
         // لو مهمة تتبع يومي وفيها أيام منجزة جزئياً نعطي نقاطاً تناسبية
         if (Array.isArray(taskObj?.daysCompleted) && taskObj.daysCompleted.length > 0) {
-          return Math.min(90, Math.round((taskObj.daysCompleted.length / 5) * 100));
+          return Math.min(90, Math.round((taskObj.daysCompleted.length / targetDays) * 100));
         }
         return 0;
       }
       if (taskObj.status === 'on_time') return 100;
-      if (taskObj.status === 'late') return 50;
+      if (taskObj.status === 'late') return latePct;
       return 0;
     }
 
     function computeCadreMetrics(user, systemConfig = INITIAL_STATE.systemConfig) {
+      const rules = systemConfig?.governanceRules || DEFAULT_GOVERNANCE_RULES;
       const totalWeeks = calculateWeeksSinceJoin(user.joinedAt);
+      const hrEnabled = isCadreDepartmentEnabled(user, "dept_hr");
       const tarbawiDefs = getApplicableTarbawiTasks(user, systemConfig);
-      const adminKeys = ['lecture', 'agenda', 'attendance', 'minutes'];
+      const adminKeys = hrEnabled ? ['lecture', 'agenda', 'attendance', 'minutes'] : [];
 
       let adminPossible = totalWeeks * adminKeys.length * 100;
       let adminEarned = 0;
-      let tarbawiPossible = totalWeeks * Math.max(1, tarbawiDefs.length) * 100;
+      let tarbawiPossible = totalWeeks * tarbawiDefs.length * 100;
       let tarbawiEarned = 0;
 
       let onTimeCount = 0;
@@ -490,7 +585,7 @@
 
         adminKeys.forEach(k => {
           const t = wRec[k] || { status: 'pending' };
-          adminEarned += getTaskScorePoints(t);
+          adminEarned += getTaskScorePoints(t, rules);
           if (t.status === 'on_time') {
             onTimeCount++;
             byTaskKey[k].onTime++;
@@ -509,7 +604,7 @@
 
         tarbawiDefs.forEach(td => {
           const t = wRec[td.id] || { status: 'pending' };
-          tarbawiEarned += getTaskScorePoints(t);
+          tarbawiEarned += getTaskScorePoints(t, rules);
           if (t.status === 'on_time') {
             onTimeCount++;
             byTarbawiKey[td.id].onTime++;
@@ -528,8 +623,8 @@
         ? Math.round((tarbawiEarned / tarbawiPossible) * 100)
         : 0;
 
-      const totalPossible = adminPossible + (tarbawiDefs.length > 0 ? tarbawiPossible : 0);
-      const totalEarned = adminEarned + (tarbawiDefs.length > 0 ? tarbawiEarned : 0);
+      const totalPossible = adminPossible + tarbawiPossible;
+      const totalEarned = adminEarned + tarbawiEarned;
       const overallScorePct = totalPossible > 0 ? Math.round((totalEarned / totalPossible) * 100) : 0;
       const avgQuizPct = quizScores.length > 0 ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null;
 
@@ -612,9 +707,25 @@
         ? raw.systemConfig.tarbawiTaskDefinitions
         : DEFAULT_TARBAWI_TASKS;
 
+      const rawDepartments = Array.isArray(raw.systemConfig?.departments) && raw.systemConfig.departments.length > 0
+        ? raw.systemConfig.departments
+        : DEFAULT_DEPARTMENTS;
+
+      const rawUnits = Array.isArray(raw.systemConfig?.organizationalUnits) && raw.systemConfig.organizationalUnits.length > 0
+        ? raw.systemConfig.organizationalUnits
+        : DEFAULT_UNITS;
+
+      const safeGovernanceRules = {
+        ...DEFAULT_GOVERNANCE_RULES,
+        ...(raw.systemConfig?.governanceRules || {})
+      };
+
       const safeSystemConfig = {
         ...INITIAL_STATE.systemConfig,
         ...(raw.systemConfig || {}),
+        departments: rawDepartments,
+        organizationalUnits: rawUnits,
+        governanceRules: safeGovernanceRules,
         availableCurriculumWeeks: Array.isArray(raw.systemConfig?.availableCurriculumWeeks)
           ? raw.systemConfig.availableCurriculumWeeks
           : INITIAL_STATE.systemConfig.availableCurriculumWeeks,
@@ -639,18 +750,36 @@
       };
 
       const rawUsers = Array.isArray(raw.users) && raw.users.length > 0 ? raw.users : INITIAL_STATE.users;
-      const hasExec = rawUsers.some(u => u.roleType === "executive");
-      const mergedUsers = hasExec
-        ? rawUsers
-        : [...rawUsers, INITIAL_STATE.users.find(u => u.roleType === "executive")].filter(Boolean);
+      // التأكد من وجود الحسابات الأساسية للمستويات الأربعة (مدير المنصة، التنفيذي، الموارد البشرية، التربوية)
+      let mergedUsers = [...rawUsers];
+      ["u_platform", "u_exec", "u_admin", "u_tarbawi"].forEach(seedId => {
+        if (!mergedUsers.some(u => u.id === seedId)) {
+          const seedUser = INITIAL_STATE.users.find(su => su.id === seedId);
+          if (seedUser) mergedUsers.unshift(seedUser);
+        }
+      });
 
       const safeUsers = mergedUsers.map(u => {
+        // تحويل الحسابات القديمة ذات النوع admin إلى operational_admin مع ربطها بإدارة الموارد البشرية
+        if (u.roleType === "admin") {
+          return {
+            ...u,
+            roleType: "operational_admin",
+            departmentId: u.departmentId || "dept_hr"
+          };
+        }
+        if (u.roleType === "operational_admin") {
+          return {
+            ...u,
+            departmentId: u.departmentId || "dept_hr"
+          };
+        }
         if (u.roleType !== "cadre") return u;
+
         const seedMatch = INITIAL_STATE.users.find(su => su.id === u.id);
         const rawRec = u.tasksRecord || {};
         const mergedRec = { ...rawRec };
 
-        // دمج بيانات المحور التربوي الافتراضية للحسابات التجريبية إن لم تكن موجودة بعد
         if (seedMatch && seedMatch.tasksRecord) {
           Object.keys(seedMatch.tasksRecord).forEach(wKey => {
             mergedRec[wKey] = {
@@ -663,6 +792,9 @@
         return {
           ...u,
           joinedAt: u.joinedAt || Date.now(),
+          assignedDepartments: Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+            ? u.assignedDepartments
+            : ["dept_hr", "dept_tarbawi"],
           defaultSchedule: {
             meetDay: u.defaultSchedule?.meetDay ?? 2,
             meetTime: u.defaultSchedule?.meetTime || "19:00",
@@ -684,7 +816,10 @@
     function MadyanWordmark({ size = "text-3xl" }) {
       return (
         <div className="flex items-center gap-2 select-none" dir="ltr">
-          <span className={`madyan-logo ${size} tracking-tight`}>Madyan</span>
+          <span className={`madyan-logo ${size} tracking-tight`}>Maydan</span>
+          <span className="text-xs font-black px-2 py-0.5 rounded-lg bg-orange-100 text-orange-800 border border-orange-200/80" dir="rtl">
+            ميدان
+          </span>
         </div>
       );
     }
@@ -984,7 +1119,19 @@ CREATE POLICY "Allow public upload on madyan-media"
               onLoginSuccess={(user) => setCurrentUserId(user.id)}
               onResetDemo={resetDemoData}
             />
-          ) : currentUser.roleType === "admin" ? (
+          ) : currentUser.roleType === "platform_admin" ? (
+            <PlatformAdminPortal
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              cloudStatus={cloudStatus}
+              lastSyncAt={lastSyncAt}
+              onOpenCloudSetup={() => setCloudModalOpen(true)}
+              onResetDemo={resetDemoData}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+            />
+          ) : (currentUser.roleType === "admin" || currentUser.roleType === "operational_admin") ? (
             <AdminPortal
               db={db}
               setDb={setDb}
@@ -1052,7 +1199,7 @@ CREATE POLICY "Allow public upload on madyan-media"
               const saved = saveCloudConfigToStorage(url, key);
               initialPullDoneRef.current = false;
               setCloudConfig(saved);
-              showToast("تم حفظ بيانات الاتصال بـ Supabase وجاري المزامنة ☁️");
+              showToast("تم حفظ بيانات الاتصال السحابي وجاري المزامنة ☁️");
             }}
             onDisconnect={() => {
               localStorage.removeItem(CLOUD_CONFIG_KEY);
@@ -1069,20 +1216,30 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
-    // 5. LOGIN SCREEN (واضحة من أول نظرة وتوضح المحورين الإداري والتربوي)
+    // 5. LOGIN SCREEN (بوابة الدخول للمستويات الأربعة في منصة ميدان)
     // ============================================================================
     function LoginView({ users, onLoginSuccess, onResetDemo }) {
-      const [username, setUsername] = useState("madyan");
+      const [username, setUsername] = useState("sysadmin");
       const [password, setPassword] = useState("1234");
       const [error, setError] = useState("");
 
+      const findMatchingUser = (uInput, pInput) => {
+        const cleanU = uInput.trim().toLowerCase();
+        const cleanP = pInput.trim();
+        return users.find(u => {
+          const uname = u.username.toLowerCase();
+          if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) {
+            return u.password === cleanP;
+          }
+          return uname === cleanU && u.password === cleanP;
+        });
+      };
+
       const handleSubmit = (e) => {
         e.preventDefault();
-        const found = users.find(
-          u => u.username.toLowerCase() === username.trim().toLowerCase() && u.password === password.trim()
-        );
+        const found = findMatchingUser(username, password);
         if (!found) {
-          setError("اسم المستخدم أو كلمة المرور غير صحيحة. (الحسابات تُمنح حصرياً من إدارة Madyan)");
+          setError("اسم المستخدم أو كلمة المرور غير صحيحة. (الحسابات تُمنح حصرياً من إدارة المنصة)");
           return;
         }
         setError("");
@@ -1092,9 +1249,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       const quickFill = (u, p) => {
         setUsername(u);
         setPassword(p);
-        const found = users.find(
-          item => item.username.toLowerCase() === u.toLowerCase() && item.password === p
-        );
+        const found = findMatchingUser(u, p);
         if (found) onLoginSuccess(found);
       };
 
@@ -1103,40 +1258,45 @@ CREATE POLICY "Allow public upload on madyan-media"
           <div className="bg-white rounded-[32px] max-w-md w-full p-7 sm:p-8 shadow-xl border border-stone-200/80">
             <div className="flex flex-col items-center text-center mb-6">
               <MadyanWordmark size="text-4xl sm:text-5xl" />
-              <span className="text-[11px] font-bold tracking-widest text-stone-400 uppercase mt-1">
-                Habit-Building Engine
-              </span>
-              <p className="text-xs font-bold text-stone-600 mt-2">
-                منصة بناء العادات الأسبوعية المتوازنة للكادر
+              <p className="text-xs font-black text-stone-700 mt-2">
+                محرك بناء العادات المؤسسية والتربوية
               </p>
-              <div className="flex items-center justify-center gap-2 mt-3">
-                <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-orange-50 text-orange-800 border border-orange-200/70">
-                  🏛️ المحور الإداري
+              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-3">
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-800 border border-stone-200">
+                  🛠️ إدارة المنصة
                 </span>
-                <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70">
-                  🌱 المحور التربوي
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-50 text-amber-900 border border-amber-200">
+                  👑 الإدارة التنفيذية
+                </span>
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-orange-50 text-orange-800 border border-orange-200/70">
+                  🏛️ الموارد البشرية
+                </span>
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70">
+                  🌱 الإدارة التربوية
                 </span>
               </div>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">اسم المستخدم (Username)</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">اسم المستخدم</label>
                 <input
                   type="text"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
+                  dir="ltr"
                   required
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">كلمة المرور (Password)</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">كلمة المرور</label>
                 <input
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
+                  dir="ltr"
                   required
                 />
               </div>
@@ -1157,47 +1317,68 @@ CREATE POLICY "Allow public upload on madyan-media"
 
             <div className="mt-6 pt-5 border-t border-stone-100 space-y-2">
               <div className="text-[11px] font-bold text-stone-400 text-center">
-                دخول سريع للحسابات التجريبية:
+                الدخول السريع للمستويات الأربعة:
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => quickFill("madyan", "1234")}
-                  className="p-3 rounded-2xl bg-orange-50/60 hover:bg-orange-100/70 border border-orange-200 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-900">👤 كادر: أحمد (madyan)</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">إداري + تربوي (5 أسابيع)</div>
-                </button>
-                <button
-                  onClick={() => quickFill("sara", "1234")}
-                  className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 border border-stone-200/80 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-800">👤 كادر: سارة (sara)</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">تهيئة أولى + 3 أسابيع</div>
-                </button>
-              </div>
-
+              {/* المستوى الثالث (المحطة الأولى): مدير المنصة التقني */}
               <button
-                onClick={() => quickFill("admin", "admin123")}
-                className="w-full p-3 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 text-right transition flex items-center justify-between"
+                onClick={() => quickFill("sysadmin", "1234")}
+                className="w-full p-3 rounded-2xl bg-stone-900 text-white hover:bg-stone-800 text-right transition flex items-center justify-between shadow-md"
               >
                 <div>
-                  <div className="text-xs font-black">🛡️ بوابة المدير والـ HR (admin)</div>
-                  <div className="text-[10px] text-stone-300 mt-0.5">تخصيص مهمات المحورين الإداري والتربوي • المحاضرات • الداشبورد</div>
+                  <div className="text-xs font-black">🛠️ مستوى إدارة المنصة التقنية (المحطة 1)</div>
+                  <div className="text-[10px] text-stone-300 mt-0.5">تأسيس الإدارات والوحدات • الحسابات • الضوابط الحاكمة</div>
                 </div>
-                <span className="text-xs font-bold bg-white/10 px-2.5 py-1 rounded-lg">دخول</span>
+                <span className="text-xs font-bold bg-orange-500 text-white px-2.5 py-1 rounded-lg">دخول</span>
               </button>
 
+              {/* المستوى الثاني: الإدارات التشغيلية المعزولة */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => quickFill("admin", "admin123")}
+                  className="p-2.5 rounded-2xl bg-orange-50/70 hover:bg-orange-100/80 border border-orange-200 text-right transition"
+                >
+                  <div className="text-xs font-black text-orange-950">🏛️ إدارة الموارد البشرية</div>
+                  <div className="text-[10px] text-orange-800 mt-0.5">إدارة تشغيلية (المحور الإداري)</div>
+                </button>
+                <button
+                  onClick={() => quickFill("tarbawi", "1234")}
+                  className="p-2.5 rounded-2xl bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200 text-right transition"
+                >
+                  <div className="text-xs font-black text-emerald-950">🌱 الإدارة التربوية</div>
+                  <div className="text-[10px] text-emerald-800 mt-0.5">إدارة تشغيلية (المحور التربوي)</div>
+                </button>
+              </div>
+
+              {/* المستوى الأول: الإدارة التنفيذية العليا */}
               <button
                 onClick={() => quickFill("exec", "1234")}
-                className="w-full p-2.5 rounded-2xl bg-stone-100 text-stone-800 hover:bg-stone-200 text-right transition flex items-center justify-between"
+                className="w-full p-2.5 rounded-2xl bg-stone-100 text-stone-800 hover:bg-stone-200 text-right transition flex items-center justify-between border border-stone-200/80"
               >
                 <div>
-                  <div className="text-xs font-black">🏛️ بوابة المكتب التنفيذي (exec)</div>
-                  <div className="text-[10px] text-stone-500">إصدار التعميمات والنشرة الإدارية ومتابعة الاستيعاب</div>
+                  <div className="text-xs font-black">👑 مستوى الإدارة التنفيذية العليا</div>
+                  <div className="text-[10px] text-stone-500">التعميمات السياسية وملخص الحركة العام</div>
                 </div>
                 <span className="text-[11px] font-bold bg-white px-2.5 py-1 rounded-lg border border-stone-200">دخول</span>
               </button>
+
+              {/* المستوى الرابع: الكوادر */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => quickFill("maydan", "1234")}
+                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-stone-100 border border-stone-200/80 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-900">👤 كادر: أحمد المنصور</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">مستوى الكادر (5 أسابيع)</div>
+                </button>
+                <button
+                  onClick={() => quickFill("sara", "1234")}
+                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-stone-100 border border-stone-200/80 text-right transition"
+                >
+                  <div className="text-xs font-black text-stone-800">👤 كادر: سارة العتيبي</div>
+                  <div className="text-[10px] text-stone-500 mt-0.5">مستوى الكادر (3 أسابيع)</div>
+                </button>
+              </div>
 
               <div className="pt-1 text-center">
                 <button onClick={onResetDemo} className="text-[11px] text-stone-400 hover:text-stone-600 underline">
@@ -2717,7 +2898,8 @@ CREATE POLICY "Allow public upload on madyan-media"
     // ============================================================================
     // 9. CADRE SETTINGS MODAL & NOTE MODAL
     // ============================================================================
-    function CadreSettingsModal({ scope, onClose, currentUser, selectedWeek, isPastWeek, isUsernameTaken, onSaveSettings }) {
+    function CadreSettingsModal({ scope, onClose, currentUser, selectedWeek, isPastWeek, governanceRules = DEFAULT_GOVERNANCE_RULES, isUsernameTaken, onSaveSettings }) {
+      const rules = { ...DEFAULT_GOVERNANCE_RULES, ...(governanceRules || {}) };
       const [activeTab, setActiveTab] = useState(scope || "global");
       const [meetDay, setMeetDay] = useState(currentUser.defaultSchedule?.meetDay ?? 2);
       const [meetTime, setMeetTime] = useState(currentUser.defaultSchedule?.meetTime || "19:00");
@@ -2761,6 +2943,10 @@ CREATE POLICY "Allow public upload on madyan-media"
         setErr("");
       };
 
+      const isScheduleLocked = activeTab === "week"
+        ? (!rules.allowCadreScheduleChange || !rules.allowWeekSpecificOverride)
+        : !rules.allowCadreScheduleChange;
+
       const handleSave = () => {
         if (activeTab === "account") {
           if (!username.trim() || !password.trim()) {
@@ -2773,13 +2959,17 @@ CREATE POLICY "Allow public upload on madyan-media"
           }
           onSaveSettings(u => ({
             ...u,
-            name: name.trim() || u.name,
-            jobTitle: jobTitle.trim() || u.jobTitle,
-            unit: unit.trim() || u.unit,
-            username: username.trim(),
-            password: password.trim()
+            name: rules.allowCadreNameEdit ? (name.trim() || u.name) : u.name,
+            jobTitle: rules.allowCadreJobTitleEdit ? (jobTitle.trim() || u.jobTitle) : u.jobTitle,
+            unit: rules.allowCadreUnitEdit ? (unit.trim() || u.unit) : u.unit,
+            username: rules.allowCadrePasswordChange ? username.trim() : u.username,
+            password: rules.allowCadrePasswordChange ? password.trim() : u.password
           }));
         } else if (activeTab === "week") {
+          if (isScheduleLocked) {
+            setErr("تغيير مواعيد اللقاء الأسبوعي مقفل حالياً وفق ضوابط إدارة المنصة.");
+            return;
+          }
           onSaveSettings(u => ({
             ...u,
             weekOverrides: {
@@ -2792,6 +2982,10 @@ CREATE POLICY "Allow public upload on madyan-media"
             }
           }));
         } else {
+          if (isScheduleLocked) {
+            setErr("تغيير المواعيد العامة مقفل حالياً وفق ضوابط إدارة المنصة.");
+            return;
+          }
           onSaveSettings(u => ({
             ...u,
             defaultSchedule: {
@@ -2807,7 +3001,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         <ModalContainer
           isOpen={Boolean(scope)}
           onClose={onClose}
-          badge="إعدادات الكادر الإداري"
+          badge="إعدادات الكادر (مؤطرة بضوابط إدارة المنصة)"
           title="تخصيص المواعيد وبيانات الحساب"
         >
           <div className="space-y-4">
@@ -2841,55 +3035,71 @@ CREATE POLICY "Allow public upload on madyan-media"
 
             {activeTab !== "account" ? (
               <div className="space-y-3.5">
+                {isScheduleLocked && (
+                  <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900">
+                    🔒 تعديل مواعيد اللقاء الأسبوعي مقفل حالياً بقرار من إدارة المنصة التقنية.
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1">يوم الاجتماع</label>
-                    <select value={meetDay} onChange={e => setMeetDay(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                    <select disabled={isScheduleLocked} value={meetDay} onChange={e => setMeetDay(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50">
                       {DAYS_AR.map((d, i) => <option key={i} value={i}>{d}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1">ساعة البدء</label>
-                    <input type="time" value={meetTime} onChange={e => setMeetTime(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                    <input disabled={isScheduleLocked} type="time" value={meetTime} onChange={e => setMeetTime(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50" />
                   </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">مدة الاجتماع</label>
-                  <select value={meetDuration} onChange={e => setMeetDuration(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold">
+                  <select disabled={isScheduleLocked} value={meetDuration} onChange={e => setMeetDuration(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50">
                     <option value="60">ساعة واحدة (60 دقيقة)</option>
                     <option value="90">ساعة ونصف (90 دقيقة)</option>
                     <option value="120">ساعتان (120 دقيقة)</option>
                     <option value="180">3 ساعات (180 دقيقة)</option>
                   </select>
                 </div>
+                <div className="text-[11px] text-stone-500 bg-stone-50 px-3 py-2 rounded-xl">
+                  ℹ️ الحد الأقصى لتغيير الموعد شهرياً حسب ضوابط المنصة: <strong>{rules.maxScheduleChangesPerMonth} مرات</strong>.
+                </div>
               </div>
             ) : (
               <div className="space-y-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
-                  <input value={name} onChange={e => setName(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    الاسم الكامل {!rules.allowCadreNameEdit && <span className="text-amber-700">(مقفل من إدارة المنصة)</span>}
+                  </label>
+                  <input disabled={!rules.allowCadreNameEdit} value={name} onChange={e => setName(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50" />
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
-                    <input value={jobTitle} onChange={e => setJobTitle(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                    <label className="block text-xs font-bold text-stone-700 mb-1">
+                      المسمى الوظيفي {!rules.allowCadreJobTitleEdit && <span className="text-stone-400">(ثابت تنظيمياً)</span>}
+                    </label>
+                    <input disabled={!rules.allowCadreJobTitleEdit} value={jobTitle} onChange={e => setJobTitle(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50" />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الإدارية</label>
-                    <input value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold" />
+                    <label className="block text-xs font-bold text-stone-700 mb-1">
+                      الوحدة التنظيمية {!rules.allowCadreUnitEdit && <span className="text-stone-400">(ثابت تنظيمياً)</span>}
+                    </label>
+                    <input disabled={!rules.allowCadreUnitEdit} value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50" />
                   </div>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
-                  <div className="text-xs font-black text-stone-800">🔐 تعديل اسم المستخدم وكلمة المرور</div>
+                  <div className="text-xs font-black text-stone-800">
+                    🔐 تعديل اسم المستخدم وكلمة المرور {!rules.allowCadrePasswordChange && <span className="text-amber-700">(مقفل من إدارة المنصة)</span>}
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-stone-600 mb-1">اسم المستخدم (Username)</label>
-                      <input value={username} onChange={e => setUsername(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                      <label className="block text-[11px] font-bold text-stone-600 mb-1">اسم المستخدم</label>
+                      <input disabled={!rules.allowCadrePasswordChange} value={username} onChange={e => setUsername(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold disabled:opacity-50" dir="ltr" />
                     </div>
                     <div>
                       <label className="block text-[11px] font-bold text-stone-600 mb-1">كلمة المرور الجديدة</label>
-                      <input type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold" />
+                      <input disabled={!rules.allowCadrePasswordChange} type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold disabled:opacity-50" dir="ltr" />
                     </div>
                   </div>
                 </div>
@@ -2932,6 +3142,968 @@ CREATE POLICY "Allow public upload on madyan-media"
             </div>
           </div>
         </ModalContainer>
+      );
+    }
+
+    // ============================================================================
+    // 9.5 PLATFORM TECHNICAL ADMIN PORTAL (المحطة الأولى: مستوى إدارة المنصة التقنية)
+    // ============================================================================
+    function PlatformAdminPortal({
+      db,
+      setDb,
+      currentUser,
+      cloudStatus,
+      lastSyncAt,
+      onOpenCloudSetup,
+      onResetDemo,
+      onLogout,
+      showToast
+    }) {
+      const [activeTab, setActiveTab] = useState("governance"); // 'governance' | 'structure' | 'accounts' | 'cloud'
+
+      const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+      const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+      const rules = { ...DEFAULT_GOVERNANCE_RULES, ...(db.systemConfig?.governanceRules || {}) };
+
+      // حالات إضافة إدارة تشغيلية جديدة
+      const [deptName, setDeptName] = useState("");
+      const [deptShortName, setDeptShortName] = useState("");
+      const [deptIcon, setDeptIcon] = useState("🧭");
+      const [deptTheme, setDeptTheme] = useState("blue");
+      const [deptDesc, setDeptDesc] = useState("");
+
+      // حالات إضافة وحدة تنظيمية جديدة
+      const [unitName, setUnitName] = useState("");
+      const [unitDefaultDepts, setUnitDefaultDepts] = useState(["dept_hr", "dept_tarbawi"]);
+
+      // حالات إنشاء حساب جديد بأي مستوى من المستويات الأربعة
+      const [newRoleType, setNewRoleType] = useState("cadre");
+      const [newName, setNewName] = useState("");
+      const [newJobTitle, setNewJobTitle] = useState("");
+      const [newUnit, setNewUnit] = useState(units[0]?.name || "وحدة التخطيط الاستراتيجي");
+      const [newDepartmentId, setNewDepartmentId] = useState("dept_hr");
+      const [newAssignedDepts, setNewAssignedDepts] = useState(["dept_hr", "dept_tarbawi"]);
+      const [newUsername, setNewUsername] = useState("");
+      const [newPassword, setNewPassword] = useState("1234");
+      const [newWeeksAgo, setNewWeeksAgo] = useState(1);
+
+      const updateRule = (key, value) => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            governanceRules: {
+              ...(prev.systemConfig?.governanceRules || DEFAULT_GOVERNANCE_RULES),
+              [key]: value
+            }
+          }
+        }));
+      };
+
+      const handleAddDepartment = (e) => {
+        e.preventDefault();
+        if (!deptName.trim()) {
+          showToast("يرجى إدخال اسم الإدارة التشغيلية الجديدة.");
+          return;
+        }
+        const createdDept = {
+          id: "dept_" + Date.now(),
+          name: deptName.trim(),
+          shortName: deptShortName.trim() || deptName.trim(),
+          icon: deptIcon || "🏢",
+          theme: deptTheme || "blue",
+          description: deptDesc.trim() || "إدارة تشغيلية مستقلة معزولة البيانات والصلاحيات.",
+          isCore: false,
+          enabled: true
+        };
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            departments: [...(prev.systemConfig?.departments || DEFAULT_DEPARTMENTS), createdDept]
+          }
+        }));
+        setDeptName("");
+        setDeptShortName("");
+        setDeptDesc("");
+        showToast(`تم تأسيس (${createdDept.name}) كإدارة تشغيلية معزولة بنجاح ✓`);
+      };
+
+      const toggleDepartmentEnabled = (deptId) => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).map(d =>
+              d.id === deptId ? { ...d, enabled: !d.enabled } : d
+            )
+          }
+        }));
+        showToast("تم تحديث حالة تفعيل الإدارة التشغيلية ✓");
+      };
+
+      const handleAddUnit = (e) => {
+        e.preventDefault();
+        if (!unitName.trim()) return;
+        const createdUnit = {
+          id: "unit_" + Date.now(),
+          name: unitName.trim(),
+          defaultDepartments: unitDefaultDepts.length > 0 ? unitDefaultDepts : ["dept_hr"]
+        };
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            organizationalUnits: [...(prev.systemConfig?.organizationalUnits || DEFAULT_UNITS), createdUnit]
+          }
+        }));
+        setUnitName("");
+        showToast(`تمت إضافة الوحدة التنظيمية (${createdUnit.name}) بنجاح ✓`);
+      };
+
+      const handleCreateAccount = (e) => {
+        e.preventDefault();
+        if (!newName.trim() || !newUsername.trim() || !newPassword.trim()) {
+          showToast("يرجى إدخال الاسم واسم المستخدم وكلمة المرور.");
+          return;
+        }
+        const cleanUser = newUsername.trim().toLowerCase();
+        if (db.users.some(u => u.username.toLowerCase() === cleanUser)) {
+          showToast("اسم المستخدم هذا مسجل بالفعل، اختر اسماً آخر.");
+          return;
+        }
+
+        const weeksNum = Math.max(1, parseInt(newWeeksAgo, 10) || 1);
+        const joinedTimestamp = Date.now() - ((weeksNum - 1) * MS_PER_WEEK) - (24 * 3600 * 1000);
+
+        const initialTasks = {};
+        if (newRoleType === "cadre") {
+          for (let w = 1; w <= weeksNum; w++) {
+            initialTasks[w] = {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            };
+          }
+        }
+
+        const deptObj = departments.find(d => d.id === newDepartmentId);
+        const defaultTitle =
+          newRoleType === "platform_admin"
+            ? "مدير المنصة التقني"
+            : newRoleType === "executive"
+            ? "عضو القيادة التنفيذية"
+            : newRoleType === "operational_admin"
+            ? `مدير ${deptObj ? deptObj.name : "إدارة تشغيلية"}`
+            : "كادر تنظيمي";
+
+        const defaultUnitName =
+          newRoleType === "platform_admin"
+            ? "إدارة المنصة التقنية"
+            : newRoleType === "executive"
+            ? "القيادة التنفيذية"
+            : newRoleType === "operational_admin"
+            ? (deptObj ? deptObj.name : "الإدارة التشغيلية")
+            : newUnit;
+
+        const created = {
+          id: "u_" + Date.now(),
+          username: newUsername.trim(),
+          password: newPassword.trim(),
+          roleType: newRoleType,
+          departmentId: newRoleType === "operational_admin" ? newDepartmentId : undefined,
+          assignedDepartments: newRoleType === "cadre"
+            ? (newAssignedDepts.length > 0 ? newAssignedDepts : ["dept_hr"])
+            : undefined,
+          onboarded: false,
+          joinedAt: joinedTimestamp,
+          name: newName.trim(),
+          jobTitle: newJobTitle.trim() || defaultTitle,
+          unit: defaultUnitName,
+          defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
+          weekOverrides: {},
+          tasksRecord: initialTasks
+        };
+
+        setDb(prev => ({
+          ...prev,
+          users: [...prev.users, created]
+        }));
+
+        setNewName("");
+        setNewJobTitle("");
+        setNewUsername("");
+        showToast(`تم إنشاء حساب (${created.name}) وتخصيص صلاحياته بنجاح ✓`);
+      };
+
+      const toggleCadreAssignedDept = (userId, deptId) => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => {
+            if (u.id !== userId) return u;
+            const currentList = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+              ? u.assignedDepartments
+              : ["dept_hr", "dept_tarbawi"];
+            const exists = currentList.includes(deptId);
+            if (exists && currentList.length <= 1) {
+              showToast("يجب أن يكون للكادر مسار تشغيلي واحد مفعّل على الأقل.");
+              return u;
+            }
+            const nextList = exists
+              ? currentList.filter(id => id !== deptId)
+              : [...currentList, deptId];
+            return { ...u, assignedDepartments: nextList };
+          })
+        }));
+      };
+
+      const handleDeleteUser = (userId) => {
+        const target = db.users.find(u => u.id === userId);
+        if (!target) return;
+        if (target.roleType === "platform_admin" && db.users.filter(u => u.roleType === "platform_admin").length <= 1) {
+          showToast("لا يمكن حذف حساب مدير المنصة التقني الوحيد.");
+          return;
+        }
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.filter(u => u.id !== userId)
+        }));
+        showToast("تم حذف الحساب من المنصة.");
+      };
+
+      const handleExportBackup = () => {
+        const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `maydan_backup_${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("تم تصدير النسخة الاحتياطية الكاملة للمنصة ✓");
+      };
+
+      const cadresCount = db.users.filter(u => u.roleType === "cadre").length;
+      const opAdminsCount = db.users.filter(u => u.roleType === "operational_admin" || u.roleType === "admin").length;
+      const execCount = db.users.filter(u => u.roleType === "executive").length;
+
+      return (
+        <div className="min-h-screen bg-[#F6F5F2]">
+          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-stone-200/80">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <MadyanWordmark size="text-2xl sm:text-3xl" />
+                <span className="text-xs font-black px-3 py-1 rounded-full bg-stone-900 text-white">
+                  🛠️ إدارة المنصة التقنية (المستوى الحاكم)
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <button
+                  onClick={() => setActiveTab("governance")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
+                    activeTab === "governance" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                  }`}
+                >
+                  ⚙️ الضوابط والقواعد الحاكمة
+                </button>
+                <button
+                  onClick={() => setActiveTab("structure")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
+                    activeTab === "structure" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                  }`}
+                >
+                  🏢 هيكل الإدارات والوحدات ({departments.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab("accounts")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
+                    activeTab === "accounts" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                  }`}
+                >
+                  👥 الحسابات والمسارات ({db.users.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab("cloud")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
+                    activeTab === "cloud" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                  }`}
+                >
+                  ☁️ البنية السحابية والنسخ الاحتياطي
+                </button>
+                <button
+                  onClick={onLogout}
+                  className="px-3.5 py-2 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold flex-shrink-0"
+                >
+                  تسجيل الخروج
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+            {/* شريط الملخص التنظيمي للمستويات الأربعة */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
+                <div className="text-[11px] font-bold text-stone-400">الإدارات التشغيلية المعزولة</div>
+                <div className="text-2xl font-black text-stone-900 mt-1">{departments.length} إدارات</div>
+                <div className="text-[11px] text-stone-500 mt-0.5">عزل تام للبيانات والصلاحيات</div>
+              </div>
+              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
+                <div className="text-[11px] font-bold text-stone-400">الوحدات التنظيمية الفرعية</div>
+                <div className="text-2xl font-black text-orange-600 mt-1">{units.length} وحدات</div>
+                <div className="text-[11px] text-stone-500 mt-0.5">يتوزع عليها {cadresCount} كوادر</div>
+              </div>
+              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
+                <div className="text-[11px] font-bold text-stone-400">مديرو الإدارات والقيادة</div>
+                <div className="text-2xl font-black text-emerald-700 mt-1">{opAdminsCount + execCount} حسابات</div>
+                <div className="text-[11px] text-stone-500 mt-0.5">{execCount} تنفيذي • {opAdminsCount} مدير إدارة</div>
+              </div>
+              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
+                <div className="text-[11px] font-bold text-stone-400">حالة قاعدة بيانات سوبابيس</div>
+                <div className="text-base font-black text-stone-900 mt-1.5 flex items-center gap-1.5">
+                  <span className={`w-2.5 h-2.5 rounded-full ${cloudStatus === "connected" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                  <span>{cloudStatus === "connected" ? "متصلة ومزامنة لحظياً" : "وضع محلي"}</span>
+                </div>
+                <div className="text-[11px] text-stone-500 mt-1">
+                  {lastSyncAt ? `آخر مزامنة: ${lastSyncAt}` : "تزامن تلقائي عند أي تعديل"}
+                </div>
+              </div>
+            </div>
+
+            {/* القسم الأول: الضوابط والقواعد الحاكمة */}
+            {activeTab === "governance" && (
+              <div className="space-y-6">
+                <div className="bg-stone-900 text-white rounded-3xl p-6 shadow-md flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <span className="text-xs font-bold text-orange-400">الإطار التنظيمي الحاكم لمنصة ميدان</span>
+                    <h2 className="text-lg font-black mt-0.5">مصفوفة الضوابط التقنية وحدود صلاحيات الكادر</h2>
+                    <p className="text-xs text-stone-300 mt-1">
+                      أي تغيير تضبطه هنا يُطبق فوراً على جميع واجهات الكوادر ومعادلات التقييم دون تدخل في البيانات التشغيلية اليومية.
+                    </p>
+                  </div>
+                  <span className="px-3.5 py-1.5 rounded-2xl bg-white/10 text-xs font-bold text-emerald-300 border border-white/10">
+                    ✓ الحفظ السحابي فوري وتلقائي
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* 1. ضوابط مواعيد اللقاء الأسبوعي */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-orange-600">الركن الأول</span>
+                        <h3 className="text-base font-black text-stone-900">📅 ضوابط تغيير مواعيد اللقاء الأسبوعي</h3>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">السماح للكادر بتغيير موعد لقائه الأسبوعي</div>
+                          <div className="text-[11px] text-stone-500">عند إيقافه، يُقفل جدول اللقاء الأسبوعي ولا يغيره إلا مدير الإدارة</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowCadreScheduleChange)}
+                          onChange={e => updateRule("allowCadreScheduleChange", e.target.checked)}
+                          className="w-5 h-5 accent-orange-600"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">السماح بالاستثناء المؤقت لأسبوع واحد</div>
+                          <div className="text-[11px] text-stone-500">يسمح للكادر بتغيير موعد الأسبوع الحالي فقط دون تغيير موعده الثابت</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowWeekSpecificOverride)}
+                          onChange={e => updateRule("allowWeekSpecificOverride", e.target.checked)}
+                          className="w-5 h-5 accent-orange-600"
+                        />
+                      </label>
+
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">الحد الأقصى لعدد مرات تغيير الموعد شهرياً</div>
+                          <div className="text-[11px] text-stone-500">يضبط انضباط المواعيد ويمنع التغيير المتكرر</div>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="10"
+                          value={rules.maxScheduleChangesPerMonth}
+                          onChange={e => updateRule("maxScheduleChangesPerMonth", parseInt(e.target.value, 10) || 0)}
+                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. ضوابط الأسابيع السابقة والمهام المتأخرة */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div>
+                      <span className="text-xs font-bold text-orange-600">الركن الثاني</span>
+                      <h3 className="text-base font-black text-stone-900">⏳ ضوابط الأسابيع السابقة ورصد المتأخرات</h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">السماح للكادر برصد المهام المتأخرة للأسابيع السابقة</div>
+                          <div className="text-[11px] text-stone-500">عند إيقافه، تُقفل الأسابيع المنتهية تماماً للقراءة فقط</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowLateSubmissions)}
+                          onChange={e => updateRule("allowLateSubmissions", e.target.checked)}
+                          className="w-5 h-5 accent-orange-600"
+                        />
+                      </label>
+
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">عدد الأسابيع السابقة المسموح باستدراكها</div>
+                          <div className="text-[11px] text-stone-500">تُقفل الأسابيع الأقدم من هذا العدد تلقائياً</div>
+                        </div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="52"
+                          value={rules.maxPastWeeksEditable}
+                          onChange={e => updateRule("maxPastWeeksEditable", parseInt(e.target.value, 10) || 1)}
+                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. حدود تعديل الكادر لبياناته الشخصية */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div>
+                      <span className="text-xs font-bold text-emerald-700">الركن الثالث</span>
+                      <h3 className="text-base font-black text-stone-900">🔐 حدود تعديل الكادر لملفه الشخصي</h3>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">تعديل الاسم الكامل</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowCadreNameEdit)}
+                          onChange={e => updateRule("allowCadreNameEdit", e.target.checked)}
+                          className="w-4 h-4 accent-emerald-600"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">تغيير كلمة المرور والدخول</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowCadrePasswordChange)}
+                          onChange={e => updateRule("allowCadrePasswordChange", e.target.checked)}
+                          className="w-4 h-4 accent-emerald-600"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">تعديل المسمى الوظيفي</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowCadreJobTitleEdit)}
+                          onChange={e => updateRule("allowCadreJobTitleEdit", e.target.checked)}
+                          className="w-4 h-4 accent-emerald-600"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">تعديل الوحدة التنظيمية</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(rules.allowCadreUnitEdit)}
+                          onChange={e => updateRule("allowCadreUnitEdit", e.target.checked)}
+                          className="w-4 h-4 accent-emerald-600"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 4. معادلة احتساب النقاط والاختبارات */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div>
+                      <span className="text-xs font-bold text-emerald-700">الركن الرابع</span>
+                      <h3 className="text-base font-black text-stone-900">⚖️ معادلة احتساب النقاط واجتياز الاختبار</h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">نسبة النقاط المحتسبة للمهمة المتأخرة (%)</div>
+                          <div className="text-[11px] text-stone-500">المهمة المنجزة في وقتها تأخذ 100%، والمتأخرة تأخذ هذه النسبة</div>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={rules.latePointsPct}
+                          onChange={e => updateRule("latePointsPct", parseInt(e.target.value, 10) || 0)}
+                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                        />
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">الحد الأدنى لاجتياز اختبار المحاضرة الأسبوعية (%)</div>
+                          <div className="text-[11px] text-stone-500">النسبة المئوية المطلوبة لاعتبار الاختبار مجتازاً بنجاح</div>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={rules.quizPassThresholdPct}
+                          onChange={e => updateRule("quizPassThresholdPct", parseInt(e.target.value, 10) || 60)}
+                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                        />
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-stone-900">نصاب الأيام الأسبوعي للمهام اليومية (من 7 أيام)</div>
+                          <div className="text-[11px] text-stone-500">عدد الأيام اللازم لإتمام مهمة الورد اليومي بالعلامة الكاملة</div>
+                        </div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="7"
+                          value={rules.dailyTaskTargetDays}
+                          onChange={e => updateRule("dailyTaskTargetDays", parseInt(e.target.value, 10) || 5)}
+                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* القسم الثاني: هيكل الإدارات التشغيلية والوحدات التنظيمية */}
+            {activeTab === "structure" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-7 space-y-6">
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div>
+                      <span className="text-xs font-bold text-orange-600">نظام العزل التام بين الإدارات</span>
+                      <h3 className="text-base font-black text-stone-900">🏢 الإدارات التشغيلية المعتمدة في المنصة ({departments.length})</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">
+                        كل إدارة تشغيلية لها بوابة مستقلة ولا ترى بيانات أو تشغيل الإدارة الأخرى.
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      {departments.map(dept => (
+                        <div key={dept.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <span className="text-2xl">{dept.icon}</span>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-black text-stone-900">{dept.name}</span>
+                                {dept.isCore && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700">
+                                    إدارة تأسيسية
+                                  </span>
+                                )}
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                  dept.enabled ? "bg-emerald-100 text-emerald-800" : "bg-stone-200 text-stone-500"
+                                }`}>
+                                  {dept.enabled ? "مفعّلة" : "موقوفة"}
+                                </span>
+                              </div>
+                              <p className="text-xs text-stone-500 mt-1">{dept.description}</p>
+                            </div>
+                          </div>
+                          {!dept.isCore && (
+                            <button
+                              onClick={() => toggleDepartmentEnabled(dept.id)}
+                              className="px-3 py-1.5 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-700"
+                            >
+                              {dept.enabled ? "إيقاف" : "تفعيل"}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <div>
+                      <span className="text-xs font-bold text-emerald-700">التسكين التنظيمي للكوادر</span>
+                      <h3 className="text-base font-black text-stone-900">🗂️ الوحدات التنظيمية الفرعية ({units.length})</h3>
+                    </div>
+
+                    <form onSubmit={handleAddUnit} className="flex flex-wrap gap-2">
+                      <input
+                        value={unitName}
+                        onChange={e => setUnitName(e.target.value)}
+                        placeholder="اسم الوحدة الجديدة (مثال: وحدة الإعلام الرقمي)"
+                        className="flex-1 min-w-[220px] rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                      />
+                      <button type="submit" className="px-5 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black">
+                        + إضافة وحدة
+                      </button>
+                    </form>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {units.map(u => (
+                        <div key={u.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between">
+                          <span className="text-xs font-black text-stone-800">{u.name}</span>
+                          <span className="text-[10px] font-bold text-stone-500">
+                            {db.users.filter(usr => usr.roleType === "cadre" && usr.unit === u.name).length} كوادر
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+                  <div>
+                    <span className="text-xs font-bold text-orange-600">محرك التوسع المرن</span>
+                    <h3 className="text-base font-black text-stone-900">➕ تأسيس إدارة تشغيلية جديدة</h3>
+                    <p className="text-xs text-stone-500 mt-0.5">
+                      أنشئ أي إدارة إضافية (مثل: الإدارة الإعلامية، إدارة التدريب) لتعمل بمعزل تام عن باقي الإدارات.
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleAddDepartment} className="space-y-3.5">
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 mb-1">اسم الإدارة التشغيلية</label>
+                      <input
+                        value={deptName}
+                        onChange={e => setDeptName(e.target.value)}
+                        placeholder="مثال: الإدارة الإعلامية والسياسية"
+                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                        required
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-stone-700 mb-1">الاسم المختصر</label>
+                        <input
+                          value={deptShortName}
+                          onChange={e => setDeptShortName(e.target.value)}
+                          placeholder="الإعلامية"
+                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة الرمزية</label>
+                        <select
+                          value={deptIcon}
+                          onChange={e => setDeptIcon(e.target.value)}
+                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                        >
+                          <option value="🧭">🧭 بوصلة</option>
+                          <option value="📡">📡 إعلام</option>
+                          <option value="🎓">🎓 تدريب</option>
+                          <option value="⚖️">⚖️ حوكمة</option>
+                          <option value="🤝">🤝 علاقات</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 mb-1">وصف اختصاص الإدارة</label>
+                      <textarea
+                        rows="3"
+                        value={deptDesc}
+                        onChange={e => setDeptDesc(e.target.value)}
+                        placeholder="حدد مهام واختصاصات هذه الإدارة..."
+                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20"
+                    >
+                      + اعتماد وتأسيس الإدارة التشغيلية
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* القسم الثالث: الحسابات وتوزيع الصلاحيات والمسارات */}
+            {activeTab === "accounts" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
+                  <div>
+                    <span className="text-xs font-bold text-orange-600">توليد الحسابات وتوزيع الصلاحيات</span>
+                    <h3 className="text-base font-black text-stone-900">➕ إنشاء حساب جديد في المستويات الأربعة</h3>
+                  </div>
+
+                  <form onSubmit={handleCreateAccount} className="space-y-3.5">
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 mb-1">مستوى الحساب والواجهة</label>
+                      <select
+                        value={newRoleType}
+                        onChange={e => setNewRoleType(e.target.value)}
+                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                      >
+                        <option value="cadre">👤 المستوى الرابع: كادر تنظيمي</option>
+                        <option value="operational_admin">🏢 المستوى الثاني: مدير إدارة تشغيلية (معزول)</option>
+                        <option value="executive">👑 المستوى الأول: الإدارة التنفيذية العليا</option>
+                        <option value="platform_admin">🛠️ المستوى الثالث: مدير المنصة التقني</option>
+                      </select>
+                    </div>
+
+                    {newRoleType === "operational_admin" && (
+                      <div className="p-3.5 rounded-2xl bg-orange-50 border border-orange-200 space-y-2">
+                        <label className="block text-xs font-black text-orange-950">
+                          الإدارة التشغيلية التابع لها (لن يرى غيرها)
+                        </label>
+                        <select
+                          value={newDepartmentId}
+                          onChange={e => setNewDepartmentId(e.target.value)}
+                          className="w-full rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs font-bold"
+                        >
+                          {departments.map(d => (
+                            <option key={d.id} value={d.id}>{d.icon} {d.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                      <input
+                        value={newName}
+                        onChange={e => setNewName(e.target.value)}
+                        placeholder="مثال: د. محمد العلي"
+                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                        required
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
+                        <input
+                          value={newJobTitle}
+                          onChange={e => setNewJobTitle(e.target.value)}
+                          placeholder="منسق مشاريع"
+                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                        />
+                      </div>
+                      {newRoleType === "cadre" && (
+                        <div>
+                          <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة التنظيمية</label>
+                          <select
+                            value={newUnit}
+                            onChange={e => setNewUnit(e.target.value)}
+                            className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                          >
+                            {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {newRoleType === "cadre" && (
+                      <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-2">
+                        <div className="text-xs font-black text-emerald-950">المسارات التشغيلية المفعّلة لهذا الكادر:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {departments.map(d => {
+                            const checked = newAssignedDepts.includes(d.id);
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => {
+                                  if (checked && newAssignedDepts.length <= 1) return;
+                                  setNewAssignedDepts(prev =>
+                                    checked ? prev.filter(id => id !== d.id) : [...prev, d.id]
+                                  );
+                                }}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                                  checked
+                                    ? "bg-stone-900 text-white border-stone-900"
+                                    : "bg-white text-stone-600 border-stone-200"
+                                }`}
+                              >
+                                {d.icon} {d.shortName} {checked && "✓"}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200">
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم</label>
+                        <input
+                          value={newUsername}
+                          onChange={e => setNewUsername(e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                          dir="ltr"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور</label>
+                        <input
+                          value={newPassword}
+                          onChange={e => setNewPassword(e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                          dir="ltr"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black shadow-md hover:bg-stone-800"
+                    >
+                      + إنشاء الحساب وتفعيل الصلاحيات
+                    </button>
+                  </form>
+                </div>
+
+                <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                  <div>
+                    <span className="text-xs font-bold text-stone-400">سجل الصلاحيات والمسارات</span>
+                    <h3 className="text-base font-black text-stone-900">👥 جميع الحسابات المسجلة وتخصيص مسارات الكوادر ({db.users.length})</h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    {db.users.map(u => {
+                      const deptObj = departments.find(d => d.id === u.departmentId);
+                      const assignedList = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+                        ? u.assignedDepartments
+                        : ["dept_hr", "dept_tarbawi"];
+
+                      return (
+                        <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-black text-stone-900">{u.name}</span>
+                                <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
+                                  u.roleType === "platform_admin"
+                                    ? "bg-stone-900 text-white"
+                                    : u.roleType === "executive"
+                                    ? "bg-amber-100 text-amber-900"
+                                    : u.roleType === "operational_admin"
+                                    ? "bg-orange-100 text-orange-900"
+                                    : "bg-emerald-100 text-emerald-900"
+                                }`}>
+                                  {u.roleType === "platform_admin"
+                                    ? "🛠️ مدير المنصة التقني"
+                                    : u.roleType === "executive"
+                                    ? "👑 الإدارة التنفيذية"
+                                    : u.roleType === "operational_admin"
+                                    ? `🏢 مدير إدارة: ${deptObj ? deptObj.shortName : "الموارد البشرية"}`
+                                    : "👤 كادر"}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-stone-500 mt-0.5">
+                                {u.unit} • {u.jobTitle}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-xl border border-stone-200 font-bold text-stone-700" dir="ltr">
+                                {u.username} / {u.password}
+                              </span>
+                              <button
+                                onClick={() => handleDeleteUser(u.id)}
+                                className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-bold"
+                              >
+                                حذف
+                              </button>
+                            </div>
+                          </div>
+
+                          {u.roleType === "cadre" && (
+                            <div className="pt-2 border-t border-stone-200/70 flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[11px] font-bold text-stone-600">
+                                المسارات المفعّلة لهذا الكادر (اضغط للتفعيل أو الإيقاف):
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {departments.map(d => {
+                                  const isOn = assignedList.includes(d.id);
+                                  return (
+                                    <button
+                                      key={d.id}
+                                      type="button"
+                                      onClick={() => toggleCadreAssignedDept(u.id, d.id)}
+                                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
+                                        isOn
+                                          ? "bg-stone-900 text-white border-stone-900"
+                                          : "bg-white text-stone-400 border-stone-200"
+                                      }`}
+                                    >
+                                      {d.icon} {d.shortName} {isOn ? "✓" : "✕"}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* القسم الرابع: البنية السحابية والنسخ الاحتياطي */}
+            {activeTab === "cloud" && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                  <span className="text-xs font-bold text-emerald-700">الاتصال السحابي المباشر</span>
+                  <h3 className="text-base font-black text-stone-900">☁️ حالة خادم قاعدة البيانات (سوبابيس)</h3>
+                  <p className="text-xs text-stone-500 leading-relaxed">
+                    المنصة متصلة بقاعدة بيانات سوبابيس السحابية لحفظ كافة الإعدادات الحاكمة، الإدارات، الحسابات، وسجلات الكوادر لحظياً.
+                  </p>
+                  <div className="flex flex-wrap gap-3 pt-2">
+                    <button
+                      onClick={onOpenCloudSetup}
+                      className="px-5 py-3 rounded-2xl bg-stone-900 text-white text-xs font-black"
+                    >
+                      ⚙️ فحص وإدارة إعدادات الربط السحابي
+                    </button>
+                    <button
+                      onClick={handleExportBackup}
+                      className="px-5 py-3 rounded-2xl bg-orange-50 text-orange-900 border border-orange-200 text-xs font-black"
+                    >
+                      📥 تحميل نسخة احتياطية كاملة للبيانات
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                  <span className="text-xs font-bold text-rose-600">إدارة بيانات المحاكاة والتطوير</span>
+                  <h3 className="text-base font-black text-stone-900">🔄 إعادة تهيئة البيانات الافتراضية</h3>
+                  <p className="text-xs text-stone-500 leading-relaxed">
+                    في حال رغبتك في استعادة بيانات التهيئة الأولية للمنصة واختبار المستويات الأربعة من جديد:
+                  </p>
+                  <button
+                    onClick={onResetDemo}
+                    className="px-5 py-3 rounded-2xl bg-rose-50 text-rose-700 border border-rose-200 text-xs font-black hover:bg-rose-100"
+                  >
+                    إعادة ضبط بيانات المحاكاة لحالتها الأصلية ↻
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
       );
     }
 
