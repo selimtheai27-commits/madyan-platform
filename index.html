@@ -1401,9 +1401,14 @@ CREATE POLICY "Allow public upload on madyan-media"
       };
 
       const quickFill = (u, p, variant) => {
-        setUsername(u);
-        setPassword(p);
-        const found = findMatchingUser(u, p);
+        const cleanU = u.trim().toLowerCase();
+        const found = findMatchingUser(u, p) || users.find(x => {
+          const uname = (x.username || "").toLowerCase();
+          if (cleanU === "sysadmin") return uname === "sysadmin" || x.roleType === "platform_admin";
+          return uname === cleanU;
+        });
+        setUsername(found ? found.username : u);
+        setPassword(found ? found.password : p);
         if (found) onLoginSuccess(found, variant);
       };
 
