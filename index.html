@@ -55,6 +55,15 @@
     const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
     const SYSTEM_ANCHOR_DATE = new Date().getTime();
 
+    const TASK_TEMPLATES_LIBRARY = [
+      { id: "lecture_quiz", title: "محاضرة واختبار استيعاب", icon: "🎬", defaultEval: "self" },
+      { id: "daily_habit", title: "ورد أو عادة يومية مستمرة", icon: "🔄", defaultEval: "self" },
+      { id: "reading", title: "مطالعة وقراءة منهجية", icon: "📖", defaultEval: "self" },
+      { id: "meeting", title: "حضور لقاء أو مجلس", icon: "🤝", defaultEval: "manager" },
+      { id: "practical", title: "تكليف عملي أو ميداني", icon: "📋", defaultEval: "manager" },
+      { id: "agenda_minutes", title: "أجندة ومحضر اجتماع", icon: "📝", defaultEval: "self" }
+    ];
+
     const DEFAULT_DEPARTMENTS = [
       {
         id: "dept_hr",
@@ -62,9 +71,12 @@
         shortName: "الموارد البشرية",
         icon: "🏛️",
         theme: "orange",
-        description: "تختص بمتابعة الانضباط الإداري، المحاضرات الأسبوعية، الأجندة، الحضور، وتوثيق المحاضر.",
+        description: "تختص بمتابعة الانضباط الإداري، المحاضرات، الأجندة، الحضور، وتوثيق المحاضر.",
         isCore: true,
-        enabled: true
+        enabled: true,
+        allowedTaskTypes: ["lecture_quiz", "meeting", "agenda_minutes", "practical"],
+        maxTotalTasks: 6,
+        maxPerTypePerCadre: 2
       },
       {
         id: "dept_tarbawi",
@@ -74,7 +86,10 @@
         theme: "emerald",
         description: "تختص بمتابعة البناء الذاتي والتزكية، الورد اليومي، القراءة المنهجية، واللقاء التربوي.",
         isCore: true,
-        enabled: true
+        enabled: true,
+        allowedTaskTypes: ["daily_habit", "reading", "meeting", "practical"],
+        maxTotalTasks: 6,
+        maxPerTypePerCadre: 2
       }
     ];
 
@@ -82,17 +97,33 @@
       {
         id: "unit_strategy",
         name: "وحدة التخطيط الاستراتيجي",
+        inviteCode: "MAYDAN-STRAT",
         defaultDepartments: ["dept_hr", "dept_tarbawi"]
       },
       {
         id: "unit_ops",
         name: "وحدة المتابعة والتنسيق",
+        inviteCode: "MAYDAN-OPS",
         defaultDepartments: ["dept_hr", "dept_tarbawi"]
       },
       {
         id: "unit_field",
         name: "وحدة العمل الميداني",
+        inviteCode: "MAYDAN-FIELD",
         defaultDepartments: ["dept_hr", "dept_tarbawi"]
+      }
+    ];
+
+    const DEFAULT_TEAMS = [
+      {
+        id: "team_media",
+        name: "فريق التواصل والإعلام العابر للوحدات",
+        purpose: "تنسيق الحملات الإعلامية المشتركة بين الوحدات"
+      },
+      {
+        id: "team_conf",
+        name: "لجنة التخطيط للملتقى السنوي",
+        purpose: "الإعداد التنظيمي واللوجستي للملتقى العام"
       }
     ];
 
@@ -108,7 +139,8 @@
       allowCadreUnitEdit: false,
       latePointsPct: 50,
       quizPassThresholdPct: 60,
-      dailyTaskTargetDays: 5
+      dailyTaskTargetDays: 5,
+      forcePasswordChangeOnFirstLogin: true
     };
 
     const DEFAULT_TARBAWI_TASKS = [
@@ -707,13 +739,35 @@
         ? raw.systemConfig.tarbawiTaskDefinitions
         : DEFAULT_TARBAWI_TASKS;
 
-      const rawDepartments = Array.isArray(raw.systemConfig?.departments) && raw.systemConfig.departments.length > 0
+      const rawDepartments = (Array.isArray(raw.systemConfig?.departments) && raw.systemConfig.departments.length > 0
         ? raw.systemConfig.departments
-        : DEFAULT_DEPARTMENTS;
+        : DEFAULT_DEPARTMENTS).map(d => {
+        const seedDept = DEFAULT_DEPARTMENTS.find(sd => sd.id === d.id);
+        return {
+          ...(seedDept || {}),
+          ...d,
+          allowedTaskTypes: Array.isArray(d.allowedTaskTypes) && d.allowedTaskTypes.length > 0
+            ? d.allowedTaskTypes
+            : (seedDept?.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"]),
+          maxTotalTasks: d.maxTotalTasks ?? (seedDept?.maxTotalTasks || 6),
+          maxPerTypePerCadre: d.maxPerTypePerCadre ?? (seedDept?.maxPerTypePerCadre || 2)
+        };
+      });
 
-      const rawUnits = Array.isArray(raw.systemConfig?.organizationalUnits) && raw.systemConfig.organizationalUnits.length > 0
+      const rawUnits = (Array.isArray(raw.systemConfig?.organizationalUnits) && raw.systemConfig.organizationalUnits.length > 0
         ? raw.systemConfig.organizationalUnits
-        : DEFAULT_UNITS;
+        : DEFAULT_UNITS).map(u => {
+        const seedU = DEFAULT_UNITS.find(su => su.id === u.id);
+        return {
+          ...(seedU || {}),
+          ...u,
+          inviteCode: u.inviteCode || seedU?.inviteCode || ("MAYDAN-" + String(u.id || "UNIT").slice(-4).toUpperCase())
+        };
+      });
+
+      const rawTeams = Array.isArray(raw.systemConfig?.crossFunctionalTeams) && raw.systemConfig.crossFunctionalTeams.length > 0
+        ? raw.systemConfig.crossFunctionalTeams
+        : DEFAULT_TEAMS;
 
       const safeGovernanceRules = {
         ...DEFAULT_GOVERNANCE_RULES,
@@ -725,6 +779,7 @@
         ...(raw.systemConfig || {}),
         departments: rawDepartments,
         organizationalUnits: rawUnits,
+        crossFunctionalTeams: rawTeams,
         governanceRules: safeGovernanceRules,
         availableCurriculumWeeks: Array.isArray(raw.systemConfig?.availableCurriculumWeeks)
           ? raw.systemConfig.availableCurriculumWeeks
@@ -795,6 +850,7 @@
           assignedDepartments: Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
             ? u.assignedDepartments
             : ["dept_hr", "dept_tarbawi"],
+          crossTeams: Array.isArray(u.crossTeams) ? u.crossTeams : [],
           defaultSchedule: {
             meetDay: u.defaultSchedule?.meetDay ?? 2,
             meetTime: u.defaultSchedule?.meetTime || "19:00",
@@ -843,6 +899,32 @@
               </button>
             </div>
             {children}
+          </div>
+        </div>
+      );
+    }
+
+    function SlideOverDrawer({ isOpen, onClose, badge, title, children }) {
+      if (!isOpen) return null;
+      return (
+        <div className="fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-sm flex justify-end">
+          <div className="bg-white w-full max-w-md h-full shadow-2xl border-r border-stone-200 flex flex-col justify-between overflow-y-auto p-6 sm:p-8">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-stone-100">
+                <div>
+                  {badge && <span className="text-xs font-bold text-orange-600 block mb-0.5">{badge}</span>}
+                  <h3 className="text-lg font-black text-stone-900">{title}</h3>
+                </div>
+                <button
+                  onClick={onClose}
+                  title="إغلاق اللوحة"
+                  className="w-9 h-9 rounded-full bg-stone-100 text-stone-600 flex items-center justify-center font-bold hover:bg-stone-200 transition"
+                >
+                  ✕
+                </button>
+              </div>
+              <div>{children}</div>
+            </div>
           </div>
         </div>
       );
@@ -915,6 +997,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       });
 
       const [currentUserId, setCurrentUserId] = useState(null);
+      const [supervisoryAdminId, setSupervisoryAdminId] = useState(null);
       const [toastMsg, setToastMsg] = useState(null);
       const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
       const [cloudStatus, setCloudStatus] = useState("checking");
@@ -1113,10 +1196,31 @@ CREATE POLICY "Allow public upload on madyan-media"
             </div>
           )}
 
+          {supervisoryAdminId && currentUser && currentUser.id !== supervisoryAdminId && (
+            <div className="sticky top-0 z-50 bg-stone-900 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-black shadow-lg border-b border-orange-500/40">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-[11px]">👁️ وضع الإشراف والمعاينة</span>
+                <span>تستعرض الآن شاشة المستوى ببيانات: {currentUser.name} ({currentUser.unit})</span>
+              </div>
+              <button
+                onClick={() => {
+                  setCurrentUserId(supervisoryAdminId);
+                  setSupervisoryAdminId(null);
+                }}
+                className="px-4 py-1.5 rounded-xl bg-white text-stone-900 hover:bg-orange-50 font-black transition"
+              >
+                العودة إلى بوابة إدارة المنصة ←
+              </button>
+            </div>
+          )}
+
           {!currentUser ? (
             <LoginView
               users={db.users}
-              onLoginSuccess={(user) => setCurrentUserId(user.id)}
+              onLoginSuccess={(user) => {
+                setSupervisoryAdminId(null);
+                setCurrentUserId(user.id);
+              }}
               onResetDemo={resetDemoData}
             />
           ) : currentUser.roleType === "platform_admin" ? (
@@ -1127,8 +1231,15 @@ CREATE POLICY "Allow public upload on madyan-media"
               cloudStatus={cloudStatus}
               lastSyncAt={lastSyncAt}
               onOpenCloudSetup={() => setCloudModalOpen(true)}
+              onPreviewUser={(targetUserId) => {
+                setSupervisoryAdminId(currentUser.id);
+                setCurrentUserId(targetUserId);
+              }}
               onResetDemo={resetDemoData}
-              onLogout={() => setCurrentUserId(null)}
+              onLogout={() => {
+                setSupervisoryAdminId(null);
+                setCurrentUserId(null);
+              }}
               showToast={showToast}
             />
           ) : (currentUser.roleType === "admin" || currentUser.roleType === "operational_admin") ? (
@@ -3146,7 +3257,7 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
-    // 9.5 PLATFORM TECHNICAL ADMIN PORTAL (المحطة الأولى: مستوى إدارة المنصة التقنية)
+    // 9.5 PLATFORM TECHNICAL ADMIN PORTAL (إدارة المنصة التقنية - إعادة توزيع العناصر والهيراركي)
     // ============================================================================
     function PlatformAdminPortal({
       db,
@@ -3155,37 +3266,58 @@ CREATE POLICY "Allow public upload on madyan-media"
       cloudStatus,
       lastSyncAt,
       onOpenCloudSetup,
+      onPreviewUser,
       onResetDemo,
       onLogout,
       showToast
     }) {
-      const [activeTab, setActiveTab] = useState("governance"); // 'governance' | 'structure' | 'accounts' | 'cloud'
+      // الشاشات الأربع المستقلة في القائمة الجانبية الثابتة
+      const [activeScreen, setActiveScreen] = useState("overview"); // 'overview' | 'departments' | 'accounts' | 'governance'
+      const [roleFilter, setRoleFilter] = useState("all"); // 'all' | 'executive' | 'operational_admin' | 'cadre'
+
+      // التحكم في اللوحة الجانبية المنزلقة (Slide-over Drawer) لمنع ازدحام الشاشة بالنماذج
+      const [drawerMode, setDrawerMode] = useState(null);
+      // القيم الممكنة لـ drawerMode:
+      // 'add_dept' | 'edit_dept_quota' | 'add_unit' | 'add_team' | 'add_account' | 'bulk_import' | 'unit_invites' | 'edit_cadre_tracks'
+      const [selectedDeptId, setSelectedDeptId] = useState(null);
+      const [selectedUserId, setSelectedUserId] = useState(null);
 
       const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
       const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+      const teams = db.systemConfig?.crossFunctionalTeams || DEFAULT_TEAMS;
       const rules = { ...DEFAULT_GOVERNANCE_RULES, ...(db.systemConfig?.governanceRules || {}) };
+      const latestBulletin = (db.bulletins || [])[0] || null;
 
-      // حالات إضافة إدارة تشغيلية جديدة
+      // حالات اللوحة المنزلقة: تأسيس إدارة جديدة
       const [deptName, setDeptName] = useState("");
       const [deptShortName, setDeptShortName] = useState("");
       const [deptIcon, setDeptIcon] = useState("🧭");
-      const [deptTheme, setDeptTheme] = useState("blue");
       const [deptDesc, setDeptDesc] = useState("");
+      const [deptMaxTotal, setDeptMaxTotal] = useState(6);
+      const [deptMaxPerType, setDeptMaxPerType] = useState(2);
+      const [deptAllowedTypes, setDeptAllowedTypes] = useState(["lecture_quiz", "meeting", "practical"]);
 
-      // حالات إضافة وحدة تنظيمية جديدة
+      // حالات اللوحة المنزلقة: إضافة وحدة أو فريق عابر للوحدات
       const [unitName, setUnitName] = useState("");
-      const [unitDefaultDepts, setUnitDefaultDepts] = useState(["dept_hr", "dept_tarbawi"]);
+      const [unitInviteCode, setUnitInviteCode] = useState("");
+      const [teamName, setTeamName] = useState("");
+      const [teamPurpose, setTeamPurpose] = useState("");
 
-      // حالات إنشاء حساب جديد بأي مستوى من المستويات الأربعة
+      // حالات اللوحة المنزلقة: إضافة حساب فردي أو جماعي
       const [newRoleType, setNewRoleType] = useState("cadre");
       const [newName, setNewName] = useState("");
       const [newJobTitle, setNewJobTitle] = useState("");
       const [newUnit, setNewUnit] = useState(units[0]?.name || "وحدة التخطيط الاستراتيجي");
       const [newDepartmentId, setNewDepartmentId] = useState("dept_hr");
       const [newAssignedDepts, setNewAssignedDepts] = useState(["dept_hr", "dept_tarbawi"]);
+      const [newCrossTeams, setNewCrossTeams] = useState([]);
       const [newUsername, setNewUsername] = useState("");
       const [newPassword, setNewPassword] = useState("1234");
-      const [newWeeksAgo, setNewWeeksAgo] = useState(1);
+      const [forcePassChange, setForcePassChange] = useState(true);
+      const [bulkText, setBulkText] = useState("");
+
+      const selectedDept = departments.find(d => d.id === selectedDeptId) || null;
+      const selectedUser = db.users.find(u => u.id === selectedUserId) || null;
 
       const updateRule = (key, value) => {
         setDb(prev => ({
@@ -3211,10 +3343,13 @@ CREATE POLICY "Allow public upload on madyan-media"
           name: deptName.trim(),
           shortName: deptShortName.trim() || deptName.trim(),
           icon: deptIcon || "🏢",
-          theme: deptTheme || "blue",
+          theme: "orange",
           description: deptDesc.trim() || "إدارة تشغيلية مستقلة معزولة البيانات والصلاحيات.",
           isCore: false,
-          enabled: true
+          enabled: true,
+          allowedTaskTypes: deptAllowedTypes.length > 0 ? deptAllowedTypes : ["practical"],
+          maxTotalTasks: Math.max(1, parseInt(deptMaxTotal, 10) || 6),
+          maxPerTypePerCadre: Math.max(1, parseInt(deptMaxPerType, 10) || 2)
         };
         setDb(prev => ({
           ...prev,
@@ -3226,29 +3361,31 @@ CREATE POLICY "Allow public upload on madyan-media"
         setDeptName("");
         setDeptShortName("");
         setDeptDesc("");
-        showToast(`تم تأسيس (${createdDept.name}) كإدارة تشغيلية معزولة بنجاح ✓`);
+        setDrawerMode(null);
+        showToast(`تم تأسيس (${createdDept.name}) وضبط حصص مهامها بنجاح ✓`);
       };
 
-      const toggleDepartmentEnabled = (deptId) => {
+      const updateDepartmentQuota = (deptId, updater) => {
         setDb(prev => ({
           ...prev,
           systemConfig: {
             ...prev.systemConfig,
             departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).map(d =>
-              d.id === deptId ? { ...d, enabled: !d.enabled } : d
+              d.id === deptId ? updater(d) : d
             )
           }
         }));
-        showToast("تم تحديث حالة تفعيل الإدارة التشغيلية ✓");
       };
 
       const handleAddUnit = (e) => {
         e.preventDefault();
         if (!unitName.trim()) return;
+        const code = unitInviteCode.trim().toUpperCase() || ("MAYDAN-" + Math.floor(1000 + Math.random() * 9000));
         const createdUnit = {
           id: "unit_" + Date.now(),
           name: unitName.trim(),
-          defaultDepartments: unitDefaultDepts.length > 0 ? unitDefaultDepts : ["dept_hr"]
+          inviteCode: code,
+          defaultDepartments: ["dept_hr", "dept_tarbawi"]
         };
         setDb(prev => ({
           ...prev,
@@ -3258,7 +3395,30 @@ CREATE POLICY "Allow public upload on madyan-media"
           }
         }));
         setUnitName("");
+        setUnitInviteCode("");
+        setDrawerMode(null);
         showToast(`تمت إضافة الوحدة التنظيمية (${createdUnit.name}) بنجاح ✓`);
+      };
+
+      const handleAddTeam = (e) => {
+        e.preventDefault();
+        if (!teamName.trim()) return;
+        const createdTeam = {
+          id: "team_" + Date.now(),
+          name: teamName.trim(),
+          purpose: teamPurpose.trim() || "لجنة مهام عابرة للوحدات التنظيمية"
+        };
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            crossFunctionalTeams: [...(prev.systemConfig?.crossFunctionalTeams || DEFAULT_TEAMS), createdTeam]
+          }
+        }));
+        setTeamName("");
+        setTeamPurpose("");
+        setDrawerMode(null);
+        showToast(`تم تشكيل (${createdTeam.name}) كفريق عابر للوحدات ✓`);
       };
 
       const handleCreateAccount = (e) => {
@@ -3271,21 +3431,6 @@ CREATE POLICY "Allow public upload on madyan-media"
         if (db.users.some(u => u.username.toLowerCase() === cleanUser)) {
           showToast("اسم المستخدم هذا مسجل بالفعل، اختر اسماً آخر.");
           return;
-        }
-
-        const weeksNum = Math.max(1, parseInt(newWeeksAgo, 10) || 1);
-        const joinedTimestamp = Date.now() - ((weeksNum - 1) * MS_PER_WEEK) - (24 * 3600 * 1000);
-
-        const initialTasks = {};
-        if (newRoleType === "cadre") {
-          for (let w = 1; w <= weeksNum; w++) {
-            initialTasks[w] = {
-              lecture: { status: "pending" },
-              agenda: { status: "pending" },
-              attendance: { status: "pending" },
-              minutes: { status: "pending" }
-            };
-          }
         }
 
         const deptObj = departments.find(d => d.id === newDepartmentId);
@@ -3316,14 +3461,23 @@ CREATE POLICY "Allow public upload on madyan-media"
           assignedDepartments: newRoleType === "cadre"
             ? (newAssignedDepts.length > 0 ? newAssignedDepts : ["dept_hr"])
             : undefined,
+          crossTeams: newRoleType === "cadre" ? newCrossTeams : [],
+          mustChangePassword: Boolean(forcePassChange),
           onboarded: false,
-          joinedAt: joinedTimestamp,
+          joinedAt: Date.now() - (24 * 3600 * 1000),
           name: newName.trim(),
           jobTitle: newJobTitle.trim() || defaultTitle,
           unit: defaultUnitName,
           defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
           weekOverrides: {},
-          tasksRecord: initialTasks
+          tasksRecord: {
+            1: {
+              lecture: { status: "pending" },
+              agenda: { status: "pending" },
+              attendance: { status: "pending" },
+              minutes: { status: "pending" }
+            }
+          }
         };
 
         setDb(prev => ({
@@ -3334,7 +3488,67 @@ CREATE POLICY "Allow public upload on madyan-media"
         setNewName("");
         setNewJobTitle("");
         setNewUsername("");
-        showToast(`تم إنشاء حساب (${created.name}) وتخصيص صلاحياته بنجاح ✓`);
+        setNewCrossTeams([]);
+        setDrawerMode(null);
+        showToast(`تم إنشاء حساب (${created.name}) وتفعيل صلاحياته بنجاح ✓`);
+      };
+
+      const handleBulkImport = (e) => {
+        e.preventDefault();
+        const lines = bulkText
+          .split("\n")
+          .map(l => l.trim())
+          .filter(Boolean);
+        if (lines.length === 0) {
+          showToast("يرجى كتابة سطر واحد على الأقل للاستيراد الجماعي.");
+          return;
+        }
+        const createdList = [];
+        lines.forEach((line, idx) => {
+          const parts = line.split(/[،,\t]/).map(p => p.trim()).filter(Boolean);
+          const fullName = parts[0] || `كادر جديد ${idx + 1}`;
+          const uname = (parts[1] || `cadre_${Date.now().toString().slice(-4)}_${idx + 1}`).toLowerCase();
+          const unitChoice = parts[2] || newUnit || (units[0]?.name || "وحدة التخطيط الاستراتيجي");
+          if (!db.users.some(u => u.username.toLowerCase() === uname)) {
+            createdList.push({
+              id: "u_bulk_" + Date.now() + "_" + idx,
+              username: uname,
+              password: "1234",
+              roleType: "cadre",
+              assignedDepartments: ["dept_hr", "dept_tarbawi"],
+              crossTeams: [],
+              mustChangePassword: true,
+              onboarded: false,
+              joinedAt: Date.now() - (24 * 3600 * 1000),
+              name: fullName,
+              jobTitle: "كادر تنظيمي",
+              unit: unitChoice,
+              defaultSchedule: { meetDay: 2, meetTime: "19:00", meetDuration: 90 },
+              weekOverrides: {},
+              tasksRecord: {
+                1: {
+                  lecture: { status: "pending" },
+                  agenda: { status: "pending" },
+                  attendance: { status: "pending" },
+                  minutes: { status: "pending" }
+                }
+              }
+            });
+          }
+        });
+
+        if (createdList.length === 0) {
+          showToast("جميع أسماء المستخدمين المدخلة مسجلة مسبقاً.");
+          return;
+        }
+
+        setDb(prev => ({
+          ...prev,
+          users: [...prev.users, ...createdList]
+        }));
+        setBulkText("");
+        setDrawerMode(null);
+        showToast(`تم استيراد وتوليد (${createdList.length}) حسابات كوادر دفعة واحدة ✓`);
       };
 
       const toggleCadreAssignedDept = (userId, deptId) => {
@@ -3358,6 +3572,28 @@ CREATE POLICY "Allow public upload on madyan-media"
         }));
       };
 
+      const toggleCadreCrossTeam = (userId, teamId) => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => {
+            if (u.id !== userId) return u;
+            const currentTeams = Array.isArray(u.crossTeams) ? u.crossTeams : [];
+            const exists = currentTeams.includes(teamId);
+            return {
+              ...u,
+              crossTeams: exists ? currentTeams.filter(id => id !== teamId) : [...currentTeams, teamId]
+            };
+          })
+        }));
+      };
+
+      const updateCadrePrimaryUnit = (userId, nextUnitName) => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => u.id === userId ? { ...u, unit: nextUnitName } : u)
+        }));
+      };
+
       const handleDeleteUser = (userId) => {
         const target = db.users.find(u => u.id === userId);
         if (!target) return;
@@ -3369,6 +3605,7 @@ CREATE POLICY "Allow public upload on madyan-media"
           ...prev,
           users: prev.users.filter(u => u.id !== userId)
         }));
+        setDrawerMode(null);
         showToast("تم حذف الحساب من المنصة.");
       };
 
@@ -3383,126 +3620,548 @@ CREATE POLICY "Allow public upload on madyan-media"
         showToast("تم تصدير النسخة الاحتياطية الكاملة للمنصة ✓");
       };
 
-      const cadresCount = db.users.filter(u => u.roleType === "cadre").length;
-      const opAdminsCount = db.users.filter(u => u.roleType === "operational_admin" || u.roleType === "admin").length;
-      const execCount = db.users.filter(u => u.roleType === "executive").length;
+      const cadresList = db.users.filter(u => u.roleType === "cadre");
+      const filteredUsers = db.users.filter(u => {
+        if (roleFilter === "all") return true;
+        return u.roleType === roleFilter;
+      });
+
+      const navItems = [
+        { id: "overview", icon: "🧭", label: "١. نظرة عامة ومعاينة المستويات", sub: "البؤرة الأولى والإشراف" },
+        { id: "departments", icon: "🏢", label: "٢. الإدارات ومكتبة المهمات", sub: `${departments.length} إدارات • ${units.length} وحدات` },
+        { id: "accounts", icon: "👥", label: "٣. الحسابات وقنوات الانضمام", sub: `${db.users.length} حساب مسجل` },
+        { id: "governance", icon: "⚙️", label: "٤. الضوابط الحاكمة والسحابة", sub: "القواعد والنسخ الاحتياطي" }
+      ];
+
+      // حسابات المعاينة الإشرافية للمستويات الأربعة
+      const previewTargets = [
+        {
+          title: "الإدارة التنفيذية العليا",
+          badge: "المستوى الأول",
+          desc: "ملخص الحركة الكلي، مقارنة الإدارات، وإصدار التعميمات السياسية",
+          user: db.users.find(u => u.roleType === "executive")
+        },
+        {
+          title: "إدارة الموارد البشرية",
+          badge: "المستوى الثاني (معزول)",
+          desc: "متابعة الانضباط الإداري، الاجتماعات، والمحاضرات بمعزل عن التربوي",
+          user: db.users.find(u => u.roleType === "operational_admin" && u.departmentId === "dept_hr")
+        },
+        {
+          title: "الإدارة التربوية",
+          badge: "المستوى الثاني (معزول)",
+          desc: "متابعة الأوراد اليومية، المطالعة، والتزكية بمعزل عن الإداري",
+          user: db.users.find(u => u.roleType === "operational_admin" && u.departmentId === "dept_tarbawi")
+        },
+        {
+          title: "بوابة الكادر التنظيمي",
+          badge: "المستوى الرابع",
+          desc: "شاشة الواجبات اليومية المفعّلة للكادر والتفاعل ضمن حدود المنصة",
+          user: db.users.find(u => u.roleType === "cadre")
+        }
+      ];
 
       return (
-        <div className="min-h-screen bg-[#F6F5F2]">
-          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-stone-200/80">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+        <div className="min-h-screen bg-[#F6F5F2] flex flex-col lg:flex-row">
+          {/* القائمة الجانبية الثابتة والواضحة (تقسم الموقع إلى ٤ شاشات مستقلة بدون تشتت) */}
+          <aside className="w-full lg:w-72 bg-white border-b lg:border-b-0 lg:border-l border-stone-200/80 lg:min-h-screen lg:sticky lg:top-0 lg:h-screen flex flex-col justify-between p-5 sm:p-6 z-30">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between lg:block space-y-2">
                 <MadyanWordmark size="text-2xl sm:text-3xl" />
-                <span className="text-xs font-black px-3 py-1 rounded-full bg-stone-900 text-white">
-                  🛠️ إدارة المنصة التقنية (المستوى الحاكم)
-                </span>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-stone-900 text-white text-[11px] font-black">
+                  <span>🛠️</span>
+                  <span>إدارة المنصة التقنية</span>
+                </div>
               </div>
 
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                <button
-                  onClick={() => setActiveTab("governance")}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
-                    activeTab === "governance" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
-                  }`}
-                >
-                  ⚙️ الضوابط والقواعد الحاكمة
-                </button>
-                <button
-                  onClick={() => setActiveTab("structure")}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
-                    activeTab === "structure" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
-                  }`}
-                >
-                  🏢 هيكل الإدارات والوحدات ({departments.length})
-                </button>
-                <button
-                  onClick={() => setActiveTab("accounts")}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
-                    activeTab === "accounts" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
-                  }`}
-                >
-                  👥 الحسابات والمسارات ({db.users.length})
-                </button>
-                <button
-                  onClick={() => setActiveTab("cloud")}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex-shrink-0 ${
-                    activeTab === "cloud" ? "bg-stone-900 text-white shadow-sm" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
-                  }`}
-                >
-                  ☁️ البنية السحابية والنسخ الاحتياطي
-                </button>
-                <button
-                  onClick={onLogout}
-                  className="px-3.5 py-2 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold flex-shrink-0"
-                >
-                  تسجيل الخروج
-                </button>
-              </div>
+              <nav className="grid grid-cols-2 lg:grid-cols-1 gap-2">
+                {navItems.map(item => {
+                  const active = activeScreen === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveScreen(item.id)}
+                      className={`text-right p-3.5 rounded-2xl transition flex items-start gap-3 border ${
+                        active
+                          ? "bg-stone-900 text-white border-stone-900 shadow-md"
+                          : "bg-stone-50/80 text-stone-700 border-stone-200/60 hover:bg-stone-100"
+                      }`}
+                    >
+                      <span className="text-lg leading-none mt-0.5">{item.icon}</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate">{item.label}</div>
+                        <div className={`text-[10px] mt-0.5 truncate ${active ? "text-stone-300" : "text-stone-400"}`}>
+                          {item.sub}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </nav>
             </div>
-          </header>
 
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-            {/* شريط الملخص التنظيمي للمستويات الأربعة */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
-                <div className="text-[11px] font-bold text-stone-400">الإدارات التشغيلية المعزولة</div>
-                <div className="text-2xl font-black text-stone-900 mt-1">{departments.length} إدارات</div>
-                <div className="text-[11px] text-stone-500 mt-0.5">عزل تام للبيانات والصلاحيات</div>
-              </div>
-              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
-                <div className="text-[11px] font-bold text-stone-400">الوحدات التنظيمية الفرعية</div>
-                <div className="text-2xl font-black text-orange-600 mt-1">{units.length} وحدات</div>
-                <div className="text-[11px] text-stone-500 mt-0.5">يتوزع عليها {cadresCount} كوادر</div>
-              </div>
-              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
-                <div className="text-[11px] font-bold text-stone-400">مديرو الإدارات والقيادة</div>
-                <div className="text-2xl font-black text-emerald-700 mt-1">{opAdminsCount + execCount} حسابات</div>
-                <div className="text-[11px] text-stone-500 mt-0.5">{execCount} تنفيذي • {opAdminsCount} مدير إدارة</div>
-              </div>
-              <div className="bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm">
-                <div className="text-[11px] font-bold text-stone-400">حالة قاعدة بيانات سوبابيس</div>
-                <div className="text-base font-black text-stone-900 mt-1.5 flex items-center gap-1.5">
+            <div className="hidden lg:flex flex-col gap-3 pt-6 border-t border-stone-100">
+              <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <span className={`w-2.5 h-2.5 rounded-full ${cloudStatus === "connected" ? "bg-emerald-500" : "bg-amber-500"}`} />
-                  <span>{cloudStatus === "connected" ? "متصلة ومزامنة لحظياً" : "وضع محلي"}</span>
-                </div>
-                <div className="text-[11px] text-stone-500 mt-1">
-                  {lastSyncAt ? `آخر مزامنة: ${lastSyncAt}` : "تزامن تلقائي عند أي تعديل"}
-                </div>
-              </div>
-            </div>
-
-            {/* القسم الأول: الضوابط والقواعد الحاكمة */}
-            {activeTab === "governance" && (
-              <div className="space-y-6">
-                <div className="bg-stone-900 text-white rounded-3xl p-6 shadow-md flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <span className="text-xs font-bold text-orange-400">الإطار التنظيمي الحاكم لمنصة ميدان</span>
-                    <h2 className="text-lg font-black mt-0.5">مصفوفة الضوابط التقنية وحدود صلاحيات الكادر</h2>
-                    <p className="text-xs text-stone-300 mt-1">
-                      أي تغيير تضبطه هنا يُطبق فوراً على جميع واجهات الكوادر ومعادلات التقييم دون تدخل في البيانات التشغيلية اليومية.
-                    </p>
-                  </div>
-                  <span className="px-3.5 py-1.5 rounded-2xl bg-white/10 text-xs font-bold text-emerald-300 border border-white/10">
-                    ✓ الحفظ السحابي فوري وتلقائي
+                  <span className="text-xs font-black text-stone-800">
+                    {cloudStatus === "connected" ? "متصل سحابياً" : "وضع محلي"}
                   </span>
                 </div>
+                <span className="text-[10px] font-bold text-stone-400">{lastSyncAt || "مزامنة فورية"}</span>
+              </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* 1. ضوابط مواعيد اللقاء الأسبوعي */}
-                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+              <div className="flex items-center justify-between px-1">
+                <div className="text-xs font-bold text-stone-600 truncate">{currentUser.name}</div>
+                <button
+                  onClick={onLogout}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-black transition"
+                >
+                  خروج
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* مساحة العمل المستقلة والهادئة (مساحات فارغة واسعة + تسلسل هرمي واضح) */}
+          <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
+
+            {/* ===================================================================== */}
+            {/* الشاشة الأولى: ١. نظرة عامة ومعاينة المستويات (الهيت ماب والأولويات) */}
+            {/* ===================================================================== */}
+            {activeScreen === "overview" && (
+              <div className="space-y-8">
+                {/* البؤرة البصرية الأولى (أول ٣ ثوانٍ): التعميم السياسي الأحدث + شريط التقدم العام */}
+                <section className="bg-stone-900 text-white rounded-[32px] p-6 sm:p-8 shadow-lg space-y-6">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-1.5 max-w-2xl">
+                      <span className="inline-block text-xs font-black px-3 py-1 rounded-full bg-orange-500/20 text-orange-300 border border-orange-400/30">
+                        📢 التعميم السياسي الأحدث من الإدارة العليا
+                      </span>
+                      <h1 className="text-lg sm:text-xl font-black text-white">
+                        {latestBulletin ? latestBulletin.title : "لا توجد تعميمات سياسية نشطة حالياً"}
+                      </h1>
+                      {latestBulletin && (
+                        <p className="text-xs sm:text-sm text-stone-300 leading-relaxed">
+                          {latestBulletin.content}
+                        </p>
+                      )}
+                    </div>
+                    {latestBulletin && (
+                      <div className="text-left">
+                        <span className="inline-block px-3.5 py-1.5 rounded-2xl bg-white/10 text-xs font-bold text-emerald-300 border border-white/10">
+                          استيعاب الكوادر: {Object.keys(latestBulletin.acknowledgedBy || {}).length} من {cadresList.length}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* شريط التقدم والجاهزية العام للفترة الحالية */}
+                  <div className="pt-5 border-t border-white/10 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-stone-300">شريط التقدم العام واستقرار المنصة للفترة الحالية</span>
+                      <span className="text-emerald-400 font-black">جاهزية تشغيلية ١٠٠٪</span>
+                    </div>
+                    <div className="w-full h-2.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-full rounded-full bg-emerald-500 w-full" />
+                    </div>
+                  </div>
+                </section>
+
+                {/* البؤرة الثانية: ٣ بطاقات نظيفة ومختصرة جداً (بحد أقصى ٣ معلومات في البطاقة) */}
+                <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">١. الإدارات التشغيلية المعزولة</span>
+                    <div className="text-2xl font-black text-stone-900">{departments.length} إدارات نشطة</div>
+                    <button
+                      onClick={() => setActiveScreen("departments")}
+                      className="text-xs font-black text-orange-600 hover:text-orange-700 text-right"
+                    >
+                      إدارة الأقسام ومكتبة المهمات ←
+                    </button>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">٢. الهيكل الشبكي المرن</span>
+                    <div className="text-2xl font-black text-stone-900">{units.length} وحدات • {teams.length} فرق عابرة</div>
+                    <button
+                      onClick={() => setActiveScreen("departments")}
+                      className="text-xs font-black text-emerald-700 hover:text-emerald-800 text-right"
+                    >
+                      استعراض الوحدات وفرق العمل ←
+                    </button>
+                  </div>
+
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <span className="text-xs font-bold text-stone-400">٣. الحسابات وقنوات الانضمام</span>
+                    <div className="text-2xl font-black text-stone-900">{db.users.length} حساب مسجل</div>
+                    <button
+                      onClick={() => setActiveScreen("accounts")}
+                      className="text-xs font-black text-stone-900 hover:text-orange-600 text-right"
+                    >
+                      إدارة الحسابات وروابط الوحدات ←
+                    </button>
+                  </div>
+                </section>
+
+                {/* البؤرة الثالثة: الدور الإشرافي الكامل واستعراض شاشات جميع المستويات */}
+                <section className="space-y-4">
+                  <div>
+                    <span className="text-xs font-bold text-orange-600">الدور الإشرافي الكامل لمدير المنصة</span>
+                    <h2 className="text-lg font-black text-stone-900">👁️ استعراض ومعاينة شاشات المستويات الأربعة</h2>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {previewTargets.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4 hover:border-stone-400 transition"
+                      >
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-bold text-orange-600">{item.badge}</span>
+                          <h3 className="text-base font-black text-stone-900">{item.title}</h3>
+                          <p className="text-xs text-stone-500">{item.desc}</p>
+                        </div>
+
+                        <div className="pt-2 flex items-center justify-between border-t border-stone-100">
+                          <span className="text-xs font-bold text-stone-500">
+                            {item.user ? item.user.name : "غير معين"}
+                          </span>
+                          {item.user && onPreviewUser && (
+                            <button
+                              onClick={() => onPreviewUser(item.user.id)}
+                              className="px-4 py-2 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-orange-600 transition"
+                            >
+                              معاينة الشاشة الآن ←
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الثانية: ٢. الإدارات ومكتبة المهمات والهيكل الشبكي المرن       */}
+            {/* ===================================================================== */}
+            {activeScreen === "departments" && (
+              <div className="space-y-10">
+                {/* أولاً: الإدارات التشغيلية ومكتبة وحصص المهمات */}
+                <section className="space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-bold text-orange-600">العزل التام ومكتبة المهمات</span>
+                      <h1 className="text-xl font-black text-stone-900">🏢 الإدارات التشغيلية وحصص المهمات ({departments.length})</h1>
+                    </div>
+                    <button
+                      onClick={() => setDrawerMode("add_dept")}
+                      className="px-5 py-3 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md hover:opacity-95"
+                    >
+                      + تأسيس إدارة تشغيلية جديدة
+                    </button>
+                  </div>
+
+                  {/* بطاقات الإدارات: بحد أقصى ٣ معلومات في البطاقة الواحدة */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {departments.map(dept => {
+                      const allowedCount = (dept.allowedTaskTypes || []).length;
+                      return (
+                        <div
+                          key={dept.id}
+                          className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-5"
+                        >
+                          {/* المعلومة ١: اسم الإدارة وحالتها */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <span className="text-2xl">{dept.icon}</span>
+                              <div>
+                                <h3 className="text-base font-black text-stone-900">{dept.name}</h3>
+                                <p className="text-xs text-stone-500 mt-0.5">{dept.description}</p>
+                              </div>
+                            </div>
+                            <span className={`text-[11px] font-black px-3 py-1 rounded-full ${
+                              dept.enabled ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-stone-100 text-stone-400"
+                            }`}>
+                              {dept.enabled ? "مفعّلة" : "موقوفة"}
+                            </span>
+                          </div>
+
+                          {/* المعلومة ٢: ملخص حصة المهمات وأنواعها المتاحة من المكتبة */}
+                          <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2">
+                            <div className="flex items-center justify-between text-xs font-black text-stone-800">
+                              <span>الحد الأقصى للإدارة: {dept.maxTotalTasks || 6} مهمات</span>
+                              <span className="text-orange-700">للفرد من كل نوع: {dept.maxPerTypePerCadre || 2}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 pt-1">
+                              {TASK_TEMPLATES_LIBRARY.filter(t => (dept.allowedTaskTypes || []).includes(t.id)).map(t => (
+                                <span key={t.id} className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-white border border-stone-200 text-stone-700">
+                                  {t.icon} {t.title}
+                                </span>
+                              ))}
+                              {allowedCount === 0 && (
+                                <span className="text-xs text-stone-400">لم يتم تحديد قوالب مهام بعد</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* المعلومة ٣: زر الإجراء (يفتح اللوحة الجانبية المنزلقة) */}
+                          <div className="flex items-center justify-between pt-1">
+                            <button
+                              onClick={() => {
+                                setSelectedDeptId(dept.id);
+                                setDrawerMode("edit_dept_quota");
+                              }}
+                              className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800 transition"
+                            >
+                              ⚙️ ضبط مكتبة وحصص المهمات
+                            </button>
+
+                            {!dept.isCore && (
+                              <button
+                                onClick={() => updateDepartmentQuota(dept.id, d => ({ ...d, enabled: !d.enabled }))}
+                                className="px-3.5 py-2 rounded-xl bg-stone-100 text-stone-600 text-xs font-bold hover:bg-stone-200"
+                              >
+                                {dept.enabled ? "إيقاف مؤقت" : "تفعيل"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* ثانياً: الهيكل الشبكي المرن (الوحدات الأساسية + فرق العمل العابرة للوحدات) */}
+                <section className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-stone-200/80">
+                  {/* الوحدات التنظيمية الأساسية */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-5">
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="text-xs font-bold text-orange-600">الركن الأول</span>
-                        <h3 className="text-base font-black text-stone-900">📅 ضوابط تغيير مواعيد اللقاء الأسبوعي</h3>
+                        <span className="text-xs font-bold text-emerald-700">التسكين التنظيمي الأساسي</span>
+                        <h3 className="text-base font-black text-stone-900">🗂️ الوحدات التنظيمية ({units.length})</h3>
                       </div>
+                      <button
+                        onClick={() => setDrawerMode("add_unit")}
+                        className="px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black"
+                      >
+                        + إضافة وحدة
+                      </button>
                     </div>
 
                     <div className="space-y-3">
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">السماح للكادر بتغيير موعد لقائه الأسبوعي</div>
-                          <div className="text-[11px] text-stone-500">عند إيقافه، يُقفل جدول اللقاء الأسبوعي ولا يغيره إلا مدير الإدارة</div>
+                      {units.map(u => {
+                        const count = cadresList.filter(c => c.unit === u.name).length;
+                        return (
+                          <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-black text-stone-900">{u.name}</div>
+                              <div className="text-[11px] text-stone-500 mt-0.5">رمز الانضمام: {u.inviteCode}</div>
+                            </div>
+                            <span className="px-3 py-1 rounded-full bg-white border border-stone-200 text-xs font-black text-stone-700">
+                              {count} كوادر
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* فرق العمل واللجان العابرة للوحدات */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-orange-600">الهيكل الشبكي المرن</span>
+                        <h3 className="text-base font-black text-stone-900">🤝 فرق العمل واللجان العابرة ({teams.length})</h3>
+                      </div>
+                      <button
+                        onClick={() => setDrawerMode("add_team")}
+                        className="px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black"
+                      >
+                        + تشكيل فريق عابر
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {teams.map(t => {
+                        const memberCount = cadresList.filter(c => (c.crossTeams || []).includes(t.id)).length;
+                        return (
+                          <div key={t.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/70 flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-black text-stone-900">{t.name}</div>
+                              <div className="text-[11px] text-stone-500 mt-0.5">{t.purpose}</div>
+                            </div>
+                            <span className="px-3 py-1 rounded-full bg-orange-50 border border-orange-200 text-xs font-black text-orange-900">
+                              {memberCount} أعضاء
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الثالثة: ٣. الحسابات وقنوات الانضمام الثلاث                    */}
+            {/* ===================================================================== */}
+            {activeScreen === "accounts" && (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <span className="text-xs font-bold text-orange-600">إدارة الحسابات وتسكين المسارات</span>
+                    <h1 className="text-xl font-black text-stone-900">👥 سجل الحسابات وقنوات الانضمام ({db.users.length})</h1>
+                  </div>
+
+                  {/* قنوات الانضمام الثلاث في أزرار واضحة تفتح اللوحة المنزلقة */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setDrawerMode("add_account")}
+                      className="px-4 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-sm"
+                    >
+                      + إضافة حساب فردي
+                    </button>
+                    <button
+                      onClick={() => setDrawerMode("bulk_import")}
+                      className="px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+                    >
+                      📥 استيراد جماعي
+                    </button>
+                    <button
+                      onClick={() => setDrawerMode("unit_invites")}
+                      className="px-4 py-2.5 rounded-2xl bg-white border border-stone-300 text-stone-800 text-xs font-black hover:bg-stone-100"
+                    >
+                      🔗 رموز انضمام الوحدات
+                    </button>
+                  </div>
+                </div>
+
+                {/* فلاتر هادئة للمستويات الأربعة */}
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { id: "all", label: `الكل (${db.users.length})` },
+                    { id: "executive", label: "الإدارة التنفيذية" },
+                    { id: "operational_admin", label: "مديرو الإدارات التشغيلية" },
+                    { id: "cadre", label: `الكوادر (${cadresList.length})` }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setRoleFilter(tab.id)}
+                      className={`px-4 py-2 rounded-xl text-xs font-black transition ${
+                        roleFilter === tab.id
+                          ? "bg-stone-900 text-white"
+                          : "bg-white text-stone-600 border border-stone-200 hover:bg-stone-100"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* قائمة الحسابات النظيفة والمختصرة (٣ أعمدة معلومات أساسية + زر لوحة التعديل المنزلقة) */}
+                <div className="space-y-3">
+                  {filteredUsers.map(u => {
+                    const deptObj = departments.find(d => d.id === u.departmentId);
+                    const assignedList = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+                      ? u.assignedDepartments
+                      : ["dept_hr", "dept_tarbawi"];
+                    const userTeams = teams.filter(t => (u.crossTeams || []).includes(t.id));
+
+                    return (
+                      <div
+                        key={u.id}
+                        className="bg-white rounded-3xl p-5 border border-stone-200/80 shadow-sm flex flex-wrap items-center justify-between gap-4"
+                      >
+                        {/* المعلومة ١: الاسم والمستوى والوحدة الأساسية */}
+                        <div className="space-y-1 min-w-[220px]">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-black text-stone-900">{u.name}</span>
+                            <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
+                              u.roleType === "platform_admin"
+                                ? "bg-stone-900 text-white"
+                                : u.roleType === "executive"
+                                ? "bg-amber-100 text-amber-900"
+                                : u.roleType === "operational_admin"
+                                ? "bg-orange-100 text-orange-900"
+                                : "bg-emerald-100 text-emerald-900"
+                            }`}>
+                              {u.roleType === "platform_admin"
+                                ? "🛠️ مدير المنصة"
+                                : u.roleType === "executive"
+                                ? "👑 القيادة التنفيذية"
+                                : u.roleType === "operational_admin"
+                                ? `🏢 مدير ${deptObj ? deptObj.shortName : "إدارة"}`
+                                : "👤 كادر"}
+                            </span>
+                          </div>
+                          <div className="text-xs text-stone-500">
+                            {u.unit} • {u.jobTitle}
+                          </div>
                         </div>
+
+                        {/* المعلومة ٢: المسارات المفعّلة وفرق العمل العابرة (للكادر) */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {u.roleType === "cadre" && departments.filter(d => assignedList.includes(d.id)).map(d => (
+                            <span key={d.id} className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-stone-100 text-stone-800">
+                              {d.icon} {d.shortName}
+                            </span>
+                          ))}
+                          {u.roleType === "cadre" && userTeams.map(t => (
+                            <span key={t.id} className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-orange-50 text-orange-800 border border-orange-200">
+                              🤝 {t.name}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* المعلومة ٣: زر التعديل عبر اللوحة الجانبية المنزلقة أو المعاينة */}
+                        <div className="flex items-center gap-2">
+                          {u.roleType === "cadre" && (
+                            <button
+                              onClick={() => {
+                                setSelectedUserId(u.id);
+                                setDrawerMode("edit_cadre_tracks");
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800"
+                            >
+                              ⚙️ المسارات والفرق
+                            </button>
+                          )}
+                          {onPreviewUser && u.id !== currentUser.id && (
+                            <button
+                              onClick={() => onPreviewUser(u.id)}
+                              className="px-3 py-2 rounded-xl bg-stone-100 text-stone-700 hover:bg-stone-200 text-xs font-bold"
+                            >
+                              👁️ معاينة
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ===================================================================== */}
+            {/* الشاشة الرابعة: ٤. الضوابط الحاكمة والبنية السحابية                   */}
+            {/* ===================================================================== */}
+            {activeScreen === "governance" && (
+              <div className="space-y-8">
+                <div>
+                  <span className="text-xs font-bold text-orange-600">الإطار التنظيمي والتقني الحاكم</span>
+                  <h1 className="text-xl font-black text-stone-900">⚙️ مصفوفة الضوابط الحاكمة والبنية السحابية</h1>
+                </div>
+
+                {/* ٤ بطاقات هادئة وبحد أقصى ٣ ضوابط داخل كل بطاقة لمنع التشتت البصري */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* البطاقة ١: ضوابط المواعيد واللقاءات (٣ عناصر) */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
+                    <h3 className="text-base font-black text-stone-900">١. ضوابط مواعيد اللقاءات</h3>
+                    <div className="space-y-3">
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">السماح للكادر بتغيير موعد اللقاء</span>
                         <input
                           type="checkbox"
                           checked={Boolean(rules.allowCadreScheduleChange)}
@@ -3511,11 +4170,8 @@ CREATE POLICY "Allow public upload on madyan-media"
                         />
                       </label>
 
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">السماح بالاستثناء المؤقت لأسبوع واحد</div>
-                          <div className="text-[11px] text-stone-500">يسمح للكادر بتغيير موعد الأسبوع الحالي فقط دون تغيير موعده الثابت</div>
-                        </div>
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">السماح بالاستثناء المؤقت لفترة واحدة</span>
                         <input
                           type="checkbox"
                           checked={Boolean(rules.allowWeekSpecificOverride)}
@@ -3524,585 +4180,669 @@ CREATE POLICY "Allow public upload on madyan-media"
                         />
                       </label>
 
-                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">الحد الأقصى لعدد مرات تغيير الموعد شهرياً</div>
-                          <div className="text-[11px] text-stone-500">يضبط انضباط المواعيد ويمنع التغيير المتكرر</div>
-                        </div>
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70">
+                        <span className="text-xs font-black text-stone-800">أقصى عدد لتغيير الموعد شهرياً</span>
                         <input
                           type="number"
                           min="0"
                           max="10"
                           value={rules.maxScheduleChangesPerMonth}
                           onChange={e => updateRule("maxScheduleChangesPerMonth", parseInt(e.target.value, 10) || 0)}
-                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                          className="w-16 rounded-xl border border-stone-300 bg-white px-2 py-1 text-center text-xs font-black"
                         />
                       </div>
                     </div>
                   </div>
 
-                  {/* 2. ضوابط الأسابيع السابقة والمهام المتأخرة */}
+                  {/* البطاقة ٢: حدود الملف الشخصي والأمان (٣ عناصر) */}
                   <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                    <div>
-                      <span className="text-xs font-bold text-orange-600">الركن الثاني</span>
-                      <h3 className="text-base font-black text-stone-900">⏳ ضوابط الأسابيع السابقة ورصد المتأخرات</h3>
-                    </div>
-
+                    <h3 className="text-base font-black text-stone-900">٢. حوكمة الملف الشخصي والدخول</h3>
                     <div className="space-y-3">
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">السماح للكادر برصد المهام المتأخرة للأسابيع السابقة</div>
-                          <div className="text-[11px] text-stone-500">عند إيقافه، تُقفل الأسابيع المنتهية تماماً للقراءة فقط</div>
-                        </div>
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">إجبار الكادر الجديد على تغيير كلمة المرور المؤقتة</span>
                         <input
                           type="checkbox"
-                          checked={Boolean(rules.allowLateSubmissions)}
-                          onChange={e => updateRule("allowLateSubmissions", e.target.checked)}
-                          className="w-5 h-5 accent-orange-600"
+                          checked={Boolean(rules.forcePasswordChangeOnFirstLogin)}
+                          onChange={e => updateRule("forcePasswordChangeOnFirstLogin", e.target.checked)}
+                          className="w-5 h-5 accent-emerald-600"
                         />
                       </label>
 
-                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">عدد الأسابيع السابقة المسموح باستدراكها</div>
-                          <div className="text-[11px] text-stone-500">تُقفل الأسابيع الأقدم من هذا العدد تلقائياً</div>
-                        </div>
-                        <input
-                          type="number"
-                          min="1"
-                          max="52"
-                          value={rules.maxPastWeeksEditable}
-                          onChange={e => updateRule("maxPastWeeksEditable", parseInt(e.target.value, 10) || 1)}
-                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 3. حدود تعديل الكادر لبياناته الشخصية */}
-                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                    <div>
-                      <span className="text-xs font-bold text-emerald-700">الركن الثالث</span>
-                      <h3 className="text-base font-black text-stone-900">🔐 حدود تعديل الكادر لملفه الشخصي</h3>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <span className="text-xs font-black text-stone-800">تعديل الاسم الكامل</span>
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">السماح للكادر بتعديل الاسم وكلمة المرور</span>
                         <input
                           type="checkbox"
                           checked={Boolean(rules.allowCadreNameEdit)}
-                          onChange={e => updateRule("allowCadreNameEdit", e.target.checked)}
-                          className="w-4 h-4 accent-emerald-600"
+                          onChange={e => {
+                            updateRule("allowCadreNameEdit", e.target.checked);
+                            updateRule("allowCadrePasswordChange", e.target.checked);
+                          }}
+                          className="w-5 h-5 accent-emerald-600"
                         />
                       </label>
 
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <span className="text-xs font-black text-stone-800">تغيير كلمة المرور والدخول</span>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(rules.allowCadrePasswordChange)}
-                          onChange={e => updateRule("allowCadrePasswordChange", e.target.checked)}
-                          className="w-4 h-4 accent-emerald-600"
-                        />
-                      </label>
-
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <span className="text-xs font-black text-stone-800">تعديل المسمى الوظيفي</span>
+                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">السماح للكادر بتعديل المسمى الوظيفي والوحدة</span>
                         <input
                           type="checkbox"
                           checked={Boolean(rules.allowCadreJobTitleEdit)}
-                          onChange={e => updateRule("allowCadreJobTitleEdit", e.target.checked)}
-                          className="w-4 h-4 accent-emerald-600"
-                        />
-                      </label>
-
-                      <label className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer">
-                        <span className="text-xs font-black text-stone-800">تعديل الوحدة التنظيمية</span>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(rules.allowCadreUnitEdit)}
-                          onChange={e => updateRule("allowCadreUnitEdit", e.target.checked)}
-                          className="w-4 h-4 accent-emerald-600"
+                          onChange={e => {
+                            updateRule("allowCadreJobTitleEdit", e.target.checked);
+                            updateRule("allowCadreUnitEdit", e.target.checked);
+                          }}
+                          className="w-5 h-5 accent-emerald-600"
                         />
                       </label>
                     </div>
                   </div>
 
-                  {/* 4. معادلة احتساب النقاط والاختبارات */}
+                  {/* البطاقة ٣: معادلة النقاط والاختبارات (٣ عناصر) */}
                   <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                    <div>
-                      <span className="text-xs font-bold text-emerald-700">الركن الرابع</span>
-                      <h3 className="text-base font-black text-stone-900">⚖️ معادلة احتساب النقاط واجتياز الاختبار</h3>
-                    </div>
-
+                    <h3 className="text-base font-black text-stone-900">٣. معادلة النقاط واجتياز الاختبارات</h3>
                     <div className="space-y-3">
-                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">نسبة النقاط المحتسبة للمهمة المتأخرة (%)</div>
-                          <div className="text-[11px] text-stone-500">المهمة المنجزة في وقتها تأخذ 100%، والمتأخرة تأخذ هذه النسبة</div>
-                        </div>
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70">
+                        <span className="text-xs font-black text-stone-800">نسبة نقاط المهمة المنجزة متأخراً (%)</span>
                         <input
                           type="number"
                           min="0"
                           max="100"
                           value={rules.latePointsPct}
                           onChange={e => updateRule("latePointsPct", parseInt(e.target.value, 10) || 0)}
-                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                          className="w-16 rounded-xl border border-stone-300 bg-white px-2 py-1 text-center text-xs font-black"
                         />
                       </div>
 
-                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">الحد الأدنى لاجتياز اختبار المحاضرة الأسبوعية (%)</div>
-                          <div className="text-[11px] text-stone-500">النسبة المئوية المطلوبة لاعتبار الاختبار مجتازاً بنجاح</div>
-                        </div>
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70">
+                        <span className="text-xs font-black text-stone-800">الحد الأدنى لاجتياز اختبار المحاضرة (%)</span>
                         <input
                           type="number"
                           min="0"
                           max="100"
                           value={rules.quizPassThresholdPct}
                           onChange={e => updateRule("quizPassThresholdPct", parseInt(e.target.value, 10) || 60)}
-                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                          className="w-16 rounded-xl border border-stone-300 bg-white px-2 py-1 text-center text-xs font-black"
                         />
                       </div>
 
-                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-black text-stone-900">نصاب الأيام الأسبوعي للمهام اليومية (من 7 أيام)</div>
-                          <div className="text-[11px] text-stone-500">عدد الأيام اللازم لإتمام مهمة الورد اليومي بالعلامة الكاملة</div>
-                        </div>
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70">
+                        <span className="text-xs font-black text-stone-800">نصاب الأيام المطلوب للعادات اليومية</span>
                         <input
                           type="number"
                           min="1"
                           max="7"
                           value={rules.dailyTaskTargetDays}
                           onChange={e => updateRule("dailyTaskTargetDays", parseInt(e.target.value, 10) || 5)}
-                          className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                          className="w-16 rounded-xl border border-stone-300 bg-white px-2 py-1 text-center text-xs font-black"
                         />
                       </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
 
-            {/* القسم الثاني: هيكل الإدارات التشغيلية والوحدات التنظيمية */}
-            {activeTab === "structure" && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                <div className="lg:col-span-7 space-y-6">
-                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                    <div>
-                      <span className="text-xs font-bold text-orange-600">نظام العزل التام بين الإدارات</span>
-                      <h3 className="text-base font-black text-stone-900">🏢 الإدارات التشغيلية المعتمدة في المنصة ({departments.length})</h3>
-                      <p className="text-xs text-stone-500 mt-0.5">
-                        كل إدارة تشغيلية لها بوابة مستقلة ولا ترى بيانات أو تشغيل الإدارة الأخرى.
-                      </p>
-                    </div>
-
-                    <div className="space-y-3">
-                      {departments.map(dept => (
-                        <div key={dept.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <span className="text-2xl">{dept.icon}</span>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-black text-stone-900">{dept.name}</span>
-                                {dept.isCore && (
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700">
-                                    إدارة تأسيسية
-                                  </span>
-                                )}
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                  dept.enabled ? "bg-emerald-100 text-emerald-800" : "bg-stone-200 text-stone-500"
-                                }`}>
-                                  {dept.enabled ? "مفعّلة" : "موقوفة"}
-                                </span>
-                              </div>
-                              <p className="text-xs text-stone-500 mt-1">{dept.description}</p>
-                            </div>
-                          </div>
-                          {!dept.isCore && (
-                            <button
-                              onClick={() => toggleDepartmentEnabled(dept.id)}
-                              className="px-3 py-1.5 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-700"
-                            >
-                              {dept.enabled ? "إيقاف" : "تفعيل"}
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                    <div>
-                      <span className="text-xs font-bold text-emerald-700">التسكين التنظيمي للكوادر</span>
-                      <h3 className="text-base font-black text-stone-900">🗂️ الوحدات التنظيمية الفرعية ({units.length})</h3>
-                    </div>
-
-                    <form onSubmit={handleAddUnit} className="flex flex-wrap gap-2">
-                      <input
-                        value={unitName}
-                        onChange={e => setUnitName(e.target.value)}
-                        placeholder="اسم الوحدة الجديدة (مثال: وحدة الإعلام الرقمي)"
-                        className="flex-1 min-w-[220px] rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                      />
-                      <button type="submit" className="px-5 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black">
-                        + إضافة وحدة
-                      </button>
-                    </form>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {units.map(u => (
-                        <div key={u.id} className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between">
-                          <span className="text-xs font-black text-stone-800">{u.name}</span>
-                          <span className="text-[10px] font-bold text-stone-500">
-                            {db.users.filter(usr => usr.roleType === "cadre" && usr.unit === u.name).length} كوادر
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
-                  <div>
-                    <span className="text-xs font-bold text-orange-600">محرك التوسع المرن</span>
-                    <h3 className="text-base font-black text-stone-900">➕ تأسيس إدارة تشغيلية جديدة</h3>
-                    <p className="text-xs text-stone-500 mt-0.5">
-                      أنشئ أي إدارة إضافية (مثل: الإدارة الإعلامية، إدارة التدريب) لتعمل بمعزل تام عن باقي الإدارات.
-                    </p>
-                  </div>
-
-                  <form onSubmit={handleAddDepartment} className="space-y-3.5">
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">اسم الإدارة التشغيلية</label>
-                      <input
-                        value={deptName}
-                        onChange={e => setDeptName(e.target.value)}
-                        placeholder="مثال: الإدارة الإعلامية والسياسية"
-                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                        required
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 mb-1">الاسم المختصر</label>
-                        <input
-                          value={deptShortName}
-                          onChange={e => setDeptShortName(e.target.value)}
-                          placeholder="الإعلامية"
-                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة الرمزية</label>
-                        <select
-                          value={deptIcon}
-                          onChange={e => setDeptIcon(e.target.value)}
-                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                        >
-                          <option value="🧭">🧭 بوصلة</option>
-                          <option value="📡">📡 إعلام</option>
-                          <option value="🎓">🎓 تدريب</option>
-                          <option value="⚖️">⚖️ حوكمة</option>
-                          <option value="🤝">🤝 علاقات</option>
-                        </select>
+                  {/* البطاقة ٤: البنية السحابية والنسخ الاحتياطي (٣ عناصر) */}
+                  <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4">
+                    <div className="space-y-2">
+                      <h3 className="text-base font-black text-stone-900">٤. البنية السحابية والنسخ الاحتياطي</h3>
+                      <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 flex items-center justify-between">
+                        <span className="text-xs font-black text-stone-800">حالة قاعدة البيانات السحابية</span>
+                        <span className="text-xs font-black text-emerald-700">
+                          {cloudStatus === "connected" ? "✓ متصلة ومزامنة" : "وضع محلي"}
+                        </span>
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">وصف اختصاص الإدارة</label>
-                      <textarea
-                        rows="3"
-                        value={deptDesc}
-                        onChange={e => setDeptDesc(e.target.value)}
-                        placeholder="حدد مهام واختصاصات هذه الإدارة..."
-                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20"
-                    >
-                      + اعتماد وتأسيس الإدارة التشغيلية
-                    </button>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {/* القسم الثالث: الحسابات وتوزيع الصلاحيات والمسارات */}
-            {activeTab === "accounts" && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                <div className="lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit">
-                  <div>
-                    <span className="text-xs font-bold text-orange-600">توليد الحسابات وتوزيع الصلاحيات</span>
-                    <h3 className="text-base font-black text-stone-900">➕ إنشاء حساب جديد في المستويات الأربعة</h3>
-                  </div>
-
-                  <form onSubmit={handleCreateAccount} className="space-y-3.5">
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">مستوى الحساب والواجهة</label>
-                      <select
-                        value={newRoleType}
-                        onChange={e => setNewRoleType(e.target.value)}
-                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                    <div className="space-y-2.5">
+                      <button
+                        onClick={handleExportBackup}
+                        className="w-full py-3 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800"
                       >
-                        <option value="cadre">👤 المستوى الرابع: كادر تنظيمي</option>
-                        <option value="operational_admin">🏢 المستوى الثاني: مدير إدارة تشغيلية (معزول)</option>
-                        <option value="executive">👑 المستوى الأول: الإدارة التنفيذية العليا</option>
-                        <option value="platform_admin">🛠️ المستوى الثالث: مدير المنصة التقني</option>
-                      </select>
-                    </div>
-
-                    {newRoleType === "operational_admin" && (
-                      <div className="p-3.5 rounded-2xl bg-orange-50 border border-orange-200 space-y-2">
-                        <label className="block text-xs font-black text-orange-950">
-                          الإدارة التشغيلية التابع لها (لن يرى غيرها)
-                        </label>
-                        <select
-                          value={newDepartmentId}
-                          onChange={e => setNewDepartmentId(e.target.value)}
-                          className="w-full rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs font-bold"
+                        📥 تحميل نسخة احتياطية كاملة للبيانات
+                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={onOpenCloudSetup}
+                          className="py-2.5 rounded-xl bg-stone-100 text-stone-700 text-xs font-bold hover:bg-stone-200"
                         >
-                          {departments.map(d => (
-                            <option key={d.id} value={d.id}>{d.icon} {d.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
-                      <input
-                        value={newName}
-                        onChange={e => setNewName(e.target.value)}
-                        placeholder="مثال: د. محمد العلي"
-                        className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
-                        required
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
-                        <input
-                          value={newJobTitle}
-                          onChange={e => setNewJobTitle(e.target.value)}
-                          placeholder="منسق مشاريع"
-                          className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                        />
-                      </div>
-                      {newRoleType === "cadre" && (
-                        <div>
-                          <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة التنظيمية</label>
-                          <select
-                            value={newUnit}
-                            onChange={e => setNewUnit(e.target.value)}
-                            className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
-                          >
-                            {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-
-                    {newRoleType === "cadre" && (
-                      <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-2">
-                        <div className="text-xs font-black text-emerald-950">المسارات التشغيلية المفعّلة لهذا الكادر:</div>
-                        <div className="flex flex-wrap gap-2">
-                          {departments.map(d => {
-                            const checked = newAssignedDepts.includes(d.id);
-                            return (
-                              <button
-                                key={d.id}
-                                type="button"
-                                onClick={() => {
-                                  if (checked && newAssignedDepts.length <= 1) return;
-                                  setNewAssignedDepts(prev =>
-                                    checked ? prev.filter(id => id !== d.id) : [...prev, d.id]
-                                  );
-                                }}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                                  checked
-                                    ? "bg-stone-900 text-white border-stone-900"
-                                    : "bg-white text-stone-600 border-stone-200"
-                                }`}
-                              >
-                                {d.icon} {d.shortName} {checked && "✓"}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200">
-                      <div>
-                        <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم</label>
-                        <input
-                          value={newUsername}
-                          onChange={e => setNewUsername(e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
-                          dir="ltr"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور</label>
-                        <input
-                          value={newPassword}
-                          onChange={e => setNewPassword(e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
-                          dir="ltr"
-                          required
-                        />
+                          ⚙️ إعدادات السحابة
+                        </button>
+                        <button
+                          onClick={onResetDemo}
+                          className="py-2.5 rounded-xl bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100"
+                        >
+                          ↻ استعادة بيانات التجربة
+                        </button>
                       </div>
                     </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black shadow-md hover:bg-stone-800"
-                    >
-                      + إنشاء الحساب وتفعيل الصلاحيات
-                    </button>
-                  </form>
-                </div>
-
-                <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                  <div>
-                    <span className="text-xs font-bold text-stone-400">سجل الصلاحيات والمسارات</span>
-                    <h3 className="text-base font-black text-stone-900">👥 جميع الحسابات المسجلة وتخصيص مسارات الكوادر ({db.users.length})</h3>
                   </div>
-
-                  <div className="space-y-3">
-                    {db.users.map(u => {
-                      const deptObj = departments.find(d => d.id === u.departmentId);
-                      const assignedList = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
-                        ? u.assignedDepartments
-                        : ["dept_hr", "dept_tarbawi"];
-
-                      return (
-                        <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-2.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-sm font-black text-stone-900">{u.name}</span>
-                                <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
-                                  u.roleType === "platform_admin"
-                                    ? "bg-stone-900 text-white"
-                                    : u.roleType === "executive"
-                                    ? "bg-amber-100 text-amber-900"
-                                    : u.roleType === "operational_admin"
-                                    ? "bg-orange-100 text-orange-900"
-                                    : "bg-emerald-100 text-emerald-900"
-                                }`}>
-                                  {u.roleType === "platform_admin"
-                                    ? "🛠️ مدير المنصة التقني"
-                                    : u.roleType === "executive"
-                                    ? "👑 الإدارة التنفيذية"
-                                    : u.roleType === "operational_admin"
-                                    ? `🏢 مدير إدارة: ${deptObj ? deptObj.shortName : "الموارد البشرية"}`
-                                    : "👤 كادر"}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-stone-500 mt-0.5">
-                                {u.unit} • {u.jobTitle}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-xl border border-stone-200 font-bold text-stone-700" dir="ltr">
-                                {u.username} / {u.password}
-                              </span>
-                              <button
-                                onClick={() => handleDeleteUser(u.id)}
-                                className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-bold"
-                              >
-                                حذف
-                              </button>
-                            </div>
-                          </div>
-
-                          {u.roleType === "cadre" && (
-                            <div className="pt-2 border-t border-stone-200/70 flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-[11px] font-bold text-stone-600">
-                                المسارات المفعّلة لهذا الكادر (اضغط للتفعيل أو الإيقاف):
-                              </span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {departments.map(d => {
-                                  const isOn = assignedList.includes(d.id);
-                                  return (
-                                    <button
-                                      key={d.id}
-                                      type="button"
-                                      onClick={() => toggleCadreAssignedDept(u.id, d.id)}
-                                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
-                                        isOn
-                                          ? "bg-stone-900 text-white border-stone-900"
-                                          : "bg-white text-stone-400 border-stone-200"
-                                      }`}
-                                    >
-                                      {d.icon} {d.shortName} {isOn ? "✓" : "✕"}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* القسم الرابع: البنية السحابية والنسخ الاحتياطي */}
-            {activeTab === "cloud" && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                  <span className="text-xs font-bold text-emerald-700">الاتصال السحابي المباشر</span>
-                  <h3 className="text-base font-black text-stone-900">☁️ حالة خادم قاعدة البيانات (سوبابيس)</h3>
-                  <p className="text-xs text-stone-500 leading-relaxed">
-                    المنصة متصلة بقاعدة بيانات سوبابيس السحابية لحفظ كافة الإعدادات الحاكمة، الإدارات، الحسابات، وسجلات الكوادر لحظياً.
-                  </p>
-                  <div className="flex flex-wrap gap-3 pt-2">
-                    <button
-                      onClick={onOpenCloudSetup}
-                      className="px-5 py-3 rounded-2xl bg-stone-900 text-white text-xs font-black"
-                    >
-                      ⚙️ فحص وإدارة إعدادات الربط السحابي
-                    </button>
-                    <button
-                      onClick={handleExportBackup}
-                      className="px-5 py-3 rounded-2xl bg-orange-50 text-orange-900 border border-orange-200 text-xs font-black"
-                    >
-                      📥 تحميل نسخة احتياطية كاملة للبيانات
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4">
-                  <span className="text-xs font-bold text-rose-600">إدارة بيانات المحاكاة والتطوير</span>
-                  <h3 className="text-base font-black text-stone-900">🔄 إعادة تهيئة البيانات الافتراضية</h3>
-                  <p className="text-xs text-stone-500 leading-relaxed">
-                    في حال رغبتك في استعادة بيانات التهيئة الأولية للمنصة واختبار المستويات الأربعة من جديد:
-                  </p>
-                  <button
-                    onClick={onResetDemo}
-                    className="px-5 py-3 rounded-2xl bg-rose-50 text-rose-700 border border-rose-200 text-xs font-black hover:bg-rose-100"
-                  >
-                    إعادة ضبط بيانات المحاكاة لحالتها الأصلية ↻
-                  </button>
                 </div>
               </div>
             )}
           </main>
+
+          {/* ========================================================================= */}
+          {/* اللوحات الجانبية المنزلقة (Slide-over Drawers) لكافة الإجراءات والنماذج    */}
+          {/* ========================================================================= */}
+
+          {/* ١. لوحة منزلقة: تأسيس إدارة تشغيلية جديدة وتحديد حصص مهامها */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "add_dept"}
+            onClose={() => setDrawerMode(null)}
+            badge="محرك التوسع المرن"
+            title="تأسيس إدارة تشغيلية جديدة"
+          >
+            <form onSubmit={handleAddDepartment} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">اسم الإدارة التشغيلية</label>
+                <input
+                  value={deptName}
+                  onChange={e => setDeptName(e.target.value)}
+                  placeholder="مثال: الإدارة الإعلامية والسياسية"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الاسم المختصر</label>
+                  <input
+                    value={deptShortName}
+                    onChange={e => setDeptShortName(e.target.value)}
+                    placeholder="الإعلامية"
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الأيقونة</label>
+                  <select
+                    value={deptIcon}
+                    onChange={e => setDeptIcon(e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                  >
+                    <option value="🧭">🧭 بوصلة</option>
+                    <option value="📡">📡 إعلام</option>
+                    <option value="🎓">🎓 تدريب</option>
+                    <option value="⚖️">⚖️ حوكمة</option>
+                    <option value="🤝">🤝 علاقات</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">وصف اختصاص الإدارة</label>
+                <textarea
+                  rows="2"
+                  value={deptDesc}
+                  onChange={e => setDeptDesc(e.target.value)}
+                  placeholder="حدد اختصاص هذه الإدارة..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">الحد الأقصى لإجمالي المهمات</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={deptMaxTotal}
+                    onChange={e => setDeptMaxTotal(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black text-center"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">الحد الأقصى من كل نوع للفرد</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={deptMaxPerType}
+                    onChange={e => setDeptMaxPerType(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black text-center"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-black text-stone-800">أنواع المهمات المتاحة لهذه الإدارة من المكتبة:</label>
+                <div className="space-y-2">
+                  {TASK_TEMPLATES_LIBRARY.map(t => {
+                    const checked = deptAllowedTypes.includes(t.id);
+                    return (
+                      <label key={t.id} className="flex items-center justify-between p-3 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer">
+                        <span className="text-xs font-bold text-stone-800">{t.icon} {t.title}</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setDeptAllowedTypes(prev =>
+                              checked ? prev.filter(x => x !== t.id) : [...prev, t.id]
+                            );
+                          }}
+                          className="w-4 h-4 accent-stone-900"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+              >
+                اعتماد وتأسيس الإدارة التشغيلية ✓
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٢. لوحة منزلقة: ضبط مكتبة وحصص المهمات لإدارة قائمة */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "edit_dept_quota" && Boolean(selectedDept)}
+            onClose={() => setDrawerMode(null)}
+            badge="ضبط مكتبة المهمات والحصص"
+            title={selectedDept ? `${selectedDept.icon} ${selectedDept.name}` : ""}
+          >
+            {selectedDept && (
+              <div className="space-y-5">
+                <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-stone-800">الحد الأقصى لإجمالي المهمات بالإدارة</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={selectedDept.maxTotalTasks || 6}
+                      onChange={e => updateDepartmentQuota(selectedDept.id, d => ({
+                        ...d,
+                        maxTotalTasks: Math.max(1, parseInt(e.target.value, 10) || 1)
+                      }))}
+                      className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-stone-800">أقصى عدد من كل نوع يسند للفرد الواحد</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={selectedDept.maxPerTypePerCadre || 2}
+                      onChange={e => updateDepartmentQuota(selectedDept.id, d => ({
+                        ...d,
+                        maxPerTypePerCadre: Math.max(1, parseInt(e.target.value, 10) || 1)
+                      }))}
+                      className="w-20 rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-center text-xs font-black"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  <div className="text-xs font-black text-stone-900">أنواع المهمات المتاحة لمدير هذا القسم من المكتبة:</div>
+                  {TASK_TEMPLATES_LIBRARY.map(t => {
+                    const allowed = (selectedDept.allowedTaskTypes || []).includes(t.id);
+                    return (
+                      <label
+                        key={t.id}
+                        className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 cursor-pointer"
+                      >
+                        <div>
+                          <div className="text-xs font-black text-stone-900">{t.icon} {t.title}</div>
+                          <div className="text-[10px] text-stone-500 mt-0.5">
+                            يحدد مدير القسم لكل مهمة: يرصدها الكادر بنفسه أو يقيمها المدير
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={allowed}
+                          onChange={() => {
+                            updateDepartmentQuota(selectedDept.id, d => {
+                              const cur = d.allowedTaskTypes || [];
+                              const next = allowed ? cur.filter(x => x !== t.id) : [...cur, t.id];
+                              return { ...d, allowedTaskTypes: next };
+                            });
+                          }}
+                          className="w-5 h-5 accent-orange-600"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <button
+                  onClick={() => {
+                    setDrawerMode(null);
+                    showToast("تم حفظ حصص ومكتبة المهمات للإدارة ✓");
+                  }}
+                  className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+                >
+                  حفظ وإغلاق اللوحة ✓
+                </button>
+              </div>
+            )}
+          </SlideOverDrawer>
+
+          {/* ٣. لوحة منزلقة: إضافة وحدة تنظيمية أساسية */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "add_unit"}
+            onClose={() => setDrawerMode(null)}
+            badge="التسكين التنظيمي الأساسي"
+            title="إضافة وحدة تنظيمية جديدة"
+          >
+            <form onSubmit={handleAddUnit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">اسم الوحدة التنظيمية</label>
+                <input
+                  value={unitName}
+                  onChange={e => setUnitName(e.target.value)}
+                  placeholder="مثال: وحدة الإعلام الرقمي"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">رمز الدعوة والانضمام الخاص بالوحدة (اختياري)</label>
+                <input
+                  value={unitInviteCode}
+                  onChange={e => setUnitInviteCode(e.target.value)}
+                  placeholder="MAYDAN-MEDIA"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono font-bold"
+                  dir="ltr"
+                />
+              </div>
+              <button type="submit" className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black">
+                + اعتماد الوحدة التنظيمية
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٤. لوحة منزلقة: تشكيل فريق عمل أو لجنة عابرة للوحدات */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "add_team"}
+            onClose={() => setDrawerMode(null)}
+            badge="الهيكل الشبكي المرن"
+            title="تشكيل فريق عمل أو لجنة عابرة للوحدات"
+          >
+            <form onSubmit={handleAddTeam} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">اسم الفريق أو اللجنة</label>
+                <input
+                  value={teamName}
+                  onChange={e => setTeamName(e.target.value)}
+                  placeholder="مثال: لجنة الإعداد للمؤتمر السنوي"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">المهمة أو الغرض التنظيمي</label>
+                <textarea
+                  rows="3"
+                  value={teamPurpose}
+                  onChange={e => setTeamPurpose(e.target.value)}
+                  placeholder="وصف مختصر لمهمة الفريق العابر للوحدات..."
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+                />
+              </div>
+              <button type="submit" className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black">
+                + اعتماد تشكيل الفريق العابر
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٥. لوحة منزلقة: إضافة حساب فردي */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "add_account"}
+            onClose={() => setDrawerMode(null)}
+            badge="القناة الأولى للانضمام"
+            title="إنشاء حساب جديد في المنصة"
+          >
+            <form onSubmit={handleCreateAccount} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">مستوى الحساب</label>
+                <select
+                  value={newRoleType}
+                  onChange={e => setNewRoleType(e.target.value)}
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                >
+                  <option value="cadre">👤 المستوى الرابع: كادر تنظيمي</option>
+                  <option value="operational_admin">🏢 المستوى الثاني: مدير إدارة تشغيلية (معزول)</option>
+                  <option value="executive">👑 المستوى الأول: الإدارة التنفيذية العليا</option>
+                  <option value="platform_admin">🛠️ المستوى الثالث: مدير المنصة التقني</option>
+                </select>
+              </div>
+
+              {newRoleType === "operational_admin" && (
+                <div className="p-3.5 rounded-2xl bg-orange-50 border border-orange-200 space-y-2">
+                  <label className="block text-xs font-black text-orange-950">الإدارة التشغيلية المعزولة</label>
+                  <select
+                    value={newDepartmentId}
+                    onChange={e => setNewDepartmentId(e.target.value)}
+                    className="w-full rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs font-bold"
+                  >
+                    {departments.map(d => (
+                      <option key={d.id} value={d.id}>{d.icon} {d.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">الاسم الكامل</label>
+                <input
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  placeholder="مثال: د. محمد العلي"
+                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">المسمى الوظيفي</label>
+                  <input
+                    value={newJobTitle}
+                    onChange={e => setNewJobTitle(e.target.value)}
+                    placeholder="منسق مشاريع"
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                  />
+                </div>
+                {newRoleType === "cadre" && (
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">الوحدة الأساسية</label>
+                    <select
+                      value={newUnit}
+                      onChange={e => setNewUnit(e.target.value)}
+                      className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+                    >
+                      {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم المستخدم</label>
+                  <input
+                    value={newUsername}
+                    onChange={e => setNewUsername(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                    dir="ltr"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-stone-700 mb-1">كلمة المرور المؤقتة</label>
+                  <input
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold"
+                    dir="ltr"
+                    required
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center justify-between p-3 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer">
+                <span className="text-xs font-bold text-stone-800">إجبار المستخدم على تغيير كلمة المرور فور أول دخول</span>
+                <input
+                  type="checkbox"
+                  checked={forcePassChange}
+                  onChange={e => setForcePassChange(e.target.checked)}
+                  className="w-4 h-4 accent-stone-900"
+                />
+              </label>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+              >
+                + إنشاء الحساب وتفعيل الصلاحيات
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٦. لوحة منزلقة: استيراد جماعي للكوادر */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "bulk_import"}
+            onClose={() => setDrawerMode(null)}
+            badge="القناة الثانية للانضمام"
+            title="استيراد جماعي لحسابات الكوادر"
+          >
+            <form onSubmit={handleBulkImport} className="space-y-4">
+              <p className="text-xs text-stone-600 leading-relaxed">
+                أدخل بيانات الكوادر (كل كادر في سطر مستقل) بالصيغة التالية:
+                <br />
+                <strong>الاسم الكامل ، اسم المستخدم ، اسم الوحدة</strong>
+              </p>
+              <textarea
+                rows="7"
+                value={bulkText}
+                onChange={e => setBulkText(e.target.value)}
+                placeholder={"عمر الفاروق، omar، وحدة التخطيط الاستراتيجي\nياسر الحربي، yasser، وحدة العمل الميداني"}
+                className="w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-xs font-bold leading-relaxed"
+              />
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black"
+              >
+                📥 توليد جميع الحسابات دفعة واحدة
+              </button>
+            </form>
+          </SlideOverDrawer>
+
+          {/* ٧. لوحة منزلقة: رموز وروابط انضمام الوحدات */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "unit_invites"}
+            onClose={() => setDrawerMode(null)}
+            badge="القناة الثالثة للانضمام"
+            title="رموز وروابط الانضمام الخاصة بالوحدات"
+          >
+            <div className="space-y-3">
+              <p className="text-xs text-stone-500">
+                شارك رمز الوحدة مع الكادر الجديد ليسجل بياناته الأولية ويرتبط تلقائياً بوحدته التنظيمية:
+              </p>
+              {units.map(u => (
+                <div key={u.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-black text-stone-900">{u.name}</div>
+                    <div className="text-xs font-mono font-bold text-orange-700 mt-1" dir="ltr">{u.inviteCode}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/?join=${u.inviteCode}`);
+                      showToast(`تم نسخ رابط انضمام (${u.name}) ✓`);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black"
+                  >
+                    نسخ الرابط
+                  </button>
+                </div>
+              ))}
+            </div>
+          </SlideOverDrawer>
+
+          {/* ٨. لوحة منزلقة: تعديل مسارات الكادر ووحدته وفرق العمل العابرة */}
+          <SlideOverDrawer
+            isOpen={drawerMode === "edit_cadre_tracks" && Boolean(selectedUser)}
+            onClose={() => setDrawerMode(null)}
+            badge="تخصيص الهيكل الشبكي والمسارات"
+            title={selectedUser ? selectedUser.name : ""}
+          >
+            {selectedUser && (
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-black text-stone-800 mb-1.5">١. الوحدة التنظيمية الأساسية</label>
+                  <select
+                    value={selectedUser.unit}
+                    onChange={e => updateCadrePrimaryUnit(selectedUser.id, e.target.value)}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+                  >
+                    {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-stone-800">٢. المسارات التشغيلية المفعّلة لهذا الكادر</label>
+                  {departments.map(d => {
+                    const isOn = (selectedUser.assignedDepartments || ["dept_hr", "dept_tarbawi"]).includes(d.id);
+                    return (
+                      <label key={d.id} className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer">
+                        <span className="text-xs font-black text-stone-800">{d.icon} {d.name}</span>
+                        <input
+                          type="checkbox"
+                          checked={isOn}
+                          onChange={() => toggleCadreAssignedDept(selectedUser.id, d.id)}
+                          className="w-5 h-5 accent-stone-900"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-black text-stone-800">٣. فرق العمل واللجان العابرة للوحدات</label>
+                  {teams.map(t => {
+                    const inTeam = (selectedUser.crossTeams || []).includes(t.id);
+                    return (
+                      <label key={t.id} className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer">
+                        <div>
+                          <div className="text-xs font-black text-stone-800">🤝 {t.name}</div>
+                          <div className="text-[10px] text-stone-500">{t.purpose}</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={inTeam}
+                          onChange={() => toggleCadreCrossTeam(selectedUser.id, t.id)}
+                          className="w-5 h-5 accent-orange-600"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-4 border-t border-stone-100 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteUser(selectedUser.id)}
+                    className="px-4 py-2.5 rounded-xl bg-rose-50 text-rose-700 text-xs font-black"
+                  >
+                    حذف الحساب
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDrawerMode(null)}
+                    className="px-6 py-2.5 rounded-xl bg-stone-900 text-white text-xs font-black"
+                  >
+                    تم الحفظ ✓
+                  </button>
+                </div>
+              </div>
+            )}
+          </SlideOverDrawer>
         </div>
       );
     }
