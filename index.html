@@ -795,17 +795,41 @@
       };
     }
 
+    function safeJsonParse(str) {
+      return JSON.parse(str, (k, v) => (k === "__proto__" || k === "constructor" || k === "prototype") ? undefined : v);
+    }
+
+    function isValidHttpsUrl(rawUrl) {
+      try {
+        const u = new URL(String(rawUrl || "").trim());
+        return u.protocol === "https:";
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function sanitizeMediaUrl(rawUrl) {
+      if (!rawUrl || typeof rawUrl !== "string") return "";
+      try {
+        const u = new URL(rawUrl.trim(), window.location.origin);
+        return (u.protocol === "https:" || u.protocol === "http:") ? u.href : "";
+      } catch (e) {
+        return "";
+      }
+    }
+
     function getYoutubeEmbedUrl(url) {
-      if (!url) return "";
-      const driveMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+      const safeUrl = sanitizeMediaUrl(url);
+      if (!safeUrl) return "";
+      const driveMatch = safeUrl.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
       if (driveMatch && driveMatch[1]) {
         return `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
       }
       const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-      const match = url.match(regExp);
+      const match = safeUrl.match(regExp);
       return (match && match[2].length === 11)
         ? `https://www.youtube.com/embed/${match[2]}?rel=0&modestbranding=1&playsinline=1`
-        : url;
+        : safeUrl;
     }
 
     function isIframeVideo(videoType, url) {
@@ -951,22 +975,31 @@
         }
       });
 
-      const safeUsers = mergedUsers.map(u => {
+      const ALLOWED_ROLES = ["platform_admin", "executive", "operational_admin", "admin", "cadre"];
+      const safeUsers = mergedUsers.filter(u => u && typeof u === "object").map(u => {
+        const cleanRole = ALLOWED_ROLES.includes(u.roleType) ? u.roleType : "cadre";
+        const baseU = {
+          ...u,
+          id: String(u.id || ("u_" + Date.now())),
+          username: String(u.username || ""),
+          name: String(u.name || ""),
+          roleType: cleanRole
+        };
         // تحويل الحسابات القديمة ذات النوع admin إلى operational_admin مع ربطها بإدارة الموارد البشرية
-        if (u.roleType === "admin") {
+        if (cleanRole === "admin") {
           return {
-            ...u,
+            ...baseU,
             roleType: "operational_admin",
-            departmentId: u.departmentId || "dept_hr"
+            departmentId: baseU.departmentId || "dept_hr"
           };
         }
-        if (u.roleType === "operational_admin") {
+        if (cleanRole === "operational_admin") {
           return {
-            ...u,
-            departmentId: u.departmentId || "dept_hr"
+            ...baseU,
+            departmentId: baseU.departmentId || "dept_hr"
           };
         }
-        if (u.roleType !== "cadre") return u;
+        if (cleanRole !== "cadre") return baseU;
 
         const seedMatch = INITIAL_STATE.users.find(su => su.id === u.id);
         const rawRec = u.tasksRecord || {};
@@ -1112,12 +1145,15 @@ CREATE POLICY "Allow public upload on madyan-media"
     const DEFAULT_SUPABASE_URL = "https://qvmfaaudskpxiacaxbpn.supabase.co";
     const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF2bWZhYXVkc2tweGlhY2F4YnBuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM4NDMwNjUsImV4cCI6MjEwOTQxOTA2NX0.Gl8NYt66eBjG_OQlaerjelBObC3QYBoCPmm0f5x_wNk";
 
+    // ⚠️ وضع التجربة: عند الإطلاق الفعلي اجعل القيمة false (أو احذف DemoAccountsPanel بالكامل) — لا شيء آخر يعتمد عليه
+    const DEMO_MODE = true;
+
     function loadCloudConfig() {
       try {
         const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
         if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed && parsed.supabaseUrl && parsed.supabaseAnonKey) return parsed;
+          const parsed = safeJsonParse(saved);
+          if (parsed && isValidHttpsUrl(parsed.supabaseUrl) && typeof parsed.supabaseAnonKey === "string" && parsed.supabaseAnonKey.trim()) return parsed;
         }
       } catch (e) {}
       return {
@@ -1127,8 +1163,9 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     function saveCloudConfigToStorage(url, key) {
+      const cleanUrl = (url || "").trim().replace(/\/$/, "");
       const cfg = {
-        supabaseUrl: (url || "").trim().replace(/\/$/, ""),
+        supabaseUrl: isValidHttpsUrl(cleanUrl) ? cleanUrl : "",
         supabaseAnonKey: (key || "").trim()
       };
       localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(cfg));
@@ -1142,12 +1179,13 @@ CREATE POLICY "Allow public upload on madyan-media"
       const [db, setDb] = useState(() => {
         try {
           const saved = localStorage.getItem("MADYAN_DB_V6_SAFE");
-          if (saved) return normalizeDb(JSON.parse(saved));
+          if (saved) return normalizeDb(safeJsonParse(saved));
         } catch (e) {}
         return normalizeDb(INITIAL_STATE);
       });
 
       const [currentUserId, setCurrentUserId] = useState(() => {
+        if (!DEMO_MODE) return null;
         try {
           const p = new URLSearchParams(window.location.search).get("user");
           if (p) {
@@ -1531,9 +1569,6 @@ CREATE POLICY "Allow public upload on madyan-media"
     // ============================================================================
     // 5. LOGIN SCREEN (بوابة الدخول للمستويات الأربعة في منصة ميدان)
     // ============================================================================
-    // ⚠️ وضع التجربة: عند الإطلاق الفعلي اجعل القيمة false (أو احذف DemoAccountsPanel بالكامل) — لا شيء آخر يعتمد عليه
-    const DEMO_MODE = true;
-
     // لوحة حسابات التجربة (منسدلة ومغلقة افتراضياً) — مكان واحد يسهل حذفه
     function DemoAccountsPanel({ db, users, onPick }) {
       const [open, setOpen] = useState(false);
@@ -2913,11 +2948,12 @@ CREATE POLICY "Allow public upload on madyan-media"
                   title={safeCurr.lectureTitle}
                   className="w-full h-full"
                   sandbox="allow-scripts allow-same-origin allow-presentation"
+                  referrerPolicy="strict-origin-when-cross-origin"
                   allowFullScreen
                 />
               ) : (
                 <video
-                  src={safeCurr.videoUrl}
+                  src={sanitizeMediaUrl(safeCurr.videoUrl)}
                   controls
                   controlsList="nodownload"
                   onContextMenu={e => e.preventDefault()}
@@ -5381,8 +5417,11 @@ CREATE POLICY "Allow public upload on madyan-media"
     };
     const pa2TempPassword = () => {
       const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+      const arr = new Uint32Array(6);
+      if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(arr);
+      else for (let i = 0; i < 6; i++) arr[i] = Math.floor(Math.random() * 1e9);
       let out = "";
-      for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+      for (let i = 0; i < 6; i++) out += chars[arr[i] % chars.length];
       return out;
     };
     const pa2Copy = (text) => {
@@ -5891,10 +5930,11 @@ CREATE POLICY "Allow public upload on madyan-media"
         const f = e.target.files && e.target.files[0];
         e.target.value = "";
         if (!f) return;
+        if (f.size > 5 * 1024 * 1024) { showToast("الملف غير صالح"); return; }
         const reader = new FileReader();
         reader.onload = () => {
           try {
-            const raw = JSON.parse(String(reader.result || ""));
+            const raw = safeJsonParse(String(reader.result || ""));
             if (!raw || !Array.isArray(raw.users)) throw new Error("bad");
             setPending({ name: f.name, data: normalizeDb(raw) });
           } catch (err) { showToast("الملف غير صالح"); }
@@ -8184,8 +8224,8 @@ CREATE POLICY "Allow public upload on madyan-media"
             {curriculum?.videoUrl && (
               <div className="rounded-2xl overflow-hidden bg-stone-900 aspect-video">
                 {isIframeVideo(curriculum.videoType, curriculum.videoUrl)
-                  ? <iframe src={embed} className="w-full h-full" allow="autoplay; encrypted-media" allowFullScreen title="lecture" />
-                  : <video src={curriculum.videoUrl} controls className="w-full h-full" />}
+                  ? <iframe src={embed} className="w-full h-full" sandbox="allow-scripts allow-same-origin allow-presentation" referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowFullScreen title="lecture" />
+                  : <video src={sanitizeMediaUrl(curriculum.videoUrl)} controls className="w-full h-full" />}
               </div>
             )}
             {st.done ? (

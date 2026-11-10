@@ -26,7 +26,9 @@ export async function handler(event) {
   const supabaseAnonKey =
     process.env.SUPABASE_ANON_KEY ||
     process.env.VITE_SUPABASE_ANON_KEY ||
-    supabaseKey;
+    "";
+
+  const safeJsonParse = (str) => JSON.parse(str, (k, v) => (k === "__proto__" || k === "constructor" || k === "prototype") ? undefined : v);
 
   const path = (event.path || "")
     .replace(/^\/\.netlify\/functions\/api\/?/, "")
@@ -98,7 +100,7 @@ export async function handler(event) {
 
     // 3. POST /api/state -> حفظ وتحديث حالة المنصة والجداول العلائقية في Supabase
     if (event.httpMethod === "POST" && path === "state") {
-      const body = JSON.parse(event.body || "{}");
+      const body = safeJsonParse(event.body || "{}");
       const stateData = body.state;
       const updatedBy = body.updatedBy || "client";
 
