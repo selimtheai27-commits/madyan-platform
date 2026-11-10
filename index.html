@@ -44,7 +44,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     // ============================================================================
     // 1. CONSTANTS & INITIAL DATABASE SEED (MAYDAN 4-TIER ARCHITECTURE)
@@ -465,6 +465,126 @@
     };
 
     // ============================================================================
+    // 1.5 DEMO SEED V3 — ٣٠ عضواً تجريبياً موزعين على ٥ وحدات وإدارتين (بيانات حتمية ثابتة)
+    // ============================================================================
+    (function seedDemoMembersV3() {
+      const HR = ["lecture", "agenda", "attendance", "minutes"];
+      const TB = ["tarbawi_wird", "tarbawi_reading", "tarbawi_majlis", "tarbawi_amal"];
+      const MANAGER_TASKS = ["attendance", "tarbawi_majlis"];
+      const DAY = 24 * 3600 * 1000;
+      const rngFor = (seedNum) => { let a = seedNum * 9301 + 49297; return () => { a = (a * 1103515245 + 12345) % 2147483648; return a / 2147483648; }; };
+      const todayIdx = new Date().getDay();
+      const stamp = (w, cur) => w === cur ? "هذا الأسبوع" : `الأسبوع ${w}`;
+
+      const genRecords = (deptIds, weeks, profile, rng) => {
+        const rec = {};
+        const keys = [...(deptIds.includes("dept_hr") ? HR : []), ...(deptIds.includes("dept_tarbawi") ? TB : [])];
+        for (let w = 1; w <= weeks; w++) {
+          const isCur = w === weeks;
+          const isPrev = w === weeks - 1;
+          const wk = {};
+          keys.forEach(k => {
+            const p = isCur ? profile.cur : profile.p;
+            if (k === "tarbawi_wird") {
+              const maxDays = isCur ? Math.min(7, todayIdx + 1) : 7;
+              const n = Math.round(maxDays * (isCur ? profile.cur : profile.p) * (0.8 + rng() * 0.3));
+              const days = Array.from({ length: Math.max(0, Math.min(maxDays, n)) }, (_, i) => i);
+              wk[k] = days.length >= 5 ? { status: "on_time", daysCompleted: days, completedAt: stamp(w, weeks) } : { status: "pending", daysCompleted: days };
+              return;
+            }
+            if (rng() < p) {
+              if (MANAGER_TASKS.includes(k) && (isCur || (isPrev && rng() < 0.5))) {
+                wk[k] = { status: "submitted", submittedAt: stamp(w, weeks), note: "" };
+              } else {
+                const late = !isCur && rng() < 0.12;
+                wk[k] = { status: late ? "late" : "on_time", completedAt: stamp(w, weeks) };
+                if (k === "lecture") wk[k].quizSubmission = { score: rng() < 0.8 ? 3 : 2, total: 3, answers: [1, 1, 2] };
+                if (k === "agenda" || k === "minutes" || k === "tarbawi_reading") wk[k].note = "تم التسليم";
+              }
+            } else {
+              wk[k] = { status: "pending" };
+            }
+          });
+          rec[w] = wk;
+        }
+        return rec;
+      };
+
+      const NEW_UNITS = [
+        { id: "unit_youth", name: "وحدة الشباب والطلاب", inviteCode: "MAYDAN-YOUTH", defaultDepartments: ["dept_hr", "dept_tarbawi"] },
+        { id: "unit_media", name: "وحدة الإعلام والتواصل", inviteCode: "MAYDAN-MEDIA", defaultDepartments: ["dept_hr", "dept_tarbawi"] }
+      ];
+      NEW_UNITS.forEach(nu => { if (!DEFAULT_UNITS.some(u => u.id === nu.id)) DEFAULT_UNITS.push(nu); });
+      const UNIT_NAMES = DEFAULT_UNITS.map(u => u.name);
+
+      const NAMES = [
+        ["عمر الحربي", "منسق مشاريع"], ["نورة القحطاني", "مسؤولة جودة"], ["يوسف الدوسري", "محلل بيانات"], ["ريم الشهري", "منسقة فعاليات"],
+        ["فهد العنزي", "مسؤول ميداني"], ["هند الزهراني", "مسؤولة تواصل"], ["سلمان المطيري", "مشرف فرق"], ["لينا الغامدي", "مصممة محتوى"],
+        ["بدر السبيعي", "منسق لوجستي"], ["مها العمري", "مسؤولة متابعة"], ["تركي الشمري", "مسؤول تطوع"], ["أسماء البقمي", "منسقة برامج"],
+        ["ماجد الرشيدي", "مسؤول تدريب"], ["دانة الحارثي", "مسؤولة إعلام"], ["زياد الجهني", "منسق طلابي"], ["شهد العتيبي", "مسؤولة أنشطة"],
+        ["خالد البلوي", "مسؤول علاقات"], ["جود السهلي", "كاتبة محتوى"], ["راكان الشهراني", "منسق ميداني"], ["لمى القرني", "مسؤولة شباب"],
+        ["سعود المالكي", "محرر أخبار"], ["رغد الأحمدي", "منسقة تطوع"], ["نايف العسيري", "مسؤول تخطيط"], ["غادة الثبيتي", "محللة أداء"],
+        ["مشعل الخالدي", "مصور ميداني"], ["وعد الزهراني", "منسقة تواصل"], ["عبدالرحمن الفيفي", "مسؤول تنسيق"], ["بشرى الحربي", "مسؤولة طلاب"]
+      ];
+      const PROFILES = [
+        { p: 0.95, cur: 0.85 }, { p: 0.9, cur: 0.7 }, { p: 0.7, cur: 0.5 }, { p: 0.55, cur: 0.35 },
+        { p: 0.85, cur: 0.75 }, { p: 0.35, cur: 0 }, { p: 0.75, cur: 0.6 }, { p: 0.2, cur: 0.15 }
+      ];
+
+      const users = INITIAL_STATE.users;
+      // العضوان الأصليان: وحدة التخطيط والمتابعة
+      NAMES.forEach(([name, title], i) => {
+        const n = i + 3;
+        const id = `u_m${String(n).padStart(2, "0")}`;
+        if (users.some(u => u.id === id)) return;
+        const rng = rngFor(n);
+        const weeks = 3 + (n % 6);
+        const deptIds = n % 5 === 3 ? ["dept_hr"] : n % 7 === 5 ? ["dept_tarbawi"] : ["dept_hr", "dept_tarbawi"];
+        const profile = PROFILES[n % PROFILES.length];
+        users.push({
+          id,
+          username: `m${String(n).padStart(2, "0")}`,
+          password: "1234",
+          roleType: "cadre",
+          onboarded: true,
+          joinedAt: SYSTEM_ANCHOR_DATE - (weeks - 1) * MS_PER_WEEK - (todayIdx + 1) * DAY,
+          name,
+          jobTitle: title,
+          unit: UNIT_NAMES[n % UNIT_NAMES.length],
+          assignedDepartments: deptIds,
+          defaultSchedule: { meetDay: n % 5, meetTime: n % 2 ? "19:00" : "20:30", meetDuration: 60 },
+          weekOverrides: {},
+          tasksRecord: genRecords(deptIds, weeks, profile, rng)
+        });
+      });
+
+      // مدير الموارد البشرية مُسند له مهام تربوية (لتجربة الواجهة المزدوجة)
+      const hrMgr = users.find(u => u.id === "u_admin");
+      if (hrMgr && !hrMgr.assignedDepartments) {
+        hrMgr.assignedDepartments = ["dept_tarbawi"];
+        hrMgr.joinedAt = SYSTEM_ANCHOR_DATE - 2 * MS_PER_WEEK - (todayIdx + 1) * DAY;
+        hrMgr.tasksRecord = genRecords(["dept_tarbawi"], 3, { p: 0.8, cur: 0.4 }, rngFor(99));
+      }
+      const tbMgr = users.find(u => u.id === "u_tarbawi");
+      if (tbMgr && !tbMgr.assignedDepartments) tbMgr.assignedDepartments = [];
+
+      // قادة الوحدات
+      const leaders = { unit_strategy: "u_1", unit_ops: "u_2", unit_field: "u_m05", unit_youth: "u_m08", unit_media: "u_m09" };
+      DEFAULT_UNITS.forEach(u => { if (!u.leaderUserId && leaders[u.id]) u.leaderUserId = leaders[u.id]; });
+
+      // تعميمات إضافية موجهة مع حالات اطلاع واقعية
+      const cadreIds = users.filter(u => u.roleType === "cadre").map(u => u.id);
+      const ackSome = (ratio, seedNum) => { const r = rngFor(seedNum); const out = {}; cadreIds.forEach(id => { if (r() < ratio) out[id] = "منذ يومين"; }); return out; };
+      INITIAL_STATE.bulletins.forEach(b => { if (!b.createdAtTs) b.createdAtTs = SYSTEM_ANCHOR_DATE - (b.id === "bul_1" ? 3 : 1) * DAY; });
+      if (!INITIAL_STATE.bulletins.some(b => b.id === "bul_3")) {
+        INITIAL_STATE.bulletins.push(
+          { id: "bul_3", title: "انطلاق برنامج «زاد الأسبوع» التربوي", content: "يبدأ هذا الأسبوع برنامج الورد المشترك، ونرجو من جميع أعضاء الإدارة التربوية تثبيت خمسة أيام على الأقل.", category: "برنامج", senderId: "u_exec", senderName: "د. طارق المنصور", senderRole: "عضو المكتب التنفيذي", createdAt: "أمس • 08:00 مساءً", createdAtTs: SYSTEM_ANCHOR_DATE - DAY, targetType: "dept", targetDeptId: "dept_tarbawi", recipientIds: [], acknowledgedBy: ackSome(0.55, 7) },
+          { id: "bul_4", title: "موعد الملتقى العام للوحدات", content: "يُعقد الملتقى العام يوم الخميس القادم الساعة السابعة مساءً، والحضور إلزامي لجميع الأعضاء.", category: "تعميم عام", senderId: "u_exec", senderName: "د. طارق المنصور", senderRole: "عضو المكتب التنفيذي", createdAt: "اليوم • 10:00 صباحاً", createdAtTs: SYSTEM_ANCHOR_DATE - 2 * 3600 * 1000, targetType: "all", recipientIds: [], acknowledgedBy: ackSome(0.3, 11) }
+        );
+      }
+    })();
+
+    // ============================================================================
     // 2. HELPER & DUAL-PILLAR SCORING ENGINE FUNCTIONS
     // ============================================================================
     function calculateWeeksSinceJoin(joinedAtTimestamp) {
@@ -795,10 +915,18 @@
           ...INITIAL_STATE.systemConfig.taskDefinitions,
           ...(raw.systemConfig?.taskDefinitions || {})
         },
-        tarbawiTaskDefinitions: rawTarbawiDefs
+        tarbawiTaskDefinitions: rawTarbawiDefs,
+        deptTasks: (() => {
+          const base = (raw.systemConfig?.deptTasks && typeof raw.systemConfig.deptTasks === "object")
+            ? { ...raw.systemConfig.deptTasks }
+            : mxBuildDefaultDeptTasks(raw.systemConfig || {});
+          rawDepartments.forEach(d => { if (!Array.isArray(base[d.id])) base[d.id] = []; });
+          return base;
+        })(),
+        deptWeights: raw.systemConfig?.deptWeights || {}
       };
 
-      const safeBulletins = Array.isArray(raw.bulletins) ? raw.bulletins : INITIAL_STATE.bulletins;
+      const safeBulletins = Array.isArray(raw.bulletins) ? [...raw.bulletins] : [...INITIAL_STATE.bulletins];
       const safeCurriculums = {
         ...INITIAL_STATE.weeklyCurriculums,
         ...(raw.weeklyCurriculums || {})
@@ -807,6 +935,15 @@
       const rawUsers = Array.isArray(raw.users) && raw.users.length > 0 ? raw.users : INITIAL_STATE.users;
       // التأكد من وجود الحسابات الأساسية للمستويات الأربعة (مدير المنصة، التنفيذي، الموارد البشرية، التربوية)
       let mergedUsers = [...rawUsers];
+      // ترقية بيانات التجربة (الإصدار 3): إضافة الأعضاء التجريبيين الثلاثين واستكمال حقول الحسابات الأساسية
+      const needsSeedV3 = (raw.seedVersion || 0) < 3;
+      if (needsSeedV3) {
+        mergedUsers = mergedUsers.map(u => {
+          const seedUser = INITIAL_STATE.users.find(su => su.id === u.id);
+          return seedUser ? { ...seedUser, ...u, assignedDepartments: u.assignedDepartments || seedUser.assignedDepartments, joinedAt: u.joinedAt || seedUser.joinedAt, tasksRecord: (u.tasksRecord && Object.keys(u.tasksRecord).length) ? u.tasksRecord : seedUser.tasksRecord } : u;
+        });
+        INITIAL_STATE.users.forEach(su => { if (!mergedUsers.some(u => u.id === su.id)) mergedUsers.push(su); });
+      }
       ["u_platform", "u_exec", "u_admin", "u_tarbawi"].forEach(seedId => {
         if (!mergedUsers.some(u => u.id === seedId)) {
           const seedUser = INITIAL_STATE.users.find(su => su.id === seedId);
@@ -847,7 +984,7 @@
         return {
           ...u,
           joinedAt: u.joinedAt || Date.now(),
-          assignedDepartments: Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0
+          assignedDepartments: Array.isArray(u.assignedDepartments)
             ? u.assignedDepartments
             : ["dept_hr", "dept_tarbawi"],
           crossTeams: Array.isArray(u.crossTeams) ? u.crossTeams : [],
@@ -861,7 +998,21 @@
         };
       });
 
+      if (needsSeedV3) {
+        // إضافة الوحدات التجريبية الجديدة وقادتها
+        const unitsNow = [...safeSystemConfig.organizationalUnits];
+        DEFAULT_UNITS.forEach(du => {
+          const idx = unitsNow.findIndex(x => x.id === du.id);
+          if (idx === -1) unitsNow.push(du);
+          else if (!unitsNow[idx].leaderUserId && du.leaderUserId) unitsNow[idx] = { ...unitsNow[idx], leaderUserId: du.leaderUserId };
+        });
+        safeSystemConfig.organizationalUnits = unitsNow;
+        INITIAL_STATE.bulletins.forEach(sb => { if (!safeBulletins.some(b => b.id === sb.id)) safeBulletins.push(sb); });
+      }
+
       return {
+        seedVersion: 3,
+        directives: Array.isArray(raw.directives) ? raw.directives : [],
         systemConfig: safeSystemConfig,
         bulletins: safeBulletins,
         weeklyCurriculums: safeCurriculums,
@@ -1198,7 +1349,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             };
           })
         }));
-        showToast("تم تسجيل الاطلاع والاستيعاب للتعميم الإداري ✓");
+        showToast("سُجّل اطلاعك على التعميم");
       };
 
       const resetDemoData = () => {
@@ -1211,7 +1362,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       return (
         <div className="min-h-screen pb-20">
           {toastMsg && (
-            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-stone-900 text-white text-xs font-bold px-5 py-3 rounded-2xl shadow-xl border border-stone-700 animate-bounce">
+            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[60] bg-stone-900 text-white text-[14px] px-5 py-3 rounded-full shadow-lg">
               {toastMsg}
             </div>
           )}
@@ -1236,6 +1387,7 @@ CREATE POLICY "Allow public upload on madyan-media"
 
           {!currentUser ? (
             <LoginView
+              db={db}
               users={db.users}
               onLoginSuccess={(user, variant) => {
                 setSupervisoryAdminId(null);
@@ -1284,30 +1436,37 @@ CREATE POLICY "Allow public upload on madyan-media"
               showToast={showToast}
             />
           ) : (currentUser.roleType === "admin" || currentUser.roleType === "operational_admin") ? (
-            <AdminPortal
+            <MXWorkspace
               db={db}
               setDb={setDb}
               currentUser={currentUser}
-              onLogout={() => setCurrentUserId(null)}
-              showToast={showToast}
-            />
-          ) : currentUser.roleType === "executive" ? (
-            <ExecutivePortal
-              db={db}
-              setDb={setDb}
-              currentUser={currentUser}
-              onLogout={() => setCurrentUserId(null)}
-              showToast={showToast}
-            />
-          ) : (
-            <CadrePortal
-              db={db}
-              currentUser={currentUser}
-              updateUserRecord={updateUserRecord}
               isUsernameTaken={isUsernameTaken}
               onAcknowledgeBulletin={acknowledgeBulletin}
               onLogout={() => setCurrentUserId(null)}
               showToast={showToast}
+            />
+          ) : currentUser.roleType === "executive" ? (
+            <ExecutivePortalV3
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              onPreviewUser={(targetUserId) => {
+                setSupervisoryAdminId(currentUser.id);
+                setCurrentUserId(targetUserId);
+              }}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+            />
+          ) : (
+            <CadrePortalV3
+              db={db}
+              setDb={setDb}
+              currentUser={currentUser}
+              isUsernameTaken={isUsernameTaken}
+              onAcknowledgeBulletin={acknowledgeBulletin}
+              onLogout={() => setCurrentUserId(null)}
+              showToast={showToast}
+              modeSwitch={null}
             />
           )}
 
@@ -1372,19 +1531,79 @@ CREATE POLICY "Allow public upload on madyan-media"
     // ============================================================================
     // 5. LOGIN SCREEN (بوابة الدخول للمستويات الأربعة في منصة ميدان)
     // ============================================================================
-    function LoginView({ users, onLoginSuccess, onResetDemo }) {
-      const [username, setUsername] = useState("sysadmin");
-      const [password, setPassword] = useState("1234");
+    // ⚠️ وضع التجربة: عند الإطلاق الفعلي اجعل القيمة false (أو احذف DemoAccountsPanel بالكامل) — لا شيء آخر يعتمد عليه
+    const DEMO_MODE = true;
+
+    // لوحة حسابات التجربة (منسدلة ومغلقة افتراضياً) — مكان واحد يسهل حذفه
+    function DemoAccountsPanel({ db, users, onPick }) {
+      const [open, setOpen] = useState(false);
+      const cadres = users.filter(u => u.roleType === "cadre");
+      let ranked = [];
+      try {
+        ranked = cadres.map(u => ({ u, pct: mxWeekSummary(db, u, mxCurrentWeek(u)).pct })).sort((a, b) => b.pct - a.pct);
+      } catch (e) { ranked = cadres.map(u => ({ u, pct: null })); }
+      const samples = ranked.length > 4 ? [...ranked.slice(0, 2), ...ranked.slice(-2)] : ranked;
+      const byUser = (name) => users.find(u => (u.username || "").toLowerCase() === name);
+      const Row = ({ title, sub, onClick, tag }) => (
+        <button type="button" onClick={onClick} className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl hover:bg-[#F4F2EE] text-right transition">
+          <span className="min-w-0">
+            <span className="block text-[14px] text-stone-900 truncate">{title}</span>
+            {sub && <span className="block text-[12px] text-stone-400 truncate">{sub}</span>}
+          </span>
+          {tag ? <span className="text-[12px] text-stone-500 shrink-0">{tag}</span> : <PA2Icon name="chevron" className="w-4 h-4 text-stone-300 shrink-0" />}
+        </button>
+      );
+      const Group = ({ label, children }) => (
+        <div>
+          <div className="text-[12px] text-stone-400 px-4 pt-3 pb-1">{label}</div>
+          {children}
+        </div>
+      );
+      return (
+        <div className="mt-4 w-full max-w-[420px]">
+          <button type="button" onClick={() => setOpen(v => !v)} className="w-full h-12 px-5 rounded-full bg-white/70 hover:bg-white text-[14px] text-stone-600 flex items-center justify-between transition">
+            <span className="inline-flex items-center gap-2"><PA2Icon name="key" className="w-4 h-4" />حسابات التجربة</span>
+            <PA2Icon name="chevron" className={`w-4 h-4 transition ${open ? "rotate-90" : "-rotate-90"}`} />
+          </button>
+          {open && (
+            <div className="mt-2 bg-white rounded-[28px] p-2 pb-3">
+              <Group label="إدارة المنصة">
+                <div className="grid grid-cols-2 gap-2 px-2">
+                  <button type="button" onClick={() => onPick("sysadmin", "v2")} className="h-11 rounded-2xl bg-stone-900 text-white text-[13px] font-semibold">نسخة كلاود</button>
+                  <button type="button" onClick={() => onPick("sysadmin", "v1")} className="h-11 rounded-2xl bg-[#F4F2EE] text-stone-700 text-[13px]">نسخة جيميناي</button>
+                </div>
+              </Group>
+              <Group label="القيادة والإدارات">
+                <Row title="الإدارة التنفيذية" sub={pa2Short(byUser("exec")?.name)} onClick={() => onPick("exec")} />
+                <Row title="الموارد البشرية" sub={`${pa2Short(byUser("admin")?.name)} · واجهة مزدوجة`} onClick={() => onPick("admin")} />
+                <Row title="الإدارة التربوية" sub={pa2Short(byUser("tarbawi")?.name)} onClick={() => onPick("tarbawi")} />
+              </Group>
+              <Group label="أعضاء (الأعلى والأقل التزاماً)">
+                {samples.map(({ u, pct }) => <Row key={u.id} title={pa2Short(u.name)} sub={u.unit} tag={pct === null ? null : `${pct}%`} onClick={() => onPick(u.username)} />)}
+              </Group>
+              <div className="px-2 pt-2">
+                <select defaultValue="" onChange={e => e.target.value && onPick(e.target.value)} className={pa2InputCls}>
+                  <option value="">كل الأعضاء ({cadres.length})…</option>
+                  {cadres.map(u => <option key={u.id} value={u.username}>{pa2Short(u.name)} — {u.unit}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function LoginView({ db, users, onLoginSuccess }) {
+      const [username, setUsername] = useState("");
+      const [password, setPassword] = useState("");
       const [error, setError] = useState("");
 
       const findMatchingUser = (uInput, pInput) => {
         const cleanU = uInput.trim().toLowerCase();
         const cleanP = pInput.trim();
         return users.find(u => {
-          const uname = u.username.toLowerCase();
-          if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) {
-            return u.password === cleanP;
-          }
+          const uname = (u.username || "").toLowerCase();
+          if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) return u.password === cleanP;
           return uname === cleanU && u.password === cleanP;
         });
       };
@@ -1392,169 +1611,45 @@ CREATE POLICY "Allow public upload on madyan-media"
       const handleSubmit = (e) => {
         e.preventDefault();
         const found = findMatchingUser(username, password);
-        if (!found) {
-          setError("اسم المستخدم أو كلمة المرور غير صحيحة. (الحسابات تُمنح حصرياً من إدارة المنصة)");
-          return;
-        }
+        if (!found) { setError("اسم المستخدم أو كلمة المرور غير صحيحة"); return; }
         setError("");
         onLoginSuccess(found);
       };
 
-      const quickFill = (u, p, variant) => {
+      // دخول تجريبي مباشر (يتجاوز كلمة المرور حتى لو تغيّرت أثناء الاختبار)
+      const quickFill = (u, variant) => {
         const cleanU = u.trim().toLowerCase();
-        const found = findMatchingUser(u, p) || users.find(x => {
+        const found = users.find(x => {
           const uname = (x.username || "").toLowerCase();
           if (cleanU === "sysadmin") return uname === "sysadmin" || x.roleType === "platform_admin";
           return uname === cleanU;
         });
-        setUsername(found ? found.username : u);
-        setPassword(found ? found.password : p);
         if (found) onLoginSuccess(found, variant);
       };
 
       return (
-        <div className="min-h-screen flex items-center justify-center p-4 bg-[#F6F5F2]">
-          <div className="bg-white rounded-[32px] max-w-md w-full p-7 sm:p-8 shadow-xl border border-stone-200/80">
-            <div className="flex flex-col items-center text-center mb-6">
-              <MadyanWordmark size="text-4xl sm:text-5xl" />
-              <p className="text-xs font-black text-stone-700 mt-2">
-                محرك بناء العادات المؤسسية والتربوية
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-3">
-                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-800 border border-stone-200">
-                  🛠️ إدارة المنصة
-                </span>
-                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-50 text-amber-900 border border-amber-200">
-                  👑 الإدارة التنفيذية
-                </span>
-                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-orange-50 text-orange-800 border border-orange-200/70">
-                  🏛️ الموارد البشرية
-                </span>
-                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70">
-                  🌱 الإدارة التربوية
-                </span>
-              </div>
-            </div>
+        <div dir="rtl" className="min-h-screen flex flex-col items-center justify-center px-4 py-10 bg-[#F4F2EE]">
+          <div className="bg-white rounded-[32px] w-full max-w-[420px] p-8 sm:p-10">
+            <div className="text-[13px] font-medium text-orange-700">منصة المتابعة</div>
+            <h1 className="text-[34px] font-bold text-stone-900 leading-tight mt-1">ميدان</h1>
+            <p className="text-[15px] text-stone-500 mt-2 leading-relaxed">مهماتك، وتعميمات الإدارة، ونسبة إنجازك في مكان واحد.</p>
 
-            <form onSubmit={handleSubmit} className="space-y-3.5">
+            <form onSubmit={handleSubmit} className="space-y-4 mt-8">
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">اسم المستخدم</label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
-                  dir="ltr"
-                  required
-                />
+                <PA2Label>اسم المستخدم</PA2Label>
+                <input type="text" value={username} onChange={e => setUsername(e.target.value)} className={pa2InputCls} dir="ltr" autoComplete="username" required />
               </div>
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">كلمة المرور</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-bold text-stone-800 focus:outline-none focus:border-orange-500 focus:bg-white"
-                  dir="ltr"
-                  required
-                />
+                <PA2Label>كلمة المرور</PA2Label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} className={pa2InputCls} dir="ltr" autoComplete="current-password" required />
               </div>
-
-              {error && (
-                <div className="text-xs font-bold text-rose-600 bg-rose-50 px-3.5 py-2.5 rounded-xl border border-rose-200">
-                  {error}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-3.5 rounded-2xl madyan-gradient text-white text-sm font-black shadow-lg shadow-orange-500/20 hover:opacity-95 transition"
-              >
-                تسجيل الدخول ←
-              </button>
+              {error && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">{error}</div>}
+              <button type="submit" className="w-full h-12 rounded-full bg-stone-900 text-white text-[15px] font-semibold hover:bg-stone-800 transition">تسجيل الدخول</button>
             </form>
-
-            <div className="mt-6 pt-5 border-t border-stone-100 space-y-2">
-              <div className="text-[11px] font-bold text-stone-400 text-center">
-                الدخول السريع للمستويات الأربعة:
-              </div>
-
-              {/* المستوى الثالث (المحطة الأولى): مدير المنصة التقني — نسختان للمقارنة */}
-              <div className="rounded-2xl bg-stone-900 p-2.5 shadow-md">
-                <div className="text-[11px] text-stone-400 px-1.5 pb-2">🛠️ إدارة المنصة التقنية — اختر النسخة للمقارنة</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => quickFill("sysadmin", "1234", "v1")}
-                    className="p-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-right transition"
-                  >
-                    <div className="text-xs font-bold text-white">نسخة جيميناي</div>
-                    <div className="text-[10px] text-stone-400 mt-0.5">التصميم السابق</div>
-                  </button>
-                  <button
-                    onClick={() => quickFill("sysadmin", "1234", "v2")}
-                    className="p-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-right transition"
-                  >
-                    <div className="text-xs font-bold text-white">نسخة كلاود</div>
-                    <div className="text-[10px] text-orange-100 mt-0.5">التصميم الجديد</div>
-                  </button>
-                </div>
-              </div>
-
-              {/* المستوى الثاني: الإدارات التشغيلية المعزولة */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => quickFill("admin", "admin123")}
-                  className="p-2.5 rounded-2xl bg-orange-50/70 hover:bg-orange-100/80 border border-orange-200 text-right transition"
-                >
-                  <div className="text-xs font-black text-orange-950">🏛️ إدارة الموارد البشرية</div>
-                  <div className="text-[10px] text-orange-800 mt-0.5">إدارة تشغيلية (المحور الإداري)</div>
-                </button>
-                <button
-                  onClick={() => quickFill("tarbawi", "1234")}
-                  className="p-2.5 rounded-2xl bg-emerald-50/70 hover:bg-emerald-100/80 border border-emerald-200 text-right transition"
-                >
-                  <div className="text-xs font-black text-emerald-950">🌱 الإدارة التربوية</div>
-                  <div className="text-[10px] text-emerald-800 mt-0.5">إدارة تشغيلية (المحور التربوي)</div>
-                </button>
-              </div>
-
-              {/* المستوى الأول: الإدارة التنفيذية العليا */}
-              <button
-                onClick={() => quickFill("exec", "1234")}
-                className="w-full p-2.5 rounded-2xl bg-stone-100 text-stone-800 hover:bg-stone-200 text-right transition flex items-center justify-between border border-stone-200/80"
-              >
-                <div>
-                  <div className="text-xs font-black">👑 مستوى الإدارة التنفيذية العليا</div>
-                  <div className="text-[10px] text-stone-500">التعميمات السياسية وملخص الحركة العام</div>
-                </div>
-                <span className="text-[11px] font-bold bg-white px-2.5 py-1 rounded-lg border border-stone-200">دخول</span>
-              </button>
-
-              {/* المستوى الرابع: الكوادر */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => quickFill("maydan", "1234")}
-                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-stone-100 border border-stone-200/80 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-900">👤 كادر: أحمد المنصور</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">مستوى الكادر (5 أسابيع)</div>
-                </button>
-                <button
-                  onClick={() => quickFill("sara", "1234")}
-                  className="p-2.5 rounded-2xl bg-stone-50 hover:bg-stone-100 border border-stone-200/80 text-right transition"
-                >
-                  <div className="text-xs font-black text-stone-800">👤 كادر: سارة العتيبي</div>
-                  <div className="text-[10px] text-stone-500 mt-0.5">مستوى الكادر (3 أسابيع)</div>
-                </button>
-              </div>
-
-              <div className="pt-1 text-center">
-                <button onClick={onResetDemo} className="text-[11px] text-stone-400 hover:text-stone-600 underline">
-                  إعادة ضبط بيانات المحاكاة لحالتها الأصلية
-                </button>
-              </div>
-            </div>
+            <p className="text-[13px] text-stone-400 mt-6 text-center">الحسابات تُنشأ من الموارد البشرية أو إدارة المنصة.</p>
           </div>
+
+          {DEMO_MODE && <DemoAccountsPanel db={db} users={users} onPick={quickFill} />}
         </div>
       );
     }
@@ -5321,7 +5416,17 @@ CREATE POLICY "Allow public upload on madyan-media"
         check: <path {...p} d="M5 12.5l4.5 4.5L19 7.5" />,
         cloud: <path {...p} d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.75 4.75 0 0 1-.5 9.5H7Z" />,
         key: <><circle {...p} cx="8" cy="15" r="4" /><path {...p} d="M11 12l9-9M17 6l2.5 2.5M14.5 8.5 16.5 10.5" /></>,
-        swap: <><path {...p} d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5" /></>
+        swap: <><path {...p} d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5" /></>,
+        megaphone: <><path {...p} d="M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1Z" /><path {...p} d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" /></>,
+        send: <><path {...p} d="M21 3 10 14" /><path {...p} d="M21 3l-7 18-4-7-7-4 18-7Z" /></>,
+        user: <><circle {...p} cx="12" cy="8" r="4" /><path {...p} d="M4 21c1-4 4.5-6 8-6s7 2 8 6" /></>,
+        chart: <><path {...p} d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
+        tasks: <><path {...p} d="M9 6h11M9 12h11M9 18h11" /><path {...p} d="M3.5 6l1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17" /></>,
+        cog: <><circle {...p} cx="12" cy="12" r="3" /><path {...p} d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>,
+        archive: <><rect {...p} x="3" y="4" width="18" height="4" rx="1" /><path {...p} d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" /></>,
+        building: <><rect {...p} x="4" y="3" width="16" height="18" rx="1.5" /><path {...p} d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3" /></>,
+        download: <><path {...p} d="M12 4v11M7 10l5 5 5-5M5 20h14" /></>,
+        upload: <><path {...p} d="M12 20V9M7 14l5-5 5 5M5 4h14" /></>
       };
       return <svg viewBox="0 0 24 24" className={className} aria-hidden="true">{paths[name]}</svg>;
     }
@@ -5763,6 +5868,76 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
+    // ----- بطاقة حماية البيانات: نسخة احتياطية + استيراد + استعادة بعبارة تأكيد -----
+    const PA2_RESET_PHRASE = "إعادة الضبط";
+    function PA2DataCard({ db, setDb, onResetDemo, showToast }) {
+      const [phrase, setPhrase] = useState("");
+      const [resetOpen, setResetOpen] = useState(false);
+      const [pending, setPending] = useState(null); // نسخة مستوردة بانتظار التأكيد
+      const fileRef = useRef(null);
+      const exportBackup = () => {
+        try {
+          const d = new Date();
+          const name = `maydan-backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}.json`;
+          const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          showToast("نُزّلت النسخة الاحتياطية");
+        } catch (e) { showToast("تعذّر إنشاء النسخة"); }
+      };
+      const onFile = (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const raw = JSON.parse(String(reader.result || ""));
+            if (!raw || !Array.isArray(raw.users)) throw new Error("bad");
+            setPending({ name: f.name, data: normalizeDb(raw) });
+          } catch (err) { showToast("الملف غير صالح"); }
+        };
+        reader.readAsText(f);
+      };
+      const ok = phrase.trim() === PA2_RESET_PHRASE;
+      return (
+        <div className="bg-white rounded-[28px] px-6 pt-5 pb-5">
+          <h2 className="text-[17px] font-bold text-stone-900">حماية البيانات</h2>
+          <p className="text-[13px] text-stone-500 mt-1">احتفظ بنسخة دورية قبل أي تعديل كبير.</p>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <button onClick={exportBackup} className="h-10 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold inline-flex items-center gap-1.5"><PA2Icon name="download" className="w-4 h-4" />تنزيل نسخة احتياطية</button>
+            <button onClick={() => fileRef.current && fileRef.current.click()} className="h-10 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5"><PA2Icon name="upload" className="w-4 h-4" />استيراد نسخة</button>
+            <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={onFile} />
+          </div>
+          {pending && (
+            <div className="mt-4 rounded-2xl bg-[#FFF3E2] px-4 py-3">
+              <div className="text-[14px] text-stone-800">استبدال كل البيانات الحالية بالنسخة «{pending.name}» ({pending.data.users.length} حساباً)؟</div>
+              <div className="flex items-center gap-2 mt-3">
+                <button onClick={() => { setDb(pending.data); setPending(null); showToast("استُعيدت النسخة"); }} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold">تأكيد الاستيراد</button>
+                <button onClick={() => setPending(null)} className="h-9 px-3 text-[13px] text-stone-500">إلغاء</button>
+              </div>
+            </div>
+          )}
+          <div className="mt-5 pt-4 border-t border-stone-100">
+            {!resetOpen ? (
+              <button onClick={() => setResetOpen(true)} className="text-[13px] text-rose-600 hover:text-rose-700">استعادة البيانات التجريبية…</button>
+            ) : (
+              <div>
+                <div className="text-[14px] text-stone-800">يمسح كل الحسابات والسجلات ويعيد النظام لحالته الأولى. للتأكيد اكتب «{PA2_RESET_PHRASE}».</div>
+                <div className="flex flex-col sm:flex-row gap-2 mt-3">
+                  <input value={phrase} onChange={e => setPhrase(e.target.value)} placeholder={PA2_RESET_PHRASE} className={`${pa2InputCls} sm:max-w-[220px]`} />
+                  <button disabled={!ok} onClick={() => { if (ok) { setPhrase(""); setResetOpen(false); onResetDemo(); } }} className={`h-11 px-5 rounded-full text-[13px] font-semibold ${ok ? "bg-rose-600 text-white" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}>استعادة نهائية</button>
+                  <button onClick={() => { setResetOpen(false); setPhrase(""); }} className="h-11 px-3 text-[13px] text-stone-500">تراجع</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     function PlatformAdminPortalV2({
       db,
       setDb,
@@ -5981,7 +6156,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       const NAV = [
         { id: "overview", label: "نظرة عامة", icon: "home", badge: gaps.length || null },
         { id: "structure", label: "الهيكل التنظيمي", icon: "tree" },
-        { id: "leaders", label: "القادة والصلاحيات", icon: "users" },
+        { id: "leaders", label: "الحسابات والصلاحيات", icon: "users" },
         { id: "rules", label: "ضوابط النظام", icon: "sliders" }
       ];
       const cloudOk = cloudStatus === "connected";
@@ -6341,28 +6516,32 @@ CREATE POLICY "Allow public upload on madyan-media"
       // ---------- شاشة: القادة والصلاحيات ----------
       const renderLeaders = () => {
         const q = leaderSearch.trim().toLowerCase();
-        const rows = leaders
-          .filter(u => leaderFilter === "all" || (leaderFilter === "executive" ? u.roleType === "executive" : isOperational(u)))
+        const isCadreTab = leaderFilter === "cadre";
+        const pool = isCadreTab ? db.users.filter(u => u.roleType === "cadre") : leaders;
+        const rows = pool
+          .filter(u => isCadreTab || leaderFilter === "all" || (leaderFilter === "executive" ? u.roleType === "executive" : isOperational(u)))
           .filter(u => !q || (u.name || "").toLowerCase().includes(q) || (u.username || "").toLowerCase().includes(q))
           .sort((a, b) => {
             const rank = r => r === "platform_admin" ? 0 : r === "executive" ? 1 : 2;
             return rank(a.roleType) - rank(b.roleType);
           });
-        const selUser = leaderSel && leaderSel !== "new_leader" ? db.users.find(u => u.id === leaderSel) : null;
+        const selUser = leaderSel && leaderSel !== "new_leader" && leaderSel !== "new_cadre" ? db.users.find(u => u.id === leaderSel) : null;
         const deptManagers = {};
         departments.forEach(d => { const m = findDeptManager(d.id); if (m) deptManagers[d.id] = { id: m.id, name: pa2Short(m.name) }; });
         return (
           <>
             <Header
-              eyebrow="القادة والصلاحيات"
-              title="حسابات القيادة"
-              desc="من يدخل المنصة بصلاحيات قيادية. حسابات الكوادر تديرها إدارة الموارد البشرية."
-              actions={<PrimaryBtn onClick={() => setLeaderSel("new_leader")}><PA2Icon name="plus" className="w-4 h-4" /> قائد جديد</PrimaryBtn>}
+              eyebrow="الحسابات والصلاحيات"
+              title={isCadreTab ? "حسابات الأعضاء" : "حسابات القيادة"}
+              desc={isCadreTab ? "تُدار بالمشاركة مع الموارد البشرية: الوحدة والإدارات التي تصل العضو مهامها." : "من يدخل المنصة بصلاحيات قيادية."}
+              actions={isCadreTab
+                ? <PrimaryBtn onClick={() => setLeaderSel("new_cadre")}><PA2Icon name="plus" className="w-4 h-4" /> عضو جديد</PrimaryBtn>
+                : <PrimaryBtn onClick={() => setLeaderSel("new_leader")}><PA2Icon name="plus" className="w-4 h-4" /> قائد جديد</PrimaryBtn>}
             />
             <div className="grid lg:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
               <div className="bg-white rounded-[28px] p-2">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 pt-3 pb-3">
-                  <PA2Segmented size="sm" value={leaderFilter} onChange={setLeaderFilter} options={[{ value: "all", label: "الكل" }, { value: "executive", label: "التنفيذية" }, { value: "operational", label: "مديرو الإدارات" }]} />
+                  <PA2Segmented size="sm" value={leaderFilter} onChange={setLeaderFilter} options={[{ value: "all", label: "القيادة" }, { value: "executive", label: "التنفيذية" }, { value: "operational", label: "مديرو الإدارات" }, { value: "cadre", label: `الأعضاء · ${db.users.filter(u => u.roleType === "cadre").length}` }]} />
                   <label className="relative block sm:w-60">
                     <PA2Icon name="search" className="w-4 h-4 text-stone-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
                     <input value={leaderSearch} onChange={e => setLeaderSearch(e.target.value)} placeholder="بحث بالاسم أو المستخدم" className="w-full h-10 rounded-full bg-[#F4F2EE] pr-10 pl-4 text-[14px] focus:outline-none focus:bg-white focus:ring-1 focus:ring-stone-300" />
@@ -6388,7 +6567,7 @@ CREATE POLICY "Allow public upload on madyan-media"
                           </span>
                         </span>
                         <span className="hidden md:block text-[14px] text-stone-600">{pa2RoleLabel(u)}</span>
-                        <span className={`hidden md:block text-[14px] truncate ${isOperational(u) && !d ? "text-orange-700" : "text-stone-600"}`}>{d ? d.name : (isOperational(u) ? "بلا إدارة" : "—")}</span>
+                        <span className={`hidden md:block text-[14px] truncate ${isOperational(u) && !d ? "text-orange-700" : "text-stone-600"}`}>{d ? d.name : u.roleType === "cadre" ? (u.unit || "—") : (isOperational(u) ? "بلا إدارة" : "—")}</span>
                         <span dir="ltr" className="text-[13px] text-stone-400 font-mono text-left truncate">{u.username}</span>
                       </button>
                     );
@@ -6397,7 +6576,13 @@ CREATE POLICY "Allow public upload on madyan-media"
                 </div>
               </div>
               <div className="lg:sticky lg:top-6">
-                {leaderSel === "new_leader" ? (
+                {leaderSel === "new_cadre" || (selUser && selUser.roleType === "cadre") ? (
+                  <MXCadrePanel key={leaderSel} db={db} user={leaderSel === "new_cadre" ? null : selUser} isNew={leaderSel === "new_cadre"} isUsernameTaken={isUsernameTaken}
+                    onClose={() => setLeaderSel(null)}
+                    onSave={(draft) => { const id = mxSaveCadre(setDb, leaderSel === "new_cadre" ? null : selUser, leaderSel === "new_cadre", draft); setLeaderSel(id); showToast(leaderSel === "new_cadre" ? "أُنشئ الحساب" : "تم الحفظ"); }}
+                    onDelete={() => { setDb(prev => ({ ...prev, users: prev.users.filter(u => u.id !== selUser.id) })); setLeaderSel(null); showToast("حُذف الحساب"); }}
+                    onResetPassword={() => resetPassword(selUser.id)} />
+                ) : leaderSel === "new_leader" ? (
                   <PA2LeaderPanel key="new_leader" isNew departments={departments} deptManagers={deptManagers} isUsernameTaken={isUsernameTaken} onSave={d => saveLeader(null, d)} onClose={() => setLeaderSel(null)} showToast={showToast} />
                 ) : selUser ? (
                   <PA2LeaderPanel
@@ -6497,17 +6682,8 @@ CREATE POLICY "Allow public upload on madyan-media"
                 <RuleRow title="المزامنة السحابية" desc={cloudOk ? `متصلة${lastSyncAt ? ` · آخر مزامنة ${lastSyncAt}` : ""}` : "البيانات محفوظة على هذا الجهاز فقط"}>
                   <button onClick={onOpenCloudSetup} className="h-9 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50">{cloudOk ? "الإعدادات" : "ربط سحابي"}</button>
                 </RuleRow>
-                <RuleRow title="استعادة البيانات التجريبية" desc="يمسح كل التعديلات ويعيد النظام لحالته الأولى.">
-                  {resetArmed ? (
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => { setResetArmed(false); onResetDemo(); }} className="h-9 px-4 rounded-full bg-rose-600 text-white text-[13px] font-semibold">تأكيد الاستعادة</button>
-                      <button onClick={() => setResetArmed(false)} className="h-9 px-3 text-[13px] text-stone-500">تراجع</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => setResetArmed(true)} className="h-9 px-4 rounded-full text-[13px] text-rose-600 hover:bg-rose-50">استعادة</button>
-                  )}
-                </RuleRow>
               </RuleCard>
+              <PA2DataCard db={db} setDb={setDb} onResetDemo={onResetDemo} showToast={showToast} />
             </div>
           </div>
         </>
@@ -6587,6 +6763,1745 @@ CREATE POLICY "Allow public upload on madyan-media"
         </div>
       );
     }
+
+    // ============================================================================
+    // 9.7 MX CORE — محرك المهام الموحد + الإطار المشترك لكل الواجهات (نسخة كلاود)
+    // ============================================================================
+    const MX_TYPE_META = {
+      lecture_quiz: { label: "محاضرة واختبار", icon: "🎬", approval: "self" },
+      daily_habit: { label: "عادة يومية", icon: "🔄", approval: "self" },
+      reading: { label: "مطالعة", icon: "📖", approval: "self" },
+      meeting: { label: "حضور لقاء", icon: "🤝", approval: "manager" },
+      practical: { label: "تكليف عملي", icon: "📋", approval: "manager" },
+      agenda_minutes: { label: "أجندة أو محضر", icon: "📝", approval: "self" }
+    };
+    const MX_DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+    function mxBuildDefaultDeptTasks(sc) {
+      const hrDefs = { ...INITIAL_STATE.systemConfig.taskDefinitions, ...(sc?.taskDefinitions || {}) };
+      const hr = [
+        { id: "lecture", type: "lecture_quiz", approval: "self", title: "المحاضرة الأسبوعية واختبارها", subtitle: hrDefs.lecture?.subtitle || "", instructions: hrDefs.lecture?.instructions || "", enabled: true },
+        { id: "agenda", type: "agenda_minutes", approval: "self", title: "إرسال أجندة اللقاء", subtitle: hrDefs.agenda?.subtitle || "", instructions: hrDefs.agenda?.instructions || "", enabled: true },
+        { id: "attendance", type: "meeting", approval: "manager", title: "حضور اللقاء الأسبوعي", subtitle: hrDefs.attendance?.subtitle || "", instructions: hrDefs.attendance?.instructions || "", enabled: true },
+        { id: "minutes", type: "agenda_minutes", approval: "self", title: "توثيق محضر اللقاء", subtitle: hrDefs.minutes?.subtitle || "", instructions: hrDefs.minutes?.instructions || "", enabled: true }
+      ];
+      const tDefs = Array.isArray(sc?.tarbawiTaskDefinitions) && sc.tarbawiTaskDefinitions.length ? sc.tarbawiTaskDefinitions : DEFAULT_TARBAWI_TASKS;
+      const tarbawi = tDefs.map(t => {
+        const type = t.trackType === "daily_days" ? "daily_habit" : t.id === "tarbawi_majlis" ? "meeting" : t.id === "tarbawi_reading" ? "reading" : "practical";
+        return {
+          id: t.id, type,
+          approval: type === "meeting" ? "manager" : "self",
+          title: t.title, subtitle: t.subtitle || "", instructions: t.instructions || "",
+          targetDays: type === "daily_habit" ? (t.targetDays || 5) : undefined,
+          enabled: t.enabled !== false
+        };
+      });
+      return { dept_hr: hr, dept_tarbawi: tarbawi };
+    }
+
+    const mxRules = (db) => ({ ...DEFAULT_GOVERNANCE_RULES, ...(db.systemConfig?.governanceRules || {}) });
+    const mxDepartments = (db) => db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+    const mxUnits = (db) => db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+    const mxDeptById = (db, id) => mxDepartments(db).find(d => d.id === id) || null;
+    const mxIsLeaderRole = (u) => u && (u.roleType === "platform_admin" || u.roleType === "executive");
+
+    function mxDeptTaskDefs(db, deptId, includeDisabled = false) {
+      const list = (db.systemConfig?.deptTasks && db.systemConfig.deptTasks[deptId]) || [];
+      return includeDisabled ? list : list.filter(t => t.enabled !== false);
+    }
+    function mxUserDeptIds(db, user) {
+      if (!user || mxIsLeaderRole(user)) return [];
+      const list = Array.isArray(user.assignedDepartments) ? user.assignedDepartments : [];
+      return list.filter(id => { const d = mxDeptById(db, id); return d && d.enabled !== false; });
+    }
+    function mxUserTasks(db, user, deptFilter = null) {
+      return mxUserDeptIds(db, user)
+        .filter(did => !deptFilter || did === deptFilter)
+        .flatMap(did => mxDeptTaskDefs(db, did).map(t => ({ ...t, deptId: did })));
+    }
+    const mxCurrentWeek = (user) => calculateWeeksSinceJoin(user?.joinedAt);
+    const mxRec = (user, week, taskId) => (user?.tasksRecord && user.tasksRecord[week] && user.tasksRecord[week][taskId]) || { status: "pending" };
+    const mxApproval = (def) => def.approval || MX_TYPE_META[def.type]?.approval || "self";
+    const mxTargetDays = (def, rules) => Math.max(1, Math.min(7, def.targetDays || rules?.dailyTaskTargetDays || 5));
+
+    function mxTaskState(def, rec, rules) {
+      const s = rec?.status || "pending";
+      const latePct = Math.max(0, Math.min(100, parseInt(rules?.latePointsPct, 10) || 50));
+      if (s === "on_time") return { key: "done", label: "مكتملة", points: 100, done: true };
+      if (s === "late") return { key: "late", label: "مكتملة متأخرة", points: latePct, done: true };
+      if (s === "submitted") return { key: "submitted", label: "بانتظار الاعتماد", points: 0, done: false };
+      if (s === "rejected") return { key: "rejected", label: "أُعيدت للمراجعة", points: 0, done: false };
+      const days = Array.isArray(rec?.daysCompleted) ? rec.daysCompleted.length : 0;
+      if (def.type === "daily_habit" && days > 0) {
+        const target = mxTargetDays(def, rules);
+        return { key: "partial", label: `${days} من ${target} أيام`, points: Math.min(90, Math.round((days / target) * 100)), done: false };
+      }
+      return { key: "pending", label: "لم تُنجز", points: 0, done: false };
+    }
+
+    function mxWeekSummary(db, user, week, deptFilter = null) {
+      const rules = mxRules(db);
+      const tasks = mxUserTasks(db, user, deptFilter);
+      const byDept = {};
+      let points = 0, done = 0, submitted = 0;
+      tasks.forEach(t => {
+        const st = mxTaskState(t, mxRec(user, week, t.id), rules);
+        points += st.points;
+        if (st.done) done++;
+        if (st.key === "submitted") submitted++;
+        const b = byDept[t.deptId] || (byDept[t.deptId] = { total: 0, done: 0, points: 0, pct: 0 });
+        b.total++; b.points += st.points; if (st.done) b.done++;
+      });
+      Object.values(byDept).forEach(b => { b.pct = b.total ? Math.round(b.points / b.total) : 0; });
+      return { week, total: tasks.length, done, submitted, remaining: tasks.length - done - submitted, points, pct: tasks.length ? Math.round(points / tasks.length) : 0, byDept, tasks };
+    }
+
+    function mxRecentPct(db, user, weeks = 4, deptFilter = null) {
+      const cur = mxCurrentWeek(user);
+      const list = [];
+      for (let w = Math.max(1, cur - weeks + 1); w <= cur; w++) list.push(mxWeekSummary(db, user, w, deptFilter).pct);
+      return list.length ? Math.round(list.reduce((a, b) => a + b, 0) / list.length) : 0;
+    }
+
+    function mxStatusOf(pct) {
+      if (pct >= 75) return { key: "committed", label: "ملتزم", dot: "bg-emerald-500", ink: "text-emerald-700", bg: "bg-emerald-50" };
+      if (pct > 0) return { key: "behind", label: "متأخر", dot: "bg-amber-500", ink: "text-amber-700", bg: "bg-amber-50" };
+      return { key: "not_started", label: "لم يبدأ", dot: "bg-stone-400", ink: "text-stone-500", bg: "bg-stone-100" };
+    }
+
+    // أعضاء إدارة = كل من أُسندت له مهام هذه الإدارة (أعضاء أو قادة)
+    function mxDeptMembers(db, deptId) {
+      return db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).includes(deptId));
+    }
+    function mxDeptManager(db, deptId) {
+      return db.users.find(u => (u.roleType === "operational_admin" || u.roleType === "admin") && u.departmentId === deptId) || null;
+    }
+
+    // المهام التي تنتظر اعتماد المدير (في كل الأسابيع)
+    function mxPendingApprovals(db, deptId) {
+      const defs = mxDeptTaskDefs(db, deptId);
+      const out = [];
+      mxDeptMembers(db, deptId).forEach(u => {
+        Object.keys(u.tasksRecord || {}).forEach(wk => {
+          defs.forEach(t => {
+            const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+            if (r && r.status === "submitted") out.push({ user: u, task: t, week: Number(wk), rec: r });
+          });
+        });
+      });
+      return out.sort((a, b) => b.week - a.week);
+    }
+
+    function mxDeptStats(db, deptId) {
+      const rules = mxRules(db);
+      const defs = mxDeptTaskDefs(db, deptId);
+      const rows = mxDeptMembers(db, deptId).map(u => {
+        const week = mxCurrentWeek(u);
+        let pts = 0, done = 0;
+        defs.forEach(t => { const st = mxTaskState(t, mxRec(u, week, t.id), rules); pts += st.points; if (st.done) done++; });
+        const pct = defs.length ? Math.round(pts / defs.length) : 0;
+        return { user: u, week, pct, done, total: defs.length, status: mxStatusOf(pct), recentPct: mxRecentPct(db, u, 4, deptId) };
+      });
+      const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+      const byUnit = mxUnits(db).map(un => {
+        const r = rows.filter(x => x.user.unit === un.name);
+        return { unit: un, count: r.length, pct: r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0 };
+      }).filter(x => x.count > 0);
+      const byTask = defs.map(t => ({
+        task: t,
+        done: rows.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length,
+        total: rows.length
+      }));
+      const counts = { committed: 0, behind: 0, not_started: 0 };
+      rows.forEach(r => { counts[r.status.key]++; });
+      return { deptId, defs, rows, avg, byUnit, byTask, counts, pending: mxPendingApprovals(db, deptId) };
+    }
+
+    function mxOrgStats(db) {
+      const depts = mxDepartments(db).filter(d => d.enabled !== false);
+      const weights = db.systemConfig?.deptWeights || {};
+      const deptStats = depts.map(d => ({ dept: d, weight: Math.max(1, Math.min(3, Number(weights[d.id]) || 1)), ...mxDeptStats(db, d.id) }));
+      const wSum = deptStats.reduce((a, s) => a + (s.rows.length ? s.weight : 0), 0);
+      const index = wSum ? Math.round(deptStats.reduce((a, s) => a + (s.rows.length ? s.avg * s.weight : 0), 0) / wSum) : 0;
+      const members = db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).length > 0);
+      const memberRows = members.map(u => {
+        const s = mxWeekSummary(db, u, mxCurrentWeek(u));
+        return { user: u, pct: s.pct, recentPct: mxRecentPct(db, u, 4), status: mxStatusOf(s.pct) };
+      });
+      const units = mxUnits(db).map(un => {
+        const r = memberRows.filter(x => x.user.unit === un.name);
+        return { unit: un, count: r.length, pct: r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0 };
+      }).filter(x => x.count > 0).sort((a, b) => b.pct - a.pct);
+      return { index, deptStats, memberRows, units };
+    }
+
+    // ---------- التعميمات ----------
+    function mxBulletinRecipients(db, b) {
+      const pool = db.users.filter(u => u.roleType !== "platform_admin" && u.id !== b.senderId && u.roleType !== "executive");
+      if (!b.targetType || b.targetType === "all") return pool;
+      if (b.targetType === "dept") return pool.filter(u => u.departmentId === b.targetDeptId || mxUserDeptIds(db, u).includes(b.targetDeptId));
+      if (b.targetType === "unit") return pool.filter(u => u.unit === b.targetUnit);
+      if (b.targetType === "custom") return pool.filter(u => (b.recipientIds || []).includes(u.id));
+      return pool;
+    }
+    function mxBulletinsForUser(db, user) {
+      return (db.bulletins || [])
+        .map((b, i) => ({ b, i }))
+        .filter(({ b }) => mxBulletinRecipients(db, b).some(u => u.id === user.id))
+        .sort((x, y) => (y.b.createdAtTs || 0) - (x.b.createdAtTs || 0) || y.i - x.i)
+        .map(({ b }) => b);
+    }
+    const mxIsAcked = (b, userId) => Boolean(b.acknowledgedBy && b.acknowledgedBy[userId]);
+    function mxBulletinTargetLabel(db, b) {
+      if (!b.targetType || b.targetType === "all") return "كل المنصة";
+      if (b.targetType === "dept") return mxDeptById(db, b.targetDeptId)?.name || "إدارة";
+      if (b.targetType === "unit") return b.targetUnit || "وحدة";
+      return "أعضاء محددون";
+    }
+    function mxNowStamp() {
+      const d = new Date();
+      return `${d.getDate()} ${MONTHS_AR[d.getMonth()]} • ${formatTimeAr(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`)}`;
+    }
+
+    // تحديث سجل مهمة لعضو
+    function mxPatchRecord(setDb, userId, week, taskId, patch) {
+      setDb(prev => ({
+        ...prev,
+        users: prev.users.map(u => {
+          if (u.id !== userId) return u;
+          const rec = { ...(u.tasksRecord || {}) };
+          const wk = { ...(rec[week] || {}) };
+          wk[taskId] = { ...(wk[taskId] || { status: "pending" }), ...patch };
+          rec[week] = wk;
+          return { ...u, tasksRecord: rec };
+        })
+      }));
+    }
+
+    // ---------- عناصر واجهة مشتركة ----------
+    function MXHeader({ eyebrow, title, desc, actions }) {
+      return (
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-8">
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium text-orange-700">{eyebrow}</div>
+            <h1 className="text-[30px] sm:text-[34px] font-bold text-stone-900 leading-tight mt-1.5">{title}</h1>
+            {desc && <p className="text-[15px] text-stone-500 mt-2 leading-relaxed max-w-xl">{desc}</p>}
+          </div>
+          {actions && <div className="flex items-center gap-2 shrink-0 flex-wrap">{actions}</div>}
+        </div>
+      );
+    }
+    function MXPrimaryBtn({ onClick, children, disabled }) {
+      return (
+        <button onClick={onClick} disabled={disabled} className={`h-11 px-5 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 transition ${disabled ? "bg-stone-200 text-stone-400 cursor-not-allowed" : "bg-stone-900 text-white hover:bg-stone-800"}`}>
+          {children}
+        </button>
+      );
+    }
+    function MXGhostBtn({ onClick, children }) {
+      return (
+        <button onClick={onClick} className="h-10 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 transition">
+          {children}
+        </button>
+      );
+    }
+    function MXCard({ children, className = "" }) {
+      return <div className={`bg-white rounded-[28px] ${className}`}>{children}</div>;
+    }
+    function MXSectionTitle({ children, action }) {
+      return (
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold text-stone-900">{children}</h2>
+          {action}
+        </div>
+      );
+    }
+    function MXProgress({ pct, tone }) {
+      const color = tone || (pct >= 75 ? "bg-emerald-500" : pct > 0 ? "bg-orange-500" : "bg-stone-300");
+      return (
+        <div className="h-2 rounded-full bg-[#F1EEE9] overflow-hidden">
+          <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+        </div>
+      );
+    }
+    function MXStatusPill({ pct, status }) {
+      const s = status || mxStatusOf(pct);
+      return (
+        <span className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[12px] ${s.bg} ${s.ink}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />{s.label}
+        </span>
+      );
+    }
+    function MXDeptChip({ dept, idx = 0 }) {
+      if (!dept) return null;
+      const tone = pa2DeptTone(dept, idx);
+      return <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[12px] whitespace-nowrap shrink-0 ${tone.bg} ${tone.ink}`}>{dept.shortName || dept.name}</span>;
+    }
+    // شريط «يحتاج انتباهك»
+    function MXAttention({ title, items, emptyText, onPrimary, primaryLabel = "معالجة الآن" }) {
+      const [all, setAll] = useState(false);
+      if (!items || items.length === 0) {
+        return (
+          <div className="rounded-[24px] bg-[#E3F1E8] px-6 py-5 mb-6 flex items-center gap-4">
+            <span className="w-11 h-11 rounded-full bg-white text-emerald-600 inline-flex items-center justify-center shrink-0"><PA2Icon name="check" className="w-5 h-5" /></span>
+            <div>
+              <div className="text-[13px] font-medium text-emerald-700">{title}</div>
+              <div className="text-[17px] font-semibold text-stone-900 mt-0.5">{emptyText}</div>
+            </div>
+          </div>
+        );
+      }
+      const visible = all ? items : items.slice(0, 2);
+      return (
+        <div className="rounded-[24px] bg-[#FFF3E2] px-6 py-5 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <span className="w-11 h-11 rounded-full bg-white text-orange-600 inline-flex items-center justify-center shrink-0"><PA2Icon name="spark" className="w-5 h-5" /></span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium text-orange-700">{title}</div>
+              <div className="text-[17px] font-semibold text-stone-900 mt-0.5">{items.length} {items.length === 1 ? "أمر يحتاج" : "أمور تحتاج"} انتباهك</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={onPrimary || items[0].go} className="h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">{primaryLabel}</button>
+              {items.length > 2 && <button onClick={() => setAll(v => !v)} className="h-10 px-4 rounded-full text-[14px] text-stone-700 hover:bg-white/70">{all ? "إخفاء" : "عرض الكل"}</button>}
+            </div>
+          </div>
+          <div className="mt-4 sm:mr-[60px] divide-y divide-orange-200/60">
+            {visible.map(g => (
+              <button key={g.key} onClick={g.go} className="w-full flex items-center justify-between py-2.5 text-right group">
+                <span className="flex items-center gap-2.5 text-[14px] text-stone-700 min-w-0"><span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" /><span className="truncate">{g.text}</span></span>
+                <span className="text-[13px] text-orange-700 opacity-70 group-hover:opacity-100 inline-flex items-center gap-1 shrink-0">{g.cta || "فتح"} <PA2Icon name="chevron" className="w-3.5 h-3.5" /></span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    // بطاقة الأرقام: كتلة داكنة + أشرطة + أرقام
+    function MXScoreCard({ label, pct, caption, bars = [], stats = [] }) {
+      return (
+        <div className="bg-white rounded-[28px] p-3 mb-10 flex flex-col md:flex-row gap-3">
+          <div className="md:w-[280px] rounded-[22px] bg-[#1C1917] text-white p-6 flex flex-col justify-between min-h-[190px]">
+            <div className="text-[14px] text-stone-400">{label}</div>
+            <div>
+              <div className="text-[56px] font-bold leading-none tabular-nums">{pct}<span className="text-[28px] text-stone-500">%</span></div>
+              {caption && <div className="text-[13px] text-stone-400 mt-3">{caption}</div>}
+            </div>
+          </div>
+          <div className="flex-1 px-4 py-4 md:px-6 flex flex-col justify-between gap-6">
+            <div className="space-y-4">
+              {bars.map(b => (
+                <div key={b.label}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[14px] text-stone-600">{b.label}</span>
+                    <span className="text-[14px] font-semibold text-stone-900 tabular-nums">{b.value}</span>
+                  </div>
+                  <MXProgress pct={b.pct} tone={b.tone} />
+                </div>
+              ))}
+            </div>
+            {stats.length > 0 && (
+              <div className={`grid grid-cols-${stats.length} divide-x divide-x-reverse divide-stone-200 border-t border-stone-100 pt-4`}>
+                {stats.map(s => (
+                  <div key={s.l} className="px-3 first:pr-0 text-right">
+                    <div className="text-[24px] font-bold text-stone-900 tabular-nums">{s.n}</div>
+                    <div className="text-[13px] text-stone-500">{s.l}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- الإطار المشترك (العمود الجانبي + شريط الجوال) ----------
+    // modeSwitch: { value, onChange, options: [{ value, label, badge }] } — يظهر فقط للواجهة المزدوجة
+    function MXShell({ areaLabel, chip, modeSwitch, nav, active, onNav, user, roleLabel, onLogout, children }) {
+      const go = (id) => { onNav(id); window.scrollTo({ top: 0 }); };
+      return (
+        <div dir="rtl" className="min-h-screen bg-[#F4F2EE] text-stone-900 lg:pr-[264px] -mb-20 pb-20">
+          <aside className="hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30">
+            <div className="px-2">
+              <div className="text-[24px] font-bold text-white leading-none">ميدان</div>
+              <div className="text-[13px] text-stone-500 mt-2 flex items-center gap-2 flex-wrap">
+                {areaLabel}
+                {chip && <span className="text-[11px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300">{chip}</span>}
+              </div>
+            </div>
+            {modeSwitch && (
+              <div className="mt-6 p-1 rounded-full bg-white/5 grid grid-cols-2 gap-1">
+                {modeSwitch.options.map(o => (
+                  <button key={o.value} onClick={() => modeSwitch.onChange(o.value)} className={`h-9 rounded-full text-[13px] inline-flex items-center justify-center gap-1.5 transition ${modeSwitch.value === o.value ? "bg-white text-stone-900 font-semibold" : "text-stone-400 hover:text-white"}`}>
+                    {o.label}
+                    {o.badge ? <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-orange-500 text-white text-[11px] inline-flex items-center justify-center">{o.badge}</span> : null}
+                  </button>
+                ))}
+              </div>
+            )}
+            <nav className={`${modeSwitch ? "mt-6" : "mt-10"} space-y-1`}>
+              {nav.map(n => (
+                <button key={n.id} onClick={() => go(n.id)} className={`w-full h-11 px-4 rounded-full flex items-center gap-3 text-[14px] transition ${active === n.id ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"}`}>
+                  <PA2Icon name={n.icon} />
+                  <span className="flex-1 text-right">{n.label}</span>
+                  {n.badge ? <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-orange-500 text-white text-[12px] font-semibold inline-flex items-center justify-center">{n.badge}</span> : null}
+                </button>
+              ))}
+            </nav>
+            <div className="mt-auto">
+              <div className="flex items-center gap-3 px-2 pt-3 border-t border-white/10">
+                <PA2Avatar user={user} size="w-9 h-9" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] text-white truncate">{pa2Short(user?.name)}</div>
+                  <div className="text-[12px] text-stone-500 truncate">{roleLabel}</div>
+                </div>
+                <button onClick={onLogout} className="w-9 h-9 rounded-full text-stone-400 hover:text-white hover:bg-white/10 inline-flex items-center justify-center" title="تسجيل الخروج">
+                  <PA2Icon name="logout" />
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <div className="lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[18px] font-bold">ميدان <span className="text-[12px] font-normal text-stone-400">· {areaLabel}</span></div>
+              <button onClick={onLogout} className="w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center"><PA2Icon name="logout" /></button>
+            </div>
+            {modeSwitch && (
+              <div className="mt-3 p-1 rounded-full bg-white/5 grid grid-cols-2 gap-1">
+                {modeSwitch.options.map(o => (
+                  <button key={o.value} onClick={() => modeSwitch.onChange(o.value)} className={`h-8 rounded-full text-[13px] ${modeSwitch.value === o.value ? "bg-white text-stone-900 font-semibold" : "text-stone-400"}`}>
+                    {o.label}{o.badge ? ` · ${o.badge}` : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-1.5 overflow-x-auto mt-3 -mx-1 px-1">
+              {nav.map(n => (
+                <button key={n.id} onClick={() => go(n.id)} className={`h-9 px-3.5 rounded-full text-[13px] whitespace-nowrap ${active === n.id ? "bg-white text-stone-900 font-semibold" : "text-stone-400 bg-white/5"}`}>
+                  {n.label}{n.badge ? ` · ${n.badge}` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <main className="px-5 sm:px-8 xl:px-12 py-8 lg:py-12 max-w-[1240px]">{children}</main>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // 9.8 MX WORKSPACE — الواجهة المزدوجة (إدارة القسم ⇄ مهماتي)
+    // ============================================================================
+    function MXWorkspace({ db, setDb, currentUser, isUsernameTaken, onAcknowledgeBulletin, onLogout, showToast }) {
+      const myTasks = mxUserTasks(db, currentUser);
+      const hasTasks = myTasks.length > 0;
+      const [mode, setMode] = useState(() => {
+        try { return new URLSearchParams(window.location.search).get("ws") === "mine" ? "mine" : "manage"; } catch (e) { return "manage"; }
+      });
+      const week = mxCurrentWeek(currentUser);
+      const sum = hasTasks ? mxWeekSummary(db, currentUser, week) : null;
+      const unread = mxBulletinsForUser(db, currentUser).filter(b => !mxIsAcked(b, currentUser.id)).length;
+      const pendingApprovals = currentUser.departmentId ? mxPendingApprovals(db, currentUser.departmentId).length : 0;
+      const modeSwitch = hasTasks ? {
+        value: mode,
+        onChange: setMode,
+        options: [
+          { value: "manage", label: "إدارة القسم", badge: pendingApprovals || null },
+          { value: "mine", label: "مهماتي", badge: ((sum ? sum.remaining : 0) + unread) || null }
+        ]
+      } : null;
+      if (hasTasks && mode === "mine") {
+        return <CadrePortalV3 db={db} setDb={setDb} currentUser={currentUser} isUsernameTaken={isUsernameTaken} onAcknowledgeBulletin={onAcknowledgeBulletin} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
+      }
+      return <OperationalPortalV3 db={db} setDb={setDb} currentUser={currentUser} isUsernameTaken={isUsernameTaken} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
+    }
+
+    // ==== PART:OPS START ====
+    // ---------- توجيهات الإدارة التنفيذية (تظهر للمدير أو قائد الوحدة) ----------
+    function mxMarkDirectiveRead(setDb, id) {
+      setDb(prev => ({ ...prev, directives: (prev.directives || []).map(d => d.id === id ? { ...d, readAt: Date.now(), readAtLabel: mxNowStamp() } : d) }));
+    }
+    function MXDirectiveStrip({ directives, onRead }) {
+      if (!directives || directives.length === 0) return null;
+      const d = directives[0];
+      return (
+        <div className="rounded-[24px] bg-[#1C1917] text-white px-6 py-5 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+            <span className="w-11 h-11 rounded-full bg-white/10 text-orange-300 inline-flex items-center justify-center shrink-0"><PA2Icon name="send" className="w-5 h-5" /></span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] text-orange-300">توجيه من {d.fromName || "الإدارة التنفيذية"} · {d.createdAt}{directives.length > 1 ? ` · ${directives.length - 1} آخر` : ""}</div>
+              <p className="text-[16px] text-white mt-1 leading-relaxed whitespace-pre-line">{d.text}</p>
+            </div>
+            <button onClick={() => onRead(d.id)} className="h-10 px-5 rounded-full bg-white text-stone-900 text-[14px] font-semibold hover:bg-stone-100 shrink-0">تم الاطلاع</button>
+          </div>
+        </div>
+      );
+    }
+
+    // لوحة متابعة عضو: مهام الأسبوع + الاعتمادات المعلّقة
+    function MXMemberFollowPanel({ db, deptId, user, onApprove, onReject, onClose }) {
+      const rules = mxRules(db);
+      const week = mxCurrentWeek(user);
+      const defs = mxDeptTaskDefs(db, deptId);
+      const pending = mxPendingApprovals(db, deptId).filter(p => p.user.id === user.id);
+      const s = mxWeekSummary(db, user, week, deptId);
+      return (
+        <PA2PanelShell eyebrow={`${user.unit || "بدون وحدة"} · الأسبوع ${week}`} title={pa2Short(user.name)} onClose={onClose}>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3"><div className="text-[22px] font-bold tabular-nums">{s.pct}%</div><div className="text-[12px] text-stone-500">هذا الأسبوع</div></div>
+            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3"><div className="text-[22px] font-bold tabular-nums">{mxRecentPct(db, user, 4, deptId)}%</div><div className="text-[12px] text-stone-500">آخر 4 أسابيع</div></div>
+          </div>
+          {pending.length > 0 && (
+            <div>
+              <PA2Label hint={`${pending.length}`}>بانتظار اعتمادك</PA2Label>
+              <div className="space-y-2">
+                {pending.map(p => (
+                  <div key={`${p.week}:${p.task.id}`} className="rounded-2xl bg-[#ECE7FA]/60 px-4 py-3">
+                    <div className="text-[14px] font-medium text-stone-900">{p.task.title}</div>
+                    <div className="text-[12px] text-stone-500 mt-0.5">الأسبوع {p.week}{p.rec.lateSubmit ? " · متأخرة" : ""}</div>
+                    {p.rec.note && <p className="text-[13px] text-stone-600 mt-2 leading-relaxed">«{p.rec.note}»</p>}
+                    <div className="flex items-center gap-2 mt-3">
+                      <button onClick={() => onApprove(p)} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold">اعتماد</button>
+                      <button onClick={() => onReject(p)} className="h-9 px-4 rounded-full text-[13px] text-rose-600 hover:bg-rose-50">إعادة للمراجعة</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <PA2Label>مهام هذا الأسبوع</PA2Label>
+            <div className="divide-y divide-stone-100">
+              {defs.map(t => {
+                const st = mxTaskState(t, mxRec(user, week, t.id), rules);
+                return (
+                  <div key={t.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <span className="text-[14px] text-stone-700 truncate">{t.title}</span>
+                    <MXStateTag st={st} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </PA2PanelShell>
+      );
+    }
+
+    // لوحة تعريف مهمة (إنشاء/تعديل بمسودة وحفظ صريح)
+    function MXTaskDefPanel({ def, isNew, allowedTypes, onSave, onDelete, onClose }) {
+      const [d, setD] = useState(() => ({
+        title: def?.title || "",
+        type: def?.type || allowedTypes[0] || "practical",
+        approval: def?.approval || MX_TYPE_META[def?.type || allowedTypes[0]]?.approval || "self",
+        targetDays: def?.targetDays || 5,
+        instructions: def?.instructions || ""
+      }));
+      const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+      const fixedSelf = d.type === "lecture_quiz" || d.type === "daily_habit";
+      const dirty = isNew ? d.title.trim().length > 1 : (d.title !== def.title || d.type !== def.type || d.approval !== (def.approval || "self") || d.targetDays !== (def.targetDays || 5) || d.instructions !== (def.instructions || ""));
+      const save = () => {
+        if (!d.title.trim()) return;
+        onSave({ ...d, title: d.title.trim(), approval: fixedSelf ? "self" : d.approval, targetDays: d.type === "daily_habit" ? d.targetDays : undefined });
+      };
+      return (
+        <PA2PanelShell eyebrow={isNew ? "مهمة جديدة" : "تعديل مهمة"} title={d.title || "بدون عنوان"} onClose={onClose}
+          footer={<PA2SaveFooter dirty={dirty} onSave={save} saveLabel={isNew ? "إضافة المهمة" : "حفظ التغييرات"} danger={!isNew && <PA2DangerAction label="حذف المهمة" confirmLabel="تأكيد الحذف" onConfirm={onDelete} />} />}>
+          <div>
+            <PA2Label>عنوان المهمة</PA2Label>
+            <input value={d.title} onChange={e => set("title", e.target.value)} className={pa2InputCls} placeholder="مثال: حضور اللقاء الأسبوعي" />
+          </div>
+          <div>
+            <PA2Label hint="حسب صلاحيات الإدارة">النوع</PA2Label>
+            <div className="grid grid-cols-2 gap-2">
+              {allowedTypes.map(t => (
+                <button key={t} onClick={() => setD(p => ({ ...p, type: t, approval: MX_TYPE_META[t]?.approval || "self" }))} className={`h-11 px-3 rounded-2xl text-[13px] text-right flex items-center gap-2 transition ${d.type === t ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`}>
+                  <span>{MX_TYPE_META[t]?.icon}</span>{MX_TYPE_META[t]?.label || t}
+                </button>
+              ))}
+            </div>
+          </div>
+          {d.type === "daily_habit" ? (
+            <div className="flex items-center justify-between">
+              <PA2Label>الأيام المطلوبة أسبوعياً</PA2Label>
+              <PA2Stepper value={d.targetDays} min={1} max={7} onChange={v => set("targetDays", v)} suffix="أيام" />
+            </div>
+          ) : !fixedSelf && (
+            <div>
+              <PA2Label>طريقة الاعتماد</PA2Label>
+              <PA2Segmented value={d.approval} onChange={v => set("approval", v)} options={[{ value: "self", label: "يؤكدها العضو" }, { value: "manager", label: "يعتمدها المدير" }]} />
+            </div>
+          )}
+          <div>
+            <PA2Label hint="اختياري">تعليمات للعضو</PA2Label>
+            <textarea value={d.instructions} onChange={e => set("instructions", e.target.value)} rows={3} className={`${pa2InputCls} h-auto py-3 resize-none`} />
+          </div>
+        </PA2PanelShell>
+      );
+    }
+
+    // لوحة حساب عضو (للموارد البشرية ومدير المنصة)
+    function MXCadrePanel({ db, user, isNew, isUsernameTaken, onSave, onDelete, onResetPassword, onClose }) {
+      const units = mxUnits(db);
+      const depts = mxDepartments(db).filter(d => d.enabled !== false);
+      const [d, setD] = useState(() => ({
+        name: user?.name || "",
+        username: user?.username || "",
+        jobTitle: user?.jobTitle || "",
+        unit: user?.unit || units[0]?.name || "",
+        assignedDepartments: Array.isArray(user?.assignedDepartments) ? user.assignedDepartments : depts.map(x => x.id),
+        password: isNew ? pa2TempPassword() : ""
+      }));
+      const [err, setErr] = useState("");
+      const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+      const toggleDept = (id) => set("assignedDepartments", d.assignedDepartments.includes(id) ? d.assignedDepartments.filter(x => x !== id) : [...d.assignedDepartments, id]);
+      const same = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+      const dirty = isNew ? (d.name.trim() && d.username.trim()) : (d.name !== user.name || d.username !== user.username || d.jobTitle !== (user.jobTitle || "") || d.unit !== (user.unit || "") || !same(d.assignedDepartments, user.assignedDepartments || []));
+      const save = () => {
+        setErr("");
+        const uname = d.username.trim().toLowerCase();
+        if (!d.name.trim() || !uname) { setErr("الاسم واسم المستخدم مطلوبان"); return; }
+        if (!/^[a-z0-9._-]{3,}$/.test(uname)) { setErr("اسم المستخدم بالإنجليزية 3 أحرف على الأقل، بدون مسافات"); return; }
+        if (isUsernameTaken(uname, user?.id)) { setErr("اسم المستخدم مستخدم بالفعل"); return; }
+        onSave({ ...d, name: d.name.trim(), username: uname, jobTitle: d.jobTitle.trim() });
+      };
+      return (
+        <PA2PanelShell eyebrow={isNew ? "عضو جديد" : (user.unit || "عضو")} title={d.name || "عضو جديد"} onClose={onClose}
+          footer={<PA2SaveFooter dirty={Boolean(dirty)} onSave={save} saveLabel={isNew ? "إنشاء الحساب" : "حفظ التغييرات"} danger={!isNew && <PA2DangerAction label="حذف الحساب نهائياً" confirmLabel="تأكيد الحذف" onConfirm={onDelete} />} />}>
+          <div><PA2Label>الاسم الكامل</PA2Label><input value={d.name} onChange={e => set("name", e.target.value)} className={pa2InputCls} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><PA2Label>اسم المستخدم</PA2Label><input dir="ltr" value={d.username} onChange={e => set("username", e.target.value)} className={pa2InputCls} /></div>
+            <div><PA2Label hint="اختياري">المسمى</PA2Label><input value={d.jobTitle} onChange={e => set("jobTitle", e.target.value)} className={pa2InputCls} /></div>
+          </div>
+          <div>
+            <PA2Label>الوحدة</PA2Label>
+            <select value={d.unit} onChange={e => set("unit", e.target.value)} className={pa2InputCls}>
+              {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <PA2Label hint="بدون إدارات = لا مهام">تصله مهام من</PA2Label>
+            <div className="space-y-2">
+              {depts.map((x, i) => (
+                <div key={x.id} className="flex items-center justify-between rounded-2xl bg-[#F4F2EE] px-4 h-12">
+                  <span className="text-[14px] text-stone-700">{x.name}</span>
+                  <PA2Switch checked={d.assignedDepartments.includes(x.id)} onChange={() => toggleDept(x.id)} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {isNew ? (
+            <div className="rounded-2xl bg-[#FFF3E2] px-4 py-3">
+              <div className="text-[13px] text-orange-700">كلمة مرور مؤقتة (يُطلب تغييرها)</div>
+              <div className="flex items-center justify-between mt-1"><span dir="ltr" className="text-[18px] font-semibold tracking-wider">{d.password}</span><button onClick={() => pa2Copy(d.password)} className="text-[13px] text-stone-600 inline-flex items-center gap-1"><PA2Icon name="copy" className="w-4 h-4" />نسخ</button></div>
+            </div>
+          ) : (
+            <button onClick={onResetPassword} className="text-[13px] text-stone-600 hover:text-stone-900 inline-flex items-center gap-1.5"><PA2Icon name="key" className="w-4 h-4" />إصدار كلمة مرور مؤقتة جديدة</button>
+          )}
+          {err && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">{err}</div>}
+        </PA2PanelShell>
+      );
+    }
+
+    // دوال حفظ الحسابات (مشتركة بين الموارد البشرية ومدير المنصة)
+    function mxSaveCadre(setDb, user, isNew, draft) {
+      if (isNew) {
+        const id = "u_" + Date.now().toString(36);
+        setDb(prev => ({ ...prev, users: [...prev.users, {
+          id, roleType: "cadre", name: draft.name, username: draft.username, password: draft.password, mustChangePassword: true,
+          jobTitle: draft.jobTitle, unit: draft.unit, assignedDepartments: draft.assignedDepartments, joinedAt: Date.now(), tasksRecord: {}, profile: {}
+        }] }));
+        return id;
+      }
+      setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === user.id ? { ...u, name: draft.name, username: draft.username, jobTitle: draft.jobTitle, unit: draft.unit, assignedDepartments: draft.assignedDepartments } : u) }));
+      return user.id;
+    }
+
+    function OperationalPortalV3({ db, setDb, currentUser, isUsernameTaken, onLogout, showToast, modeSwitch }) {
+      const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+      const deptId = me.departmentId;
+      const dept = mxDeptById(db, deptId);
+      const depts = mxDepartments(db);
+      const deptIdx = Math.max(0, depts.findIndex(d => d.id === deptId));
+      const tone = dept ? pa2DeptTone(dept, deptIdx) : PA2_PASTELS[0];
+      const isHR = deptId === "dept_hr";
+      const rules = mxRules(db);
+      const [view, setView] = useState("follow");
+      const [sel, setSel] = useState(null); // { kind, id }
+      const [statusF, setStatusF] = useState("all");
+      const [unitF, setUnitF] = useState("all");
+      const [q, setQ] = useState("");
+      const [descDraft, setDescDraft] = useState(dept?.description || "");
+
+      if (!dept) {
+        return (
+          <MXShell areaLabel="إدارة تشغيلية" nav={[{ id: "follow", label: "المتابعة", icon: "chart" }]} active="follow" onNav={() => {}} user={me} roleLabel="مدير إدارة" onLogout={onLogout} modeSwitch={modeSwitch}>
+            <MXHeader eyebrow="إدارة تشغيلية" title="لم تُربط بإدارة بعد" desc="اطلب من مدير المنصة ربط حسابك بإدارة لتظهر لك أدوات المتابعة." />
+          </MXShell>
+        );
+      }
+
+      const stats = mxDeptStats(db, deptId);
+      const directives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const allDefs = mxDeptTaskDefs(db, deptId, true);
+      const allowedTypes = (dept.allowedTaskTypes || []).filter(t => MX_TYPE_META[t]);
+      const maxTasks = dept.maxTotalTasks || 6;
+      const units = mxUnits(db);
+
+      const go = (v, s = null) => { setView(v); setSel(s); window.scrollTo({ top: 0 }); };
+
+      const approve = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: p.rec.lateSubmit ? "late" : "on_time", completedAt: Date.now(), approvedBy: me.id });
+        showToast("تم الاعتماد");
+      };
+      const reject = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: "rejected", rejectedBy: me.id });
+      };
+      const patchDeptTasks = (fn) => setDb(prev => {
+        const sc = prev.systemConfig || {};
+        const all = { ...(sc.deptTasks || {}) };
+        all[deptId] = fn([...(all[deptId] || [])]);
+        return { ...prev, systemConfig: { ...sc, deptTasks: all } };
+      });
+
+      // ----- يحتاج انتباهك -----
+      const attention = [];
+      const pendByUser = {};
+      stats.pending.forEach(p => { (pendByUser[p.user.id] = pendByUser[p.user.id] || []).push(p); });
+      Object.values(pendByUser).forEach(list => attention.push({
+        key: "ap_" + list[0].user.id,
+        text: `${pa2Short(list[0].user.name)} — ${list.length === 1 ? list[0].task.title : `${list.length} مهام`} بانتظار اعتمادك`,
+        go: () => { setView("follow"); setSel({ kind: "member", id: list[0].user.id }); setTimeout(() => { const el = document.getElementById("mx-members"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60); },
+        cta: "اعتماد"
+      }));
+      if (stats.counts.not_started > 0) attention.push({ key: "ns", text: `${stats.counts.not_started} ${stats.counts.not_started === 1 ? "عضو لم يبدأ" : "أعضاء لم يبدؤوا"} مهام هذا الأسبوع`, go: () => { setStatusF("not_started"); setSel(null); }, cta: "عرض" });
+      if (me.mustChangePassword) attention.push({ key: "pw", text: "ما زلت تستخدم كلمة مرور مؤقتة", go: () => modeSwitch ? modeSwitch.onChange("mine") : null, cta: "تغيير" });
+
+      const nav = [
+        { id: "follow", label: "المتابعة", icon: "chart", badge: (stats.pending.length + directives.length) || null },
+        { id: "tasks", label: "المهمات", icon: "tasks" },
+        { id: "members", label: isHR ? "الأعضاء والوحدات" : "الأعضاء", icon: "users" },
+        { id: "settings", label: "الإعدادات", icon: "cog" }
+      ];
+
+      // ----- الشاشات -----
+      let main = null, panel = null;
+
+      if (view === "follow") {
+        const rows = stats.rows
+          .filter(r => statusF === "all" || r.status.key === statusF)
+          .filter(r => unitF === "all" || r.user.unit === unitF)
+          .sort((a, b) => a.pct - b.pct || pa2Short(a.user.name).localeCompare(pa2Short(b.user.name), "ar"));
+        const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+        if (selUser) panel = <MXMemberFollowPanel db={db} deptId={deptId} user={selUser} onApprove={approve} onReject={reject} onClose={() => setSel(null)} />;
+        main = (
+          <>
+            <MXHeader eyebrow={dept.name} title="المتابعة" desc={`التزام ${stats.rows.length} عضواً بمهام الإدارة في أسبوعهم الحالي.`}
+              actions={<MXPrimaryBtn onClick={() => go("tasks", { kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />مهمة جديدة</MXPrimaryBtn>} />
+            <MXDirectiveStrip directives={directives} onRead={(id) => mxMarkDirectiveRead(setDb, id)} />
+            <MXAttention title="يحتاج انتباهك" items={attention} emptyText="لا اعتمادات معلّقة، والجميع بدأ أسبوعه." primaryLabel={stats.pending.length ? "ابدأ الاعتماد" : "عرض"} />
+            <MXScoreCard
+              label="التزام الإدارة هذا الأسبوع"
+              pct={stats.avg}
+              caption={`${stats.defs.length} مهام · ${stats.rows.length} عضواً`}
+              bars={stats.byUnit.map(b => ({ label: b.unit.name, value: `${b.pct}%`, pct: b.pct, tone: tone.dot }))}
+              stats={[{ n: stats.counts.committed, l: "ملتزم" }, { n: stats.counts.behind, l: "متأخر" }, { n: stats.counts.not_started, l: "لم يبدأ" }]}
+            />
+            <div id="mx-members" className={`grid gap-6 items-start scroll-mt-6 ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`}>
+              <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                  <h2 className="text-xl font-bold text-stone-900">الأعضاء</h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select value={unitF} onChange={e => setUnitF(e.target.value)} className="h-9 rounded-full bg-[#ECE9E3] px-4 text-[13px] text-stone-700 focus:outline-none">
+                      <option value="all">كل الوحدات</option>
+                      {stats.byUnit.map(b => <option key={b.unit.id} value={b.unit.name}>{b.unit.name}</option>)}
+                    </select>
+                    <PA2Segmented size="sm" value={statusF} onChange={setStatusF} options={[{ value: "all", label: "الكل" }, { value: "committed", label: "ملتزم" }, { value: "behind", label: "متأخر" }, { value: "not_started", label: "لم يبدأ" }]} />
+                  </div>
+                </div>
+                <div className="bg-white rounded-[28px] p-2">
+                  {rows.length === 0 && <div className="px-5 py-8 text-center text-[14px] text-stone-400">لا يوجد أعضاء بهذا الفلتر.</div>}
+                  {rows.map(r => {
+                    const pend = (pendByUser[r.user.id] || []).length;
+                    const active = selUser?.id === r.user.id;
+                    return (
+                      <button key={r.user.id} onClick={() => setSel(active ? null : { kind: "member", id: r.user.id })} className={`w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`}>
+                        <PA2Avatar user={r.user} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(r.user.name)}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{r.user.unit}</span>
+                        </span>
+                        {pend > 0 && <span className="hidden sm:inline-flex h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] items-center">{pend} للاعتماد</span>}
+                        <span className="hidden md:block w-28"><MXProgress pct={r.pct} /></span>
+                        <span className="w-12 text-left text-[14px] font-semibold tabular-nums text-stone-900">{r.pct}%</span>
+                        <span className="hidden sm:block"><MXStatusPill status={r.status} /></span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-10">
+                  <MXSectionTitle>إنجاز كل مهمة</MXSectionTitle>
+                  <div className="bg-white rounded-[28px] p-6 grid sm:grid-cols-2 gap-x-10 gap-y-5">
+                    {stats.byTask.map(b => {
+                      const pct = b.total ? Math.round((b.done / b.total) * 100) : 0;
+                      return (
+                        <div key={b.task.id}>
+                          <div className="flex items-center justify-between mb-2"><span className="text-[14px] text-stone-600 truncate">{b.task.title}</span><span className="text-[14px] font-semibold tabular-nums">{b.done} / {b.total}</span></div>
+                          <MXProgress pct={pct} tone={tone.dot} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "tasks") {
+        const selDef = sel?.kind === "task" ? (sel.id === "__new" ? "__new" : allDefs.find(t => t.id === sel.id)) : null;
+        const atCap = allDefs.length >= maxTasks;
+        if (selDef) {
+          panel = (
+            <MXTaskDefPanel key={sel.id} def={selDef === "__new" ? null : selDef} isNew={selDef === "__new"} allowedTypes={allowedTypes.length ? allowedTypes : ["practical"]}
+              onClose={() => setSel(null)}
+              onDelete={() => { patchDeptTasks(list => list.filter(t => t.id !== selDef.id)); setSel(null); showToast("حُذفت المهمة"); }}
+              onSave={(draft) => {
+                if (selDef === "__new") {
+                  if (atCap) return;
+                  const id = "t_" + Date.now().toString(36);
+                  patchDeptTasks(list => [...list, { id, ...draft, subtitle: "", enabled: true }]);
+                  setSel({ kind: "task", id });
+                  showToast("أُضيفت المهمة لكل أعضاء الإدارة");
+                } else {
+                  patchDeptTasks(list => list.map(t => t.id === selDef.id ? { ...t, ...draft } : t));
+                  showToast("تم حفظ المهمة");
+                }
+              }} />
+          );
+        }
+        main = (
+          <>
+            <MXHeader eyebrow={dept.name} title="المهمات" desc={`تُسند أسبوعياً لكل أعضاء الإدارة (${stats.rows.length} عضواً) دفعة واحدة.`}
+              actions={<MXPrimaryBtn disabled={atCap} onClick={() => setSel({ kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />مهمة جديدة</MXPrimaryBtn>} />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+              <div className="min-w-0">
+                <div className="text-[13px] text-stone-500 mb-3">{allDefs.length} من {maxTasks} مهام مسموحة{atCap ? " · وصلت للسقف" : ""}</div>
+                <div className="space-y-2">
+                  {allDefs.length === 0 && <PA2EmptyPanel title="لا توجد مهام بعد" text="أضف أول مهمة لتظهر لكل أعضاء الإدارة." />}
+                  {allDefs.map(t => {
+                    const bt = stats.byTask.find(b => b.task.id === t.id);
+                    const active = sel?.id === t.id;
+                    const off = t.enabled === false;
+                    return (
+                      <div key={t.id} className={`flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`}>
+                        <button onClick={() => setSel(active ? null : { kind: "task", id: t.id })} className="flex-1 min-w-0 flex items-center gap-4 text-right">
+                          <span className={`w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${off ? "opacity-40" : ""}`}>{MX_TYPE_META[t.type]?.icon}</span>
+                          <span className="min-w-0">
+                            <span className={`block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`}>{t.title}</span>
+                            <span className="block text-[13px] text-stone-400 truncate">{MX_TYPE_META[t.type]?.label} · {mxApproval(t) === "manager" && t.type !== "lecture_quiz" && t.type !== "daily_habit" ? "يعتمدها المدير" : "يؤكدها العضو"}{t.type === "daily_habit" ? ` · ${mxTargetDays(t, rules)} أيام` : ""}</span>
+                          </span>
+                        </button>
+                        {!off && bt && <span className="hidden sm:block text-[13px] text-stone-500 tabular-nums whitespace-nowrap">{bt.done} / {bt.total} أنجزوها</span>}
+                        <PA2Switch checked={!off} onChange={(v) => patchDeptTasks(list => list.map(x => x.id === t.id ? { ...x, enabled: v } : x))} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "members") {
+        const pool = isHR ? db.users.filter(u => u.roleType === "cadre") : stats.rows.map(r => r.user);
+        const rowsAll = pool
+          .filter(u => unitF === "all" || u.unit === unitF)
+          .filter(u => !q.trim() || (u.name || "").includes(q.trim()) || (u.username || "").includes(q.trim().toLowerCase()))
+          .sort((a, b) => (a.unit || "").localeCompare(b.unit || "", "ar") || pa2Short(a.name).localeCompare(pa2Short(b.name), "ar"));
+        const selUser = sel?.kind === "cadre" ? (sel.id === "__new" ? "__new" : db.users.find(u => u.id === sel.id)) : null;
+        if (isHR && selUser) {
+          panel = (
+            <MXCadrePanel key={sel.id} db={db} user={selUser === "__new" ? null : selUser} isNew={selUser === "__new"} isUsernameTaken={isUsernameTaken}
+              onClose={() => setSel(null)}
+              onSave={(draft) => { const id = mxSaveCadre(setDb, selUser === "__new" ? null : selUser, selUser === "__new", draft); setSel({ kind: "cadre", id }); showToast(selUser === "__new" ? "أُنشئ الحساب" : "تم الحفظ"); }}
+              onDelete={() => { setDb(prev => ({ ...prev, users: prev.users.filter(u => u.id !== selUser.id) })); setSel(null); showToast("حُذف الحساب"); }}
+              onResetPassword={() => { const temp = pa2TempPassword(); setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === selUser.id ? { ...u, password: temp, mustChangePassword: true } : u) })); pa2Copy(temp); showToast(`كلمة المرور المؤقتة: ${temp} (نُسخت)`); }} />
+          );
+        }
+        const unitCards = units.map(un => {
+          const members = pool.filter(u => u.unit === un.name);
+          const leader = un.leaderUserId ? db.users.find(u => u.id === un.leaderUserId) : null;
+          const r = stats.rows.filter(x => x.user.unit === un.name);
+          const pct = r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0;
+          return { un, count: members.length, leader, pct, hasRows: r.length > 0 };
+        });
+        main = (
+          <>
+            <MXHeader eyebrow={dept.name} title={isHR ? "الأعضاء والوحدات" : "الأعضاء"} desc={isHR ? "إنشاء حسابات الأعضاء، وتسكينهم في الوحدات، وتحديد الإدارات التي تصلهم مهامها." : "أعضاء الإدارة موزعين على الوحدات. إدارة الحسابات من الموارد البشرية."}
+              actions={isHR ? <MXPrimaryBtn onClick={() => setSel({ kind: "cadre", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />عضو جديد</MXPrimaryBtn> : null} />
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-10">
+              {unitCards.map(c => (
+                <button key={c.un.id} onClick={() => setUnitF(unitF === c.un.name ? "all" : c.un.name)} className={`text-right rounded-[22px] p-5 transition ${unitF === c.un.name ? "bg-stone-900 text-white" : "bg-white hover:bg-[#FBFAF8]"}`}>
+                  <div className={`text-[14px] font-semibold leading-snug ${unitF === c.un.name ? "text-white" : "text-stone-900"}`}>{c.un.name.replace(/^وحدة\s*/, "")}</div>
+                  <div className={`text-[28px] font-bold tabular-nums mt-3 ${unitF === c.un.name ? "text-white" : "text-stone-900"}`}>{c.count}<span className={`text-[13px] font-normal mr-1 ${unitF === c.un.name ? "text-stone-400" : "text-stone-400"}`}>عضواً</span></div>
+                  <div className={`text-[12px] mt-1 truncate ${unitF === c.un.name ? "text-stone-400" : "text-stone-400"}`}>{c.leader ? `القائد: ${pa2Short(c.leader.name)}` : "بلا قائد"}</div>
+                </button>
+              ))}
+            </div>
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+              <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                  <h2 className="text-xl font-bold text-stone-900">{unitF === "all" ? "كل الأعضاء" : unitF} <span className="text-stone-400 font-normal text-[15px]">· {rowsAll.length}</span></h2>
+                  <div className="relative">
+                    <PA2Icon name="search" className="w-4 h-4 absolute right-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
+                    <input value={q} onChange={e => setQ(e.target.value)} placeholder="بحث بالاسم" className="h-10 w-56 rounded-full bg-white pr-10 pl-4 text-[14px] focus:outline-none focus:ring-2 focus:ring-stone-200" />
+                  </div>
+                </div>
+                <div className="bg-white rounded-[28px] p-2">
+                  {rowsAll.length === 0 && <div className="px-5 py-8 text-center text-[14px] text-stone-400">لا يوجد أعضاء.</div>}
+                  {rowsAll.map(u => {
+                    const active = sel?.id === u.id;
+                    const ud = mxUserDeptIds(db, u);
+                    const Tag = isHR ? "button" : "div";
+                    return (
+                      <Tag key={u.id} onClick={isHR ? () => setSel(active ? null : { kind: "cadre", id: u.id }) : undefined} className={`w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : isHR ? "hover:bg-[#FBFAF8]" : ""}`}>
+                        <PA2Avatar user={u} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(u.name)}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{u.unit}{u.jobTitle ? ` · ${u.jobTitle}` : ""}</span>
+                        </span>
+                        <span className="hidden sm:flex gap-1.5">{ud.length ? ud.map(id => <MXDeptChip key={id} dept={mxDeptById(db, id)} idx={depts.findIndex(x => x.id === id)} />) : <span className="text-[12px] text-stone-400">بلا مهام</span>}</span>
+                        {isHR && <span dir="ltr" className="hidden md:block w-20 text-[13px] text-stone-400 text-left">{u.username}</span>}
+                      </Tag>
+                    );
+                  })}
+                </div>
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "settings") {
+        const dirty = descDraft !== (dept.description || "");
+        const ruleRows = [
+          ["سقف المهمات", `${maxTasks} مهام`],
+          ["الأنواع المسموحة", allowedTypes.map(t => MX_TYPE_META[t]?.label).join("، ") || "—"],
+          ["نقاط الإنجاز المتأخر", `${rules.latePointsPct}%`],
+          ["نسبة النجاح في الاختبار", `${rules.quizPassThresholdPct}%`],
+          ["الأسابيع السابقة المتاحة للعضو", rules.allowLateSubmissions ? `${rules.maxPastWeeksEditable} أسابيع` : "غير مسموح"]
+        ];
+        main = (
+          <>
+            <MXHeader eyebrow={dept.name} title="الإعدادات" desc="وصف الإدارة كما يراه الأعضاء، والقواعد المفعّلة من مدير المنصة." />
+            <div className="grid lg:grid-cols-[1fr_380px] gap-6 items-start">
+              <MXCard className="p-6 sm:p-8 space-y-5">
+                <div>
+                  <PA2Label>وصف الإدارة</PA2Label>
+                  <textarea value={descDraft} onChange={e => setDescDraft(e.target.value)} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none`} />
+                </div>
+                <PA2SaveFooter dirty={dirty} onSave={() => {
+                  setDb(prev => ({ ...prev, systemConfig: { ...prev.systemConfig, departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).map(d => d.id === deptId ? { ...d, description: descDraft } : d) } }));
+                  showToast("تم حفظ الوصف");
+                }} />
+              </MXCard>
+              <MXCard className="p-6">
+                <div className="text-[15px] font-semibold text-stone-900 mb-1">القواعد المفعّلة</div>
+                <div className="text-[13px] text-stone-400 mb-4">يعدّلها مدير المنصة</div>
+                <div className="divide-y divide-stone-100">
+                  {ruleRows.map(([l, v]) => (
+                    <div key={l} className="py-3 flex items-start justify-between gap-4"><span className="text-[14px] text-stone-500">{l}</span><span className="text-[14px] text-stone-900 text-left">{v}</span></div>
+                  ))}
+                </div>
+              </MXCard>
+            </div>
+          </>
+        );
+      }
+
+      return (
+        <MXShell areaLabel={dept.shortName || dept.name} chip="إدارة تشغيلية" modeSwitch={modeSwitch} nav={nav} active={view} onNav={(v) => go(v)} user={me} roleLabel={`مدير ${dept.shortName || dept.name}`} onLogout={onLogout}>
+          {main}
+        </MXShell>
+      );
+    }
+    // ==== PART:OPS END ====
+
+    // ==== PART:EXEC START ====
+    // ---------- بوابة الإدارة التنفيذية ----------
+    const MX_BULLETIN_CATEGORIES = ["تعميم إداري", "سياسة جديدة", "تذكير", "تعميم مشروع", "تهنئة"];
+
+    function MXBulletinComposer({ db, onPublish, onClose }) {
+      const depts = mxDepartments(db).filter(d => d.enabled !== false);
+      const units = mxUnits(db);
+      const [d, setD] = useState({ title: "", content: "", category: MX_BULLETIN_CATEGORIES[0], targetType: "all", targetDeptId: depts[0]?.id || "", targetUnit: units[0]?.name || "" });
+      const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+      const reach = mxBulletinRecipients(db, { ...d, senderId: "__none" }).length;
+      const ok = d.title.trim().length > 2 && d.content.trim().length > 4;
+      return (
+        <PA2PanelShell eyebrow="تعميم جديد" title={d.title || "بدون عنوان"} onClose={onClose}
+          footer={
+            <div className="flex items-center gap-3">
+              <button disabled={!ok} onClick={() => ok && onPublish(d)} className={`h-11 px-6 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 ${ok ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}><PA2Icon name="send" className="w-4 h-4" />نشر التعميم</button>
+              <span className="mr-auto text-[13px] text-stone-500">يصل إلى <b className="text-stone-900 tabular-nums">{reach}</b> عضواً</span>
+            </div>
+          }>
+          <div><PA2Label>العنوان</PA2Label><input value={d.title} onChange={e => set("title", e.target.value)} className={pa2InputCls} /></div>
+          <div><PA2Label>النص</PA2Label><textarea value={d.content} onChange={e => set("content", e.target.value)} rows={5} className={`${pa2InputCls} h-auto py-3 resize-none`} /></div>
+          <div>
+            <PA2Label>التصنيف</PA2Label>
+            <div className="flex flex-wrap gap-2">
+              {MX_BULLETIN_CATEGORIES.map(c => <button key={c} onClick={() => set("category", c)} className={`h-9 px-4 rounded-full text-[13px] transition ${d.category === c ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-600 hover:bg-stone-200"}`}>{c}</button>)}
+            </div>
+          </div>
+          <div>
+            <PA2Label>الجمهور</PA2Label>
+            <PA2Segmented value={d.targetType} onChange={v => set("targetType", v)} options={[{ value: "all", label: "كل المنصة" }, { value: "dept", label: "إدارة" }, { value: "unit", label: "وحدة" }]} />
+            {d.targetType === "dept" && (
+              <select value={d.targetDeptId} onChange={e => set("targetDeptId", e.target.value)} className={`${pa2InputCls} mt-3`}>{depts.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+            )}
+            {d.targetType === "unit" && (
+              <select value={d.targetUnit} onChange={e => set("targetUnit", e.target.value)} className={`${pa2InputCls} mt-3`}>{units.map(x => <option key={x.id} value={x.name}>{x.name}</option>)}</select>
+            )}
+          </div>
+          <div className="text-[13px] text-stone-400">يُطلب من كل مستلم تأكيد «اطلعت واستوعبت».</div>
+        </PA2PanelShell>
+      );
+    }
+
+    function MXBulletinReachPanel({ db, b, onClose }) {
+      const rec = mxBulletinRecipients(db, b);
+      const acked = rec.filter(u => mxIsAcked(b, u.id));
+      const pending = rec.filter(u => !mxIsAcked(b, u.id));
+      const byUnit = mxUnits(db).map(un => {
+        const r = rec.filter(u => u.unit === un.name);
+        return { label: un.name, total: r.length, done: r.filter(u => mxIsAcked(b, u.id)).length };
+      }).filter(x => x.total > 0);
+      const byDept = mxDepartments(db).filter(d => d.enabled !== false).map(d => {
+        const r = rec.filter(u => u.departmentId === d.id || mxUserDeptIds(db, u).includes(d.id));
+        return { label: d.name, total: r.length, done: r.filter(u => mxIsAcked(b, u.id)).length };
+      }).filter(x => x.total > 0);
+      const Bars = ({ list }) => (
+        <div className="space-y-3">
+          {list.map(x => (
+            <div key={x.label}>
+              <div className="flex justify-between mb-1.5"><span className="text-[13px] text-stone-600 truncate">{x.label}</span><span className="text-[13px] font-semibold tabular-nums">{x.done} / {x.total}</span></div>
+              <MXProgress pct={x.total ? Math.round((x.done / x.total) * 100) : 0} />
+            </div>
+          ))}
+        </div>
+      );
+      return (
+        <PA2PanelShell eyebrow={`${b.category || "تعميم"} · ${mxBulletinTargetLabel(db, b)}`} title={b.title} onClose={onClose}>
+          <p className="text-[14px] text-stone-600 leading-relaxed whitespace-pre-line">{b.content}</p>
+          <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3 flex items-center justify-between">
+            <span className="text-[13px] text-stone-500">اطلع وأكّد</span>
+            <span className="text-[20px] font-bold tabular-nums">{acked.length}<span className="text-[14px] text-stone-400 font-normal"> / {rec.length}</span></span>
+          </div>
+          {byDept.length > 0 && <div><PA2Label>حسب الإدارة</PA2Label><Bars list={byDept} /></div>}
+          {byUnit.length > 0 && <div><PA2Label>حسب الوحدة</PA2Label><Bars list={byUnit} /></div>}
+          {pending.length > 0 && (
+            <div>
+              <PA2Label hint={`${pending.length}`}>لم يطّلعوا بعد</PA2Label>
+              <div className="flex flex-wrap gap-1.5">{pending.map(u => <span key={u.id} className="h-7 px-3 rounded-full bg-[#F4F2EE] text-[12px] text-stone-600 inline-flex items-center">{pa2Short(u.name)}</span>)}</div>
+            </div>
+          )}
+        </PA2PanelShell>
+      );
+    }
+
+    function MXDirectiveComposer({ db, targets, onSend, onClose }) {
+      const [to, setTo] = useState(targets[0]?.user.id || "");
+      const [text, setText] = useState("");
+      const ok = to && text.trim().length > 3;
+      return (
+        <PA2PanelShell eyebrow="توجيه جديد" title="توجيه مباشر" onClose={onClose}
+          footer={<button disabled={!ok} onClick={() => ok && onSend(to, text.trim())} className={`h-11 px-6 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 ${ok ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}><PA2Icon name="send" className="w-4 h-4" />إرسال</button>}>
+          <div>
+            <PA2Label>إلى</PA2Label>
+            <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+              {targets.map(t => (
+                <button key={t.user.id + t.role} onClick={() => setTo(t.user.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-right transition ${to === t.user.id ? "bg-stone-900 text-white" : "bg-[#F4F2EE] hover:bg-stone-200"}`}>
+                  <PA2Avatar user={t.user} size="w-8 h-8" />
+                  <span className="min-w-0">
+                    <span className="block text-[14px] truncate">{pa2Short(t.user.name)}</span>
+                    <span className={`block text-[12px] truncate ${to === t.user.id ? "text-stone-400" : "text-stone-500"}`}>{t.role}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div><PA2Label>نص التوجيه</PA2Label><textarea value={text} onChange={e => setText(e.target.value)} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none`} placeholder="يظهر للمستلم في أعلى مساحته حتى يؤكد اطلاعه" /></div>
+        </PA2PanelShell>
+      );
+    }
+
+    function MXMemberRankList({ title, rows, empty }) {
+      return (
+        <MXCard className="p-6">
+          <div className="text-[15px] font-semibold text-stone-900 mb-3">{title}</div>
+          {rows.length === 0 ? <div className="text-[14px] text-stone-400 py-4">{empty}</div> : (
+            <div className="divide-y divide-stone-100">
+              {rows.map(r => (
+                <div key={r.user.id} className="flex items-center gap-3 py-2.5">
+                  <PA2Avatar user={r.user} size="w-8 h-8" />
+                  <span className="flex-1 min-w-0"><span className="block text-[14px] text-stone-800 truncate">{pa2Short(r.user.name)}</span><span className="block text-[12px] text-stone-400 truncate">{r.user.unit}</span></span>
+                  <span className="text-[14px] font-semibold tabular-nums">{r.pct}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </MXCard>
+      );
+    }
+
+    function ExecutivePortalV3({ db, setDb, currentUser, onPreviewUser, onLogout, showToast }) {
+      const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+      const [view, setView] = useState("pulse");
+      const [sel, setSel] = useState(null);
+      const [exKind, setExKind] = useState("dept");
+      const [exId, setExId] = useState(null);
+      const org = mxOrgStats(db);
+      const depts = mxDepartments(db).filter(d => d.enabled !== false);
+      const allDepts = mxDepartments(db);
+      const units = mxUnits(db);
+      const go = (v, s = null) => { setView(v); setSel(s); window.scrollTo({ top: 0 }); };
+
+      const bulletins = [...(db.bulletins || [])].map((b, i) => ({ b, i })).sort((x, y) => (y.b.createdAtTs || 0) - (x.b.createdAtTs || 0) || y.i - x.i).map(x => x.b);
+      const directives = [...(db.directives || [])].sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const counts = { committed: 0, behind: 0, not_started: 0 };
+      org.memberRows.forEach(r => counts[r.status.key]++);
+
+      const targets = [
+        ...depts.map(d => ({ user: mxDeptManager(db, d.id), role: `مدير ${d.shortName || d.name}` })).filter(t => t.user),
+        ...units.map(u => ({ user: u.leaderUserId ? db.users.find(x => x.id === u.leaderUserId) : null, role: `قائد ${u.name}` })).filter(t => t.user)
+      ];
+
+      const publish = (d) => {
+        const b = {
+          id: "bul_" + Date.now().toString(36), title: d.title.trim(), content: d.content.trim(), category: d.category,
+          senderId: me.id, senderName: pa2Short(me.name), senderRole: "الإدارة التنفيذية",
+          createdAt: mxNowStamp(), createdAtTs: Date.now(), targetType: d.targetType,
+          targetDeptId: d.targetType === "dept" ? d.targetDeptId : undefined, targetUnit: d.targetType === "unit" ? d.targetUnit : undefined,
+          recipientIds: [], acknowledgedBy: {}
+        };
+        setDb(prev => ({ ...prev, bulletins: [b, ...(prev.bulletins || [])] }));
+        setSel({ kind: "bulletin", id: b.id });
+        showToast("نُشر التعميم");
+      };
+      const sendDirective = (toUserId, text) => {
+        const dv = { id: "dir_" + Date.now().toString(36), fromUserId: me.id, fromName: pa2Short(me.name), toUserId, text, createdAt: mxNowStamp(), createdAtTs: Date.now(), readAt: null };
+        setDb(prev => ({ ...prev, directives: [dv, ...(prev.directives || [])] }));
+        setSel(null);
+        showToast("أُرسل التوجيه");
+      };
+      const setWeight = (deptId, w) => setDb(prev => ({ ...prev, systemConfig: { ...prev.systemConfig, deptWeights: { ...(prev.systemConfig?.deptWeights || {}), [deptId]: w } } }));
+
+      const unreadReach = bulletins.slice(0, 1).map(b => { const r = mxBulletinRecipients(db, b); return r.length - r.filter(u => mxIsAcked(b, u.id)).length; })[0] || 0;
+      const nav = [
+        { id: "pulse", label: "النبض العام", icon: "chart" },
+        { id: "bulletins", label: "التعميمات", icon: "megaphone" },
+        { id: "directives", label: "التوجيهات", icon: "send" },
+        { id: "explore", label: "استعراض", icon: "eye" }
+      ];
+
+      let main = null, panel = null;
+
+      if (view === "pulse") {
+        const ranked = [...org.memberRows].sort((a, b) => b.pct - a.pct || b.recentPct - a.recentPct);
+        const top = ranked.filter(r => r.pct > 0).slice(0, 5);
+        const bottom = [...ranked].reverse().slice(0, 5);
+        main = (
+          <>
+            <MXHeader eyebrow="الإدارة التنفيذية" title="النبض العام" desc={`صورة الانضباط هذا الأسبوع عبر الإدارات (${depts.length}) والوحدات (${org.units.length}).`}
+              actions={<MXPrimaryBtn onClick={() => go("bulletins", { kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>} />
+            <MXScoreCard
+              label="مؤشر الانضباط العام"
+              pct={org.index}
+              caption={`مرجّح بأوزان الإدارات · ${org.memberRows.length} عضواً`}
+              bars={org.deptStats.filter(s => s.rows.length).map(s => ({ label: `${s.dept.name} · وزن ${s.weight}`, value: `${s.avg}%`, pct: s.avg, tone: pa2DeptTone(s.dept, allDepts.findIndex(x => x.id === s.dept.id)).dot }))}
+              stats={[{ n: counts.committed, l: "ملتزم" }, { n: counts.behind, l: "متأخر" }, { n: counts.not_started, l: "لم يبدأ" }]}
+            />
+            <div className="grid lg:grid-cols-[1.2fr_1fr] gap-6 mb-10 items-start">
+              <div>
+                <MXSectionTitle>ترتيب الوحدات</MXSectionTitle>
+                <MXCard className="p-6 space-y-4">
+                  {org.units.map((u, i) => (
+                    <button key={u.unit.id} onClick={() => { setExKind("unit"); setExId(u.unit.id); go("explore"); }} className="w-full text-right block group">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[14px] text-stone-700 flex items-center gap-3"><span className="w-6 text-stone-400 tabular-nums">{i + 1}</span>{u.unit.name}<span className="text-[12px] text-stone-400">{u.count} عضواً</span></span>
+                        <span className="text-[14px] font-semibold tabular-nums">{u.pct}%</span>
+                      </div>
+                      <div className="mr-9"><MXProgress pct={u.pct} /></div>
+                    </button>
+                  ))}
+                </MXCard>
+              </div>
+              <div>
+                <MXSectionTitle>أوزان الإدارات</MXSectionTitle>
+                <MXCard className="p-6">
+                  <p className="text-[13px] text-stone-500 mb-4 leading-relaxed">كلما زاد الوزن زاد أثر الإدارة في المؤشر العام.</p>
+                  <div className="space-y-3">
+                    {org.deptStats.map(s => (
+                      <div key={s.dept.id} className="flex items-center justify-between gap-3">
+                        <span className="text-[14px] text-stone-700 truncate">{s.dept.name}</span>
+                        <PA2Stepper value={s.weight} min={1} max={3} onChange={v => setWeight(s.dept.id, v)} />
+                      </div>
+                    ))}
+                  </div>
+                </MXCard>
+              </div>
+            </div>
+            <div className="grid md:grid-cols-2 gap-6">
+              <MXMemberRankList title="الأكثر التزاماً هذا الأسبوع" rows={top} empty="لا يوجد إنجاز بعد هذا الأسبوع." />
+              <MXMemberRankList title="يحتاجون دعماً" rows={bottom} empty="—" />
+            </div>
+          </>
+        );
+      }
+
+      if (view === "bulletins") {
+        const selB = sel?.kind === "bulletin" ? bulletins.find(b => b.id === sel.id) : null;
+        if (sel?.kind === "compose") panel = <MXBulletinComposer db={db} onPublish={publish} onClose={() => setSel(null)} />;
+        else if (selB) panel = <MXBulletinReachPanel db={db} b={selB} onClose={() => setSel(null)} />;
+        main = (
+          <>
+            <MXHeader eyebrow="الإدارة التنفيذية" title="التعميمات" desc="انشر للمنصة كلها أو لإدارة أو وحدة، وتابع من اطّلع." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>} />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+              <div className="space-y-2 min-w-0">
+                {bulletins.length === 0 && <PA2EmptyPanel title="لا توجد تعميمات" text="انشر أول تعميم ليصل للأعضاء." />}
+                {bulletins.map(b => {
+                  const r = mxBulletinRecipients(db, b);
+                  const a = r.filter(u => mxIsAcked(b, u.id)).length;
+                  const pct = r.length ? Math.round((a / r.length) * 100) : 0;
+                  const active = sel?.id === b.id;
+                  return (
+                    <button key={b.id} onClick={() => setSel(active ? null : { kind: "bulletin", id: b.id })} className={`w-full text-right flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : "hover:bg-[#FBFAF8]"}`}>
+                      <span className="w-11 h-11 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center justify-center shrink-0"><PA2Icon name="megaphone" className="w-5 h-5" /></span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-[15px] font-medium text-stone-900 truncate">{b.title}</span>
+                        <span className="block text-[13px] text-stone-400 truncate">{mxBulletinTargetLabel(db, b)} · {b.createdAt}</span>
+                      </span>
+                      <span className="hidden sm:block w-28"><MXProgress pct={pct} /></span>
+                      <span className="text-[13px] text-stone-600 tabular-nums whitespace-nowrap">{a} / {r.length}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "directives") {
+        if (sel?.kind === "compose") panel = <MXDirectiveComposer db={db} targets={targets} onSend={sendDirective} onClose={() => setSel(null)} />;
+        main = (
+          <>
+            <MXHeader eyebrow="الإدارة التنفيذية" title="التوجيهات" desc="ملاحظة مباشرة لمدير إدارة أو قائد وحدة، تظهر في أعلى مساحته حتى يؤكد اطلاعه." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />توجيه جديد</MXPrimaryBtn>} />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+              <div className="space-y-2 min-w-0">
+                {directives.length === 0 && <PA2EmptyPanel title="لم تُرسل توجيهات بعد" text="التوجيه أداة هادئة لتنبيه مسؤول بعينه دون تعميم." />}
+                {directives.map(dv => {
+                  const to = db.users.find(u => u.id === dv.toUserId);
+                  return (
+                    <MXCard key={dv.id} className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <PA2Avatar user={to} size="w-9 h-9" />
+                        <span className="flex-1 min-w-0"><span className="block text-[14px] font-medium text-stone-900 truncate">{pa2Short(to?.name) || "—"}</span><span className="block text-[12px] text-stone-400">{dv.createdAt}</span></span>
+                        {dv.readAt ? <span className="h-7 px-3 rounded-full bg-emerald-50 text-emerald-700 text-[12px] inline-flex items-center">اطّلع{dv.readAtLabel ? ` · ${dv.readAtLabel}` : ""}</span> : <span className="h-7 px-3 rounded-full bg-stone-100 text-stone-500 text-[12px] inline-flex items-center">لم يطّلع بعد</span>}
+                      </div>
+                      <p className="text-[14px] text-stone-600 mt-3 leading-relaxed whitespace-pre-line">{dv.text}</p>
+                    </MXCard>
+                  );
+                })}
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "explore") {
+        const list = exKind === "dept" ? depts.map(d => ({ id: d.id, label: d.name })) : units.map(u => ({ id: u.id, label: u.name }));
+        const curId = list.some(x => x.id === exId) ? exId : list[0]?.id;
+        let rows = [], summary = null;
+        if (exKind === "dept" && curId) {
+          const s = org.deptStats.find(x => x.dept.id === curId) || mxDeptStats(db, curId);
+          const mgr = mxDeptManager(db, curId);
+          rows = s.rows.map(r => ({ user: r.user, pct: r.pct, status: r.status }));
+          summary = { pct: s.avg, caption: `المدير: ${mgr ? pa2Short(mgr.name) : "غير معيّن"}`, bars: s.byTask.map(b => ({ label: b.task.title, value: `${b.done} / ${b.total}`, pct: b.total ? Math.round((b.done / b.total) * 100) : 0 })), stats: [{ n: s.counts.committed, l: "ملتزم" }, { n: s.counts.behind, l: "متأخر" }, { n: s.counts.not_started, l: "لم يبدأ" }] };
+        } else if (curId) {
+          const un = units.find(u => u.id === curId);
+          const leader = un?.leaderUserId ? db.users.find(u => u.id === un.leaderUserId) : null;
+          rows = org.memberRows.filter(r => r.user.unit === un?.name).map(r => ({ user: r.user, pct: r.pct, status: r.status }));
+          const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+          const c = { committed: 0, behind: 0, not_started: 0 }; rows.forEach(r => c[r.status.key]++);
+          summary = { pct: avg, caption: `القائد: ${leader ? pa2Short(leader.name) : "غير معيّن"}`, bars: depts.map((d, i) => { const ds = org.deptStats.find(x => x.dept.id === d.id); const rr = (ds?.rows || []).filter(x => x.user.unit === un?.name); const p = rr.length ? Math.round(rr.reduce((a, x) => a + x.pct, 0) / rr.length) : 0; return { label: d.name, value: rr.length ? `${p}%` : "—", pct: p, tone: pa2DeptTone(d, allDepts.findIndex(x => x.id === d.id)).dot }; }), stats: [{ n: c.committed, l: "ملتزم" }, { n: c.behind, l: "متأخر" }, { n: c.not_started, l: "لم يبدأ" }] };
+        }
+        rows.sort((a, b) => b.pct - a.pct);
+        main = (
+          <>
+            <MXHeader eyebrow="الإدارة التنفيذية" title="استعراض" desc="نظرة للقراءة فقط على أي إدارة أو وحدة." />
+            <div className="flex items-center gap-3 flex-wrap mb-6">
+              <PA2Segmented value={exKind} onChange={v => { setExKind(v); setExId(null); }} options={[{ value: "dept", label: "الإدارات" }, { value: "unit", label: "الوحدات" }]} />
+              <select value={curId || ""} onChange={e => setExId(e.target.value)} className="h-9 rounded-full bg-white px-4 text-[14px] text-stone-700 focus:outline-none">
+                {list.map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
+              </select>
+            </div>
+            {summary && <MXScoreCard label={list.find(x => x.id === curId)?.label} pct={summary.pct} caption={summary.caption} bars={summary.bars} stats={summary.stats} />}
+            <MXSectionTitle>الأعضاء <span className="text-stone-400 font-normal text-[15px]">· {rows.length}</span></MXSectionTitle>
+            <div className="bg-white rounded-[28px] p-2">
+              {rows.length === 0 && <div className="px-5 py-8 text-center text-[14px] text-stone-400">لا يوجد أعضاء.</div>}
+              {rows.map(r => (
+                <div key={r.user.id} className="flex items-center gap-4 px-4 py-3 rounded-[20px] hover:bg-[#FBFAF8] group">
+                  <PA2Avatar user={r.user} />
+                  <span className="flex-1 min-w-0"><span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(r.user.name)}</span><span className="block text-[13px] text-stone-400 truncate">{r.user.unit}</span></span>
+                  <span className="hidden md:block w-28"><MXProgress pct={r.pct} /></span>
+                  <span className="w-12 text-left text-[14px] font-semibold tabular-nums">{r.pct}%</span>
+                  <span className="hidden sm:block"><MXStatusPill status={r.status} /></span>
+                  {onPreviewUser && <button onClick={() => onPreviewUser(r.user.id)} title="معاينة مساحته" className="w-9 h-9 rounded-full text-stone-400 hover:text-stone-900 hover:bg-[#F4F2EE] inline-flex items-center justify-center"><PA2Icon name="eye" className="w-4 h-4" /></button>}
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      }
+
+      return (
+        <MXShell areaLabel="الإدارة التنفيذية" nav={nav} active={view} onNav={(v) => go(v)} user={me} roleLabel="الإدارة التنفيذية" onLogout={onLogout}>
+          {main}
+        </MXShell>
+      );
+    }
+    // ==== PART:EXEC END ====
+
+    // ==== PART:CADRE START ====
+    // ---------- مساحة العضو: مهماتي + أرشيف التعميمات + حسابي ----------
+    const mxDeptToneById = (db, deptId) => {
+      const list = mxDepartments(db);
+      const idx = Math.max(0, list.findIndex(d => d.id === deptId));
+      const d = list[idx];
+      return d ? pa2DeptTone(d, idx) : PA2_PASTELS[4];
+    };
+    const mxFirstName = (name) => pa2Short(name).replace(/^(د\.|أ\.|م\.)\s*/, "").split(" ")[0] || "";
+
+    function MXStateTag({ st }) {
+      const map = {
+        done: "bg-emerald-50 text-emerald-700",
+        late: "bg-amber-50 text-amber-700",
+        submitted: "bg-[#ECE7FA] text-[#4F3E8F]",
+        rejected: "bg-rose-50 text-rose-700",
+        partial: "bg-orange-50 text-orange-700",
+        pending: "bg-stone-100 text-stone-500"
+      };
+      return <span className={`inline-flex items-center h-7 px-3 rounded-full text-[12px] whitespace-nowrap ${map[st.key] || map.pending}`}>{st.label}</span>;
+    }
+
+    // شريط التعميم غير المقروء
+    function MXBulletinStrip({ bulletin, more, onAck, onOpenAll }) {
+      return (
+        <div className="rounded-[24px] bg-[#ECE7FA] px-6 py-5 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+            <span className="w-11 h-11 rounded-full bg-white text-[#4F3E8F] inline-flex items-center justify-center shrink-0"><PA2Icon name="megaphone" className="w-5 h-5" /></span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium text-[#4F3E8F]">تعميم جديد · {bulletin.senderName || "الإدارة"}</div>
+              <div className="text-[17px] font-semibold text-stone-900 mt-0.5">{bulletin.title}</div>
+              <p className="text-[14px] text-stone-600 mt-1.5 leading-relaxed">{bulletin.content}</p>
+              {more > 0 && <button onClick={onOpenAll} className="text-[13px] text-[#4F3E8F] mt-2 hover:underline">{more === 1 ? "تعميم آخر بانتظار اطلاعك" : `${more} تعميمات أخرى بانتظار اطلاعك`}</button>}
+            </div>
+            <button onClick={onAck} className="h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 shrink-0">اطلعت واستوعبت</button>
+          </div>
+        </div>
+      );
+    }
+
+    // لوحة تنفيذ المهمة (تختلف حسب نوعها)
+    function MXTaskPanel({ def, dept, deptIdx, rec, rules, week, isPast, curriculum, onPatch, onClose }) {
+      const st = mxTaskState(def, rec, rules);
+      const approval = def.type === "lecture_quiz" || def.type === "daily_habit" ? "self" : mxApproval(def);
+      const doneStatus = isPast ? "late" : "on_time";
+      const [note, setNote] = useState(rec.note || "");
+      const [answers, setAnswers] = useState({});
+      const [quizMsg, setQuizMsg] = useState(null);
+      const meta = MX_TYPE_META[def.type] || { label: "مهمة" };
+      const locked = st.done && approval === "manager";
+
+      const complete = (extra = {}) => {
+        if (approval === "manager") onPatch({ status: "submitted", submittedAt: Date.now(), lateSubmit: isPast, note, ...extra });
+        else onPatch({ status: doneStatus, completedAt: Date.now(), note, ...extra });
+      };
+
+      let body = null;
+      if (def.type === "daily_habit") {
+        const target = mxTargetDays(def, rules);
+        const days = Array.isArray(rec.daysCompleted) ? rec.daysCompleted : [];
+        const toggle = (i) => {
+          const next = days.includes(i) ? days.filter(x => x !== i) : [...days, i].sort((a, b) => a - b);
+          const reached = next.length >= target;
+          onPatch({ daysCompleted: next, status: reached ? doneStatus : "pending", completedAt: reached ? (rec.completedAt || Date.now()) : null });
+        };
+        body = (
+          <div>
+            <PA2Label hint={`الهدف ${target} أيام`}>الأيام التي أنجزتها هذا الأسبوع</PA2Label>
+            <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+              {MX_DAYS.map((d, i) => (
+                <button key={d} onClick={() => toggle(i)} className={`h-14 rounded-2xl text-[13px] transition flex flex-col items-center justify-center gap-0.5 ${days.includes(i) ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-600 hover:bg-stone-200"}`}>
+                  {days.includes(i) ? <PA2Icon name="check" className="w-4 h-4" /> : <span className="w-4 h-4" />}
+                  {d}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4"><MXProgress pct={Math.min(100, Math.round((days.length / target) * 100))} /></div>
+            <div className="text-[13px] text-stone-500 mt-2">{days.length} من {target} أيام · يُحفظ تلقائياً</div>
+          </div>
+        );
+      } else if (def.type === "lecture_quiz") {
+        const qs = curriculum?.questions || [];
+        const embed = curriculum?.videoUrl ? getYoutubeEmbedUrl(curriculum.videoUrl) : "";
+        const submitQuiz = () => {
+          if (qs.some(q => answers[q.id] === undefined)) { setQuizMsg({ ok: false, text: "أجب عن كل الأسئلة أولاً" }); return; }
+          const score = qs.filter(q => answers[q.id] === q.correctIndex).length;
+          const pct = qs.length ? Math.round((score / qs.length) * 100) : 100;
+          const pass = pct >= (parseInt(rules.quizPassThresholdPct, 10) || 60);
+          const quizSubmission = { score, total: qs.length, answers, pct, at: Date.now() };
+          if (pass) { onPatch({ status: doneStatus, completedAt: Date.now(), quizSubmission }); setQuizMsg({ ok: true, text: `أحسنت، نتيجتك ${score} من ${qs.length}` }); }
+          else { onPatch({ quizSubmission }); setQuizMsg({ ok: false, text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، أعد المحاولة` }); }
+        };
+        body = (
+          <div className="space-y-5">
+            {curriculum?.lectureTitle && (
+              <div>
+                <div className="text-[16px] font-semibold text-stone-900">{curriculum.lectureTitle}</div>
+                {curriculum.lectureDesc && <p className="text-[14px] text-stone-500 mt-1 leading-relaxed">{curriculum.lectureDesc}</p>}
+              </div>
+            )}
+            {curriculum?.videoUrl && (
+              <div className="rounded-2xl overflow-hidden bg-stone-900 aspect-video">
+                {isIframeVideo(curriculum.videoType, curriculum.videoUrl)
+                  ? <iframe src={embed} className="w-full h-full" allow="autoplay; encrypted-media" allowFullScreen title="lecture" />
+                  : <video src={curriculum.videoUrl} controls className="w-full h-full" />}
+              </div>
+            )}
+            {st.done ? (
+              <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-[14px] text-emerald-800">اجتزت الاختبار{rec.quizSubmission ? ` بنتيجة ${rec.quizSubmission.score} من ${rec.quizSubmission.total}` : ""}.</div>
+            ) : (
+              <div className="space-y-4">
+                {qs.map((q, qi) => (
+                  <div key={q.id}>
+                    <div className="text-[14px] font-medium text-stone-800 mb-2">{qi + 1}. {q.text}</div>
+                    <div className="space-y-1.5">
+                      {q.options.map((op, oi) => (
+                        <button key={oi} onClick={() => { setAnswers(a => ({ ...a, [q.id]: oi })); setQuizMsg(null); }} className={`w-full text-right px-4 py-2.5 rounded-2xl text-[14px] transition ${answers[q.id] === oi ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`}>{op}</button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {quizMsg && <div className={`rounded-2xl px-4 py-3 text-[14px] ${quizMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`}>{quizMsg.text}</div>}
+              </div>
+            )}
+          </div>
+        );
+        if (!st.done) {
+          return (
+            <PA2PanelShell eyebrow={`${meta.label} · ${dept?.shortName || dept?.name || ""}`} title={def.title} onClose={onClose}
+              footer={<button onClick={submitQuiz} className="h-11 px-6 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">تسليم الاختبار</button>}>
+              {def.instructions && <p className="text-[14px] text-stone-500 leading-relaxed">{def.instructions}</p>}
+              {body}
+            </PA2PanelShell>
+          );
+        }
+      } else {
+        const needsNote = def.type === "agenda_minutes" || def.type === "reading";
+        body = (
+          <div>
+            <PA2Label hint={needsNote ? "" : "اختياري"}>{def.type === "agenda_minutes" ? "النص أو الرابط" : def.type === "reading" ? "أهم فائدة خرجت بها" : "ملاحظة للمدير"}</PA2Label>
+            <textarea value={note} onChange={e => setNote(e.target.value)} disabled={st.done || st.key === "submitted"} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none disabled:opacity-70`} placeholder="اكتب هنا…" />
+          </div>
+        );
+      }
+
+      // تذييل عام
+      let footer = null;
+      if (def.type !== "daily_habit") {
+        if (st.key === "submitted") {
+          footer = (
+            <div className="flex items-center gap-3">
+              <span className="text-[14px] text-[#4F3E8F]">أُرسلت للاعتماد، بانتظار مدير الإدارة</span>
+              <button onClick={() => onPatch({ status: "pending", submittedAt: null })} className="mr-auto text-[13px] text-stone-500 hover:text-stone-800">سحب الإرسال</button>
+            </div>
+          );
+        } else if (st.done) {
+          footer = (
+            <div className="flex items-center gap-3">
+              <span className="text-[14px] text-emerald-700 inline-flex items-center gap-1.5"><PA2Icon name="check" className="w-4 h-4" />{locked ? "اعتمدها المدير" : st.label}</span>
+              {!locked && <span className="mr-auto"><PA2DangerAction label="التراجع عن الإنجاز" confirmLabel="تأكيد التراجع" onConfirm={() => onPatch({ status: "pending", completedAt: null, quizSubmission: def.type === "lecture_quiz" ? null : rec.quizSubmission })} /></span>}
+            </div>
+          );
+        } else if (def.type !== "lecture_quiz") {
+          const needsNote = def.type === "agenda_minutes" || def.type === "reading";
+          const can = !needsNote || note.trim().length > 0;
+          footer = (
+            <div className="flex items-center gap-3">
+              <button onClick={() => can && complete()} disabled={!can} className={`h-11 px-6 rounded-full text-[14px] font-semibold transition ${can ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}>
+                {approval === "manager" ? "إرسال للاعتماد" : "تأكيد الإنجاز"}
+              </button>
+              <span className="mr-auto text-[12px] text-stone-400">{isPast ? `تُحتسب متأخرة (${rules.latePointsPct}%)` : approval === "manager" ? "يعتمدها مدير الإدارة" : ""}</span>
+            </div>
+          );
+        }
+      }
+
+      return (
+        <PA2PanelShell eyebrow={`${meta.label} · ${dept?.shortName || dept?.name || ""}`} title={def.title} onClose={onClose} footer={footer}>
+          {def.instructions && <p className="text-[14px] text-stone-500 leading-relaxed">{def.instructions}</p>}
+          {st.key === "rejected" && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">أعادها المدير للمراجعة{rec.rejectNote ? `: ${rec.rejectNote}` : ""}. عدّل وأعد الإرسال.</div>}
+          {body}
+        </PA2PanelShell>
+      );
+    }
+
+    function MXAccountCard({ me, rules, db, isUsernameTaken, onSave }) {
+      const [name, setName] = useState(me.name || "");
+      const [pw, setPw] = useState({ cur: "", next: "", again: "" });
+      const [err, setErr] = useState("");
+      const nameDirty = rules.allowCadreNameEdit && name.trim() && name.trim() !== me.name;
+      const pwDirty = rules.allowCadrePasswordChange && pw.next.length > 0;
+      const save = () => {
+        setErr("");
+        const patch = {};
+        if (nameDirty) patch.name = name.trim();
+        if (pwDirty) {
+          if (pw.cur !== me.password) { setErr("كلمة المرور الحالية غير صحيحة"); return; }
+          if (pw.next.length < 4) { setErr("كلمة المرور الجديدة قصيرة (4 أحرف على الأقل)"); return; }
+          if (pw.next !== pw.again) { setErr("كلمتا المرور غير متطابقتين"); return; }
+          patch.password = pw.next; patch.mustChangePassword = false;
+        }
+        onSave(patch);
+        setPw({ cur: "", next: "", again: "" });
+      };
+      const depts = mxUserDeptIds(db, me).map(id => mxDeptById(db, id)).filter(Boolean);
+      return (
+        <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-start">
+          <MXCard className="p-6 sm:p-8 space-y-6">
+            <div>
+              <PA2Label hint={rules.allowCadreNameEdit ? "" : "يعدّله مسؤول الموارد البشرية"}>الاسم</PA2Label>
+              <input value={name} onChange={e => setName(e.target.value)} disabled={!rules.allowCadreNameEdit} className={`${pa2InputCls} disabled:opacity-60`} />
+            </div>
+            <div>
+              <PA2Label>اسم المستخدم</PA2Label>
+              <div className={`${pa2InputCls} flex items-center text-stone-500`} dir="ltr">{me.username}</div>
+            </div>
+            {rules.allowCadrePasswordChange ? (
+              <div className="pt-2 border-t border-stone-100">
+                <div className="text-[15px] font-semibold text-stone-900 mt-4 mb-4">تغيير كلمة المرور</div>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <input type="password" value={pw.cur} onChange={e => setPw(p => ({ ...p, cur: e.target.value }))} placeholder="الحالية" className={pa2InputCls} />
+                  <input type="password" value={pw.next} onChange={e => setPw(p => ({ ...p, next: e.target.value }))} placeholder="الجديدة" className={pa2InputCls} />
+                  <input type="password" value={pw.again} onChange={e => setPw(p => ({ ...p, again: e.target.value }))} placeholder="تأكيد الجديدة" className={pa2InputCls} />
+                </div>
+              </div>
+            ) : <div className="text-[13px] text-stone-400">تغيير كلمة المرور يتم عبر مسؤول الموارد البشرية.</div>}
+            {err && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">{err}</div>}
+            <PA2SaveFooter dirty={Boolean(nameDirty || pwDirty)} onSave={save} />
+          </MXCard>
+          <MXCard className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <PA2Avatar user={me} size="w-12 h-12" />
+              <div className="min-w-0">
+                <div className="text-[16px] font-semibold text-stone-900 truncate">{pa2Short(me.name)}</div>
+                <div className="text-[13px] text-stone-500 truncate">{me.jobTitle || pa2RoleLabel(me)}</div>
+              </div>
+            </div>
+            <div className="text-[14px] text-stone-600 flex justify-between"><span className="text-stone-400">الوحدة</span><span>{me.unit || "—"}</span></div>
+            <div className="text-[14px] text-stone-600 flex justify-between items-center gap-3"><span className="text-stone-400">مهام من</span><span className="flex gap-1.5 flex-wrap justify-end">{depts.length ? depts.map(d => <MXDeptChip key={d.id} dept={d} idx={mxDepartments(db).findIndex(x => x.id === d.id)} />) : "—"}</span></div>
+            {me.joinedAt && <div className="text-[14px] text-stone-600 flex justify-between"><span className="text-stone-400">تاريخ الانضمام</span><span>{formatDateAr(me.joinedAt)}</span></div>}
+          </MXCard>
+        </div>
+      );
+    }
+
+    function MXBulletinCard({ db, b, me, onAck }) {
+      const acked = mxIsAcked(b, me.id);
+      return (
+        <MXCard className="p-6">
+          <div className="flex items-center gap-2 flex-wrap text-[12px]">
+            {b.category && <span className="h-6 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center">{b.category}</span>}
+            <span className="text-stone-400">{b.senderName}{b.createdAt ? ` · ${b.createdAt}` : ""} · {mxBulletinTargetLabel(db, b)}</span>
+          </div>
+          <div className="text-[17px] font-semibold text-stone-900 mt-3">{b.title}</div>
+          <p className="text-[14px] text-stone-600 mt-1.5 leading-relaxed whitespace-pre-line">{b.content}</p>
+          <div className="mt-4 flex items-center">
+            {acked
+              ? <span className="text-[13px] text-emerald-700 inline-flex items-center gap-1.5"><PA2Icon name="check" className="w-4 h-4" />اطلعت · {b.acknowledgedBy[me.id]}</span>
+              : <button onClick={onAck} className="h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">اطلعت واستوعبت</button>}
+          </div>
+        </MXCard>
+      );
+    }
+
+    function CadrePortalV3({ db, setDb, currentUser, isUsernameTaken, onAcknowledgeBulletin, onLogout, showToast, modeSwitch }) {
+      const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+      const rules = mxRules(db);
+      const depts = mxDepartments(db);
+      const curWeek = mxCurrentWeek(me);
+      const [view, setView] = useState("tasks");
+      const [week, setWeek] = useState(curWeek);
+      const [deptFilter, setDeptFilter] = useState("all");
+      const [openKey, setOpenKey] = useState(null);
+      const [bulFilter, setBulFilter] = useState("all");
+
+      const myDeptIds = mxUserDeptIds(db, me);
+      const bulletins = mxBulletinsForUser(db, me);
+      const unread = bulletins.filter(b => !mxIsAcked(b, me.id));
+      const sum = mxWeekSummary(db, me, week);
+      const minWeek = rules.allowLateSubmissions ? Math.max(1, curWeek - (parseInt(rules.maxPastWeeksEditable, 10) || 0)) : curWeek;
+      const isPast = week < curWeek;
+      const curriculum = (db.weeklyCurriculums && (db.weeklyCurriculums[week] || db.weeklyCurriculums.default)) || INITIAL_STATE.weeklyCurriculums.default;
+
+      const tasks = sum.tasks.filter(t => deptFilter === "all" || t.deptId === deptFilter).map(t => ({ def: t, rec: mxRec(me, week, t.id), st: mxTaskState(t, mxRec(me, week, t.id), rules) }));
+      const open = tasks.find(t => `${t.def.deptId}:${t.def.id}` === openKey) || null;
+      const remainingList = tasks.filter(t => !t.st.done);
+      const doneList = tasks.filter(t => t.st.done);
+
+      const ack = (b) => onAcknowledgeBulletin(b.id, me.id);
+      const myDirectives = modeSwitch ? [] : (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const nav = [
+        { id: "tasks", label: "مهماتي", icon: "tasks", badge: (sum.week === curWeek ? sum.remaining : mxWeekSummary(db, me, curWeek).remaining) || null },
+        { id: "bulletins", label: "التعميمات", icon: "megaphone", badge: unread.length || null },
+        { id: "account", label: "حسابي", icon: "user" }
+      ];
+      const roleLabel = modeSwitch ? pa2RoleLabel(me) : (me.jobTitle || "عضو");
+
+      const renderRow = ({ def, st }) => {
+        const key = `${def.deptId}:${def.id}`;
+        const dept = mxDeptById(db, def.deptId);
+        const tone = mxDeptToneById(db, def.deptId);
+        const active = openKey === key;
+        return (
+          <button key={key} onClick={() => setOpenKey(active ? null : key)} className={`w-full text-right flex items-center gap-4 px-4 sm:px-5 py-4 rounded-[22px] transition ${active ? "bg-white ring-2 ring-stone-900" : "bg-white hover:bg-[#FBFAF8]"}`}>
+            <span className={`w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${st.done ? "opacity-60" : ""}`}>{st.done ? <PA2Icon name="check" className={`w-5 h-5 ${tone.ink}`} /> : (MX_TYPE_META[def.type]?.icon || "•")}</span>
+            <span className="flex-1 min-w-0">
+              <span className={`block text-[15px] font-medium truncate ${st.done ? "text-stone-400" : "text-stone-900"}`}>{def.title}</span>
+              <span className="flex items-center gap-2 mt-1 text-[13px] text-stone-400">
+                {myDeptIds.length > 1 && <MXDeptChip dept={dept} idx={depts.findIndex(d => d.id === def.deptId)} />}
+                <span className="whitespace-nowrap truncate">{MX_TYPE_META[def.type]?.label}</span>
+                {mxApproval(def) === "manager" && def.type !== "lecture_quiz" && def.type !== "daily_habit" && <span className="hidden sm:inline whitespace-nowrap">· يعتمدها المدير</span>}
+              </span>
+            </span>
+            <MXStateTag st={st} />
+          </button>
+        );
+      };
+
+      let content;
+      if (view === "bulletins") {
+        const list = bulFilter === "unread" ? unread : bulletins;
+        content = (
+          <>
+            <MXHeader eyebrow="التعميمات" title="أرشيف التعميمات" desc="كل ما وصلك من الإدارة التنفيذية والإدارات، الأحدث أولاً." />
+            <div className="mb-6"><PA2Segmented options={[{ value: "all", label: `الكل · ${bulletins.length}` }, { value: "unread", label: `بانتظار اطلاعك · ${unread.length}` }]} value={bulFilter} onChange={setBulFilter} /></div>
+            <div className="space-y-4 max-w-3xl">
+              {list.length === 0 ? <PA2EmptyPanel title="لا توجد تعميمات هنا" text="ستظهر هنا التعميمات فور نشرها." /> : list.map(b => <MXBulletinCard key={b.id} db={db} b={b} me={me} onAck={() => ack(b)} />)}
+            </div>
+          </>
+        );
+      } else if (view === "account") {
+        content = (
+          <>
+            <MXHeader eyebrow="حسابي" title="بياناتي" desc="ما يمكنك تعديله يحدده مدير المنصة." />
+            <MXAccountCard key={me.id + (me.password || "")} me={me} rules={rules} db={db} isUsernameTaken={isUsernameTaken}
+              onSave={(patch) => { setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === me.id ? { ...u, ...patch } : u) })); showToast("تم حفظ بياناتك"); }} />
+          </>
+        );
+      } else {
+        content = (
+          <>
+            <MXHeader
+              eyebrow={`مساحتي · الأسبوع ${week}${isPast ? " (سابق)" : ""}`}
+              title={`أهلاً، ${mxFirstName(me.name)}`}
+              desc={myDeptIds.length ? "مهماتك من كل الإدارات في قائمة واحدة. افتح أي مهمة لتنجزها." : "لا توجد مهام مسندة لك حالياً."}
+              actions={minWeek < curWeek ? (
+                <div className="inline-flex items-center h-11 rounded-full bg-white p-1">
+                  <button onClick={() => { setWeek(w => Math.min(curWeek, w + 1)); setOpenKey(null); }} disabled={week >= curWeek} className="w-9 h-9 rounded-full hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center rotate-180"><PA2Icon name="chevron" className="w-4 h-4" /></button>
+                  <span className="px-3 text-[14px] text-stone-700 tabular-nums min-w-[110px] text-center">{week === curWeek ? "الأسبوع الحالي" : `الأسبوع ${week}`}</span>
+                  <button onClick={() => { setWeek(w => Math.max(minWeek, w - 1)); setOpenKey(null); }} disabled={week <= minWeek} className="w-9 h-9 rounded-full hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center"><PA2Icon name="chevron" className="w-4 h-4" /></button>
+                </div>
+              ) : null}
+            />
+
+            {me.mustChangePassword && rules.allowCadrePasswordChange && (
+              <MXAttention title="أمان الحساب" items={[{ key: "pw", text: "ما زلت تستخدم كلمة مرور مؤقتة، غيّرها من «حسابي».", go: () => setView("account"), cta: "تغيير" }]} primaryLabel="تغيير كلمة المرور" />
+            )}
+            <MXDirectiveStrip directives={myDirectives} onRead={(id) => mxMarkDirectiveRead(setDb, id)} />
+            {unread.length > 0 && <MXBulletinStrip bulletin={unread[0]} more={unread.length - 1} onAck={() => ack(unread[0])} onOpenAll={() => setView("bulletins")} />}
+
+            {myDeptIds.length > 0 && (
+              <MXScoreCard
+                label={isPast ? `أين وصلت في الأسبوع ${week}؟` : "أين وصلت هذا الأسبوع؟"}
+                pct={sum.pct}
+                caption={`${sum.done} من ${sum.total} مهام مكتملة`}
+                bars={myDeptIds.map(id => {
+                  const b = sum.byDept[id] || { done: 0, total: 0, pct: 0 };
+                  return { label: mxDeptById(db, id)?.name || id, value: `${b.done} / ${b.total}`, pct: b.pct, tone: mxDeptToneById(db, id).dot };
+                })}
+                stats={[{ n: sum.done, l: "مكتملة" }, { n: sum.submitted, l: "بانتظار الاعتماد" }, { n: sum.remaining, l: "متبقية" }]}
+              />
+            )}
+
+            {myDeptIds.length > 0 && (
+              <div className={`grid gap-6 items-start ${open ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                    <h2 className="text-xl font-bold text-stone-900">المهام</h2>
+                    {myDeptIds.length > 1 && (
+                      <PA2Segmented size="sm" value={deptFilter} onChange={(v) => { setDeptFilter(v); setOpenKey(null); }}
+                        options={[{ value: "all", label: "الكل" }, ...myDeptIds.map(id => ({ value: id, label: mxDeptById(db, id)?.shortName || mxDeptById(db, id)?.name }))]} />
+                    )}
+                  </div>
+                  {remainingList.length > 0 ? <div className="space-y-2">{remainingList.map(renderRow)}</div>
+                    : <div className="rounded-[22px] bg-[#E3F1E8] px-5 py-4 text-[15px] text-emerald-800">أنجزت كل مهام هذا الأسبوع. بارك الله فيك.</div>}
+                  {doneList.length > 0 && (
+                    <>
+                      <div className="text-[13px] text-stone-400 mt-8 mb-3">المنجزة · {doneList.length}</div>
+                      <div className="space-y-2">{doneList.map(renderRow)}</div>
+                    </>
+                  )}
+                </div>
+                {open && (
+                  <div className="lg:sticky lg:top-6">
+                    <MXTaskPanel
+                      key={`${openKey}:${week}`}
+                      def={open.def}
+                      dept={mxDeptById(db, open.def.deptId)}
+                      rec={open.rec}
+                      rules={rules}
+                      week={week}
+                      isPast={isPast}
+                      curriculum={curriculum}
+                      onClose={() => setOpenKey(null)}
+                      onPatch={(patch) => mxPatchRecord(setDb, me.id, week, open.def.id, patch)}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        );
+      }
+
+      return (
+        <MXShell areaLabel="مساحتي" modeSwitch={modeSwitch} nav={nav} active={view} onNav={(v) => { setView(v); setOpenKey(null); }} user={me} roleLabel={roleLabel} onLogout={onLogout}>
+          {content}
+        </MXShell>
+      );
+    }
+    // ==== PART:CADRE END ====
 
     // ============================================================================
     // 10. EXECUTIVE OFFICE MEMBER PORTAL (بوابة عضو المكتب التنفيذي - النشرة الإدارية)
