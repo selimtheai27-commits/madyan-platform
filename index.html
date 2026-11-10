@@ -1054,7 +1054,12 @@
           rawUnits.forEach(un => { if (!Array.isArray(base[un.id])) base[un.id] = defaults[un.id] || []; });
           return base;
         })(),
-        deptWeights: raw.systemConfig?.deptWeights || {}
+        deptWeights: raw.systemConfig?.deptWeights || {},
+        branding: {
+          platformName: (typeof raw.systemConfig?.branding?.platformName === "string" && raw.systemConfig.branding.platformName.trim()) ? raw.systemConfig.branding.platformName.trim() : "ميدان",
+          logoUrl: typeof raw.systemConfig?.branding?.logoUrl === "string" ? raw.systemConfig.branding.logoUrl.trim() : "",
+          themeId: typeof raw.systemConfig?.branding?.themeId === "string" ? raw.systemConfig.branding.themeId : "default"
+        }
       };
 
       const safeBulletins = Array.isArray(raw.bulletins) ? [...raw.bulletins] : [...INITIAL_STATE.bulletins];
@@ -1318,8 +1323,8 @@ CREATE POLICY "Allow public upload on madyan-media"
         try {
           const v = new URLSearchParams(window.location.search).get("variant");
           if (v === "v1" || v === "v2") return v;
-          return localStorage.getItem("MADYAN_PLATFORM_VARIANT") || "v1";
-        } catch (e) { return "v1"; }
+          return localStorage.getItem("MADYAN_PLATFORM_VARIANT") || "v2";
+        } catch (e) { return "v2"; }
       });
       useEffect(() => {
         try { localStorage.setItem("MADYAN_PLATFORM_VARIANT", platformVariant); } catch (e) {}
@@ -1514,8 +1519,11 @@ CREATE POLICY "Allow public upload on madyan-media"
         showToast("تمت استعادة البيانات الافتراضية للنظام بنجاح");
       };
 
+      const activeBranding = mxBranding(db);
+
       return (
         <div className="min-h-screen pb-20">
+          <MXThemeStyle branding={activeBranding} />
           {toastMsg && (
             <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[60] bg-stone-900 text-white text-[14px] px-5 py-3 rounded-full shadow-lg">
               {toastMsg}
@@ -1749,11 +1757,12 @@ CREATE POLICY "Allow public upload on madyan-media"
         if (found) onLoginSuccess(found, variant);
       };
 
+      const brand = mxBranding(db);
       return (
         <div dir="rtl" className="min-h-screen flex flex-col items-center justify-center px-4 py-10 bg-[#F4F2EE]">
           <div className="bg-white rounded-[32px] w-full max-w-[420px] p-8 sm:p-10">
             <div className="text-[13px] font-medium text-orange-700">منصة المتابعة</div>
-            <h1 className="text-[34px] font-bold text-stone-900 leading-tight mt-1">ميدان</h1>
+            <div className="mt-1.5"><MXBrandIdentity branding={brand} dark={false} size="lg" /></div>
             <p className="text-[15px] text-stone-500 mt-2 leading-relaxed">إسناداتك، وتعميمات الإدارة، ونسبة إنجازك في مكان واحد.</p>
 
             <form onSubmit={handleSubmit} className="space-y-4 mt-8">
@@ -6753,18 +6762,201 @@ CREATE POLICY "Allow public upload on madyan-media"
         </div>
       );
 
+      const brand = mxBranding(db);
+      const [brandNameDraft, setBrandNameDraft] = useState(brand.platformName || "ميدان");
+      const [logoUrlDraft, setLogoUrlDraft] = useState(brand.logoUrl || "");
+      const logoFileRef = useRef(null);
+
+      const updateBranding = (patch) => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            branding: {
+              ...mxBranding(prev),
+              ...patch
+            }
+          }
+        }));
+        pulseSaved();
+      };
+
+      const onLogoFileUpload = (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        if (!f.type.startsWith("image/")) {
+          showToast("اختر ملف صورة صالحاً (PNG, JPG, SVG, WebP)");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || "");
+          if (f.type === "image/svg+xml" || dataUrl.length < 90000) {
+            setLogoUrlDraft(dataUrl);
+            updateBranding({ logoUrl: dataUrl });
+            showToast("تم رفع شعار المنصة وحفظه ✓");
+            return;
+          }
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const canvas = document.createElement("canvas");
+              const maxDim = 180;
+              const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+              canvas.width = Math.max(1, Math.round(img.width * scale));
+              canvas.height = Math.max(1, Math.round(img.height * scale));
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              const compressed = canvas.toDataURL("image/png", 0.9);
+              setLogoUrlDraft(compressed);
+              updateBranding({ logoUrl: compressed });
+              showToast("تم رفع شعار المنصة وحفظه ✓");
+            } catch (err) {
+              setLogoUrlDraft(dataUrl);
+              updateBranding({ logoUrl: dataUrl });
+              showToast("تم رفع شعار المنصة ✓");
+            }
+          };
+          img.src = dataUrl;
+        };
+        reader.readAsText ? reader.readAsDataURL(f) : null;
+      };
+
       const renderRules = () => (
         <>
           <Header
-            eyebrow="ضوابط النظام"
-            title="القواعد العامة"
-            desc="تسري على جميع الإدارات والكوادر. أي تغيير هنا يُحفظ فوراً."
+            eyebrow="ضوابط النظام والهوية"
+            title="هوية المنصة والقواعد العامة"
+            desc="تخصيص اسم المنصة وشعارها وثيم الألوان لكل الأعضاء، وضبط القواعد العامة للنظام."
             actions={
               <span className={`h-9 px-4 rounded-full text-[13px] inline-flex items-center gap-1.5 transition ${savedPulse ? "bg-emerald-50 text-emerald-700" : "bg-white text-stone-400"}`}>
                 <PA2Icon name="check" className="w-4 h-4" /> {savedPulse ? "تم الحفظ" : "يُحفظ تلقائياً"}
               </span>
             }
           />
+
+          {/* بطاقة هوية المنصة (الاسم + الشعار + ثيمات الألوان) */}
+          <div className="bg-white rounded-[28px] p-6 sm:p-7 mb-6 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-stone-100">
+              <div>
+                <h2 className="text-[18px] font-bold text-stone-900">هوية المنصة وثيمات الألوان</h2>
+                <p className="text-[13px] text-stone-500 mt-1">تُطبّق هذه الهوية والألوان فوراً على جميع الواجهات ولكل أعضاء المنصة.</p>
+              </div>
+              <div className="rounded-2xl bg-[#1C1917] px-4 py-2.5 inline-flex items-center gap-3 self-start">
+                <MXBrandIdentity branding={brand} dark={true} size="sm" />
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <div className="space-y-4">
+                <div>
+                  <PA2Label hint="يظهر في شاشة الدخول وجميع البوابات">اسم المنصة</PA2Label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={brandNameDraft}
+                      onChange={e => setBrandNameDraft(e.target.value)}
+                      placeholder="مثال: ميدان"
+                      className={pa2InputCls}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const clean = brandNameDraft.trim() || "ميدان";
+                        setBrandNameDraft(clean);
+                        updateBranding({ platformName: clean });
+                        showToast(`تم تحديث اسم المنصة إلى «${clean}» ✓`);
+                      }}
+                      className="h-11 px-5 rounded-2xl bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800 shrink-0"
+                    >
+                      حفظ الاسم
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <PA2Label hint="صورة PNG أو SVG أو JPG">شعار المنصة (اللوجو)</PA2Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => logoFileRef.current && logoFileRef.current.click()}
+                      className="h-10 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800 inline-flex items-center gap-1.5"
+                    >
+                      <PA2Icon name="upload" className="w-4 h-4" /> رفع شعار من جهازك
+                    </button>
+                    {brand.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLogoUrlDraft("");
+                          updateBranding({ logoUrl: "" });
+                          showToast("تمت إزالة الشعار");
+                        }}
+                        className="h-10 px-4 rounded-full bg-rose-50 text-rose-700 text-[13px] font-medium hover:bg-rose-100"
+                      >
+                        إزالة الشعار
+                      </button>
+                    )}
+                    <input ref={logoFileRef} type="file" accept="image/*" className="hidden" onChange={onLogoFileUpload} />
+                  </div>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <input
+                      dir="ltr"
+                      value={logoUrlDraft.startsWith("data:") ? "" : logoUrlDraft}
+                      onChange={e => setLogoUrlDraft(e.target.value)}
+                      placeholder="https://... أو الصق رابط صورة مباشر للشعار"
+                      className={pa2InputCls}
+                    />
+                    {!logoUrlDraft.startsWith("data:") && logoUrlDraft.trim() !== brand.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateBranding({ logoUrl: logoUrlDraft.trim() });
+                          showToast("تم حفظ رابط الشعار ✓");
+                        }}
+                        className="h-11 px-4 rounded-2xl bg-[#F4F2EE] text-stone-800 text-[13px] font-semibold hover:bg-stone-200 shrink-0"
+                      >
+                        تطبيق الرابط
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <PA2Label hint="يُطبّق على المنصة بالكامل">ثيم ألوان المنصة</PA2Label>
+                <div className="grid sm:grid-cols-2 gap-2.5">
+                  {PA2_PLATFORM_THEMES.map(th => {
+                    const active = brand.themeId === th.id;
+                    return (
+                      <button
+                        key={th.id}
+                        type="button"
+                        onClick={() => {
+                          updateBranding({ themeId: th.id });
+                          showToast(`تم تفعيل ثيم «${th.name}» ✓`);
+                        }}
+                        className={`text-right rounded-2xl p-3.5 border transition flex items-center justify-between gap-3 ${
+                          active ? "border-stone-900 ring-2 ring-stone-900 bg-[#F4F2EE]" : "border-stone-200 bg-white hover:bg-stone-50"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold text-stone-900 truncate">{th.name}</div>
+                          <div className="text-[11px] text-stone-500 truncate mt-0.5">{th.desc}</div>
+                        </div>
+                        <div className="flex items-center -space-x-1.5 space-x-reverse shrink-0">
+                          <span className="w-5 h-5 rounded-full border border-white shadow-sm" style={{ backgroundColor: th.sidebar }} />
+                          <span className="w-5 h-5 rounded-full border border-white shadow-sm" style={{ backgroundColor: th.accent }} />
+                          <span className="w-5 h-5 rounded-full border border-stone-300 shadow-sm" style={{ backgroundColor: th.canvas }} />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="grid xl:grid-cols-2 gap-5 items-start">
             <div className="space-y-5">
               <RuleCard title="التقييم والنقاط" desc="كيف تُحسب إنجازات الكوادر.">
@@ -6822,7 +7014,7 @@ CREATE POLICY "Allow public upload on madyan-media"
           {/* العمود الجانبي */}
           <aside className="hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30">
             <div className="px-2">
-              <div className="text-[24px] font-bold text-white leading-none">ميدان</div>
+              <MXBrandIdentity branding={brand} dark={true} size="md" />
               <div className="text-[13px] text-stone-500 mt-2 flex items-center gap-2">
                 إدارة المنصة
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300">نسخة كلاود</span>
@@ -6869,7 +7061,12 @@ CREATE POLICY "Allow public upload on madyan-media"
           {/* شريط الجوال */}
           <div className="lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3">
             <div className="flex items-center justify-between">
-              <div className="text-[18px] font-bold">ميدان <span className="text-[12px] font-normal text-stone-400">· إدارة المنصة</span></div>
+              <MXBrandIdentity
+                branding={brand}
+                dark={true}
+                size="sm"
+                subtitle={<span className="text-[12px] font-normal text-stone-400">· إدارة المنصة</span>}
+              />
               <button onClick={onLogout} className="w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center"><PA2Icon name="logout" /></button>
             </div>
             <div className="flex gap-1.5 overflow-x-auto mt-3 -mx-1 px-1">
@@ -7581,14 +7778,188 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
+    // ---------- هوية المنصة والثيمات اللونية (قابلة للتخصيص من مدير المنصة) ----------
+    const PA2_PLATFORM_THEMES = [
+      {
+        id: "default",
+        name: "أصالة ميدان (الافتراضي)",
+        desc: "رملي دافئ مع فحمي داكن وبرتقالي عنبري",
+        canvas: "#F4F2EE",
+        surface: "#ECE9E3",
+        sidebar: "#1C1917",
+        primary: "#1C1917",
+        primaryHover: "#292524",
+        accent: "#F97316",
+        accentInk: "#C2410C",
+        accentSoft: "#FFF3E2",
+        accentChipBg: "rgba(249, 115, 22, 0.15)",
+        accentChipInk: "#FDBA74"
+      },
+      {
+        id: "emerald",
+        name: "واحة الزمرد",
+        desc: "عاجي هادئ مع أخضر غابي داكن وزمردي",
+        canvas: "#F2F5F3",
+        surface: "#E6ECE8",
+        sidebar: "#0F2922",
+        primary: "#0F2922",
+        primaryHover: "#163B31",
+        accent: "#10B981",
+        accentInk: "#047857",
+        accentSoft: "#E3F5EC",
+        accentChipBg: "rgba(16, 185, 129, 0.18)",
+        accentChipInk: "#6EE7B7"
+      },
+      {
+        id: "royal",
+        name: "كحلي مؤسسي",
+        desc: "رمادي ثلجي مع كحلي عميق وأزرق ملكي",
+        canvas: "#F3F5F8",
+        surface: "#E6EAF0",
+        sidebar: "#0F172A",
+        primary: "#0F172A",
+        primaryHover: "#1E293B",
+        accent: "#3B82F6",
+        accentInk: "#1D4ED8",
+        accentSoft: "#E6EFFD",
+        accentChipBg: "rgba(59, 130, 246, 0.18)",
+        accentChipInk: "#93C5FD"
+      },
+      {
+        id: "burgundy",
+        name: "عقيقي وقور",
+        desc: "كريمي دافئ مع عنابي داكن وعقيقي",
+        canvas: "#F6F3F2",
+        surface: "#EDE6E4",
+        sidebar: "#281115",
+        primary: "#281115",
+        primaryHover: "#3B191F",
+        accent: "#E11D48",
+        accentInk: "#BE123C",
+        accentSoft: "#FCE8EC",
+        accentChipBg: "rgba(225, 29, 72, 0.18)",
+        accentChipInk: "#FDA4AF"
+      },
+      {
+        id: "olive",
+        name: "زيتوني تراثي",
+        desc: "كتاني فاتح مع زيتوني داكن وذهبي دافئ",
+        canvas: "#F4F4EE",
+        surface: "#EAEAE0",
+        sidebar: "#1D231A",
+        primary: "#1D231A",
+        primaryHover: "#2A3326",
+        accent: "#D97706",
+        accentInk: "#B45309",
+        accentSoft: "#FEF3C7",
+        accentChipBg: "rgba(217, 119, 6, 0.18)",
+        accentChipInk: "#FCD34D"
+      },
+      {
+        id: "violet",
+        name: "أرجواني معاصر",
+        desc: "لؤلؤي ناعم مع أرجواني داكن وبنفسجي",
+        canvas: "#F4F3F7",
+        surface: "#E9E6F0",
+        sidebar: "#1B1528",
+        primary: "#1B1528",
+        primaryHover: "#2A213D",
+        accent: "#8B5CF6",
+        accentInk: "#6D28D9",
+        accentSoft: "#EDE9FE",
+        accentChipBg: "rgba(139, 92, 246, 0.18)",
+        accentChipInk: "#C4B5FD"
+      }
+    ];
+
+    const DEFAULT_BRANDING = {
+      platformName: "ميدان",
+      logoUrl: "",
+      themeId: "default"
+    };
+
+    function mxBranding(db) {
+      const b = (db && db.systemConfig && db.systemConfig.branding) || {};
+      const out = {
+        platformName: (typeof b.platformName === "string" && b.platformName.trim()) ? b.platformName.trim() : DEFAULT_BRANDING.platformName,
+        logoUrl: typeof b.logoUrl === "string" ? b.logoUrl.trim() : "",
+        themeId: PA2_PLATFORM_THEMES.some(t => t.id === b.themeId) ? b.themeId : "default"
+      };
+      if (typeof window !== "undefined") window.__MX_BRANDING = out;
+      return out;
+    }
+
+    function mxCurrentBranding() {
+      if (typeof window !== "undefined" && window.__MX_BRANDING) return window.__MX_BRANDING;
+      return DEFAULT_BRANDING;
+    }
+
+    function MXBrandIdentity({ branding, dark = true, size = "md", subtitle = null }) {
+      const b = branding || mxCurrentBranding();
+      const logoSize = size === "lg" ? "w-11 h-11 rounded-2xl" : size === "sm" ? "w-7 h-7 rounded-xl" : "w-9 h-9 rounded-xl";
+      const textSize = size === "lg" ? "text-[36px]" : size === "sm" ? "text-[18px]" : "text-[24px]";
+      const TitleTag = size === "lg" ? "h1" : "span";
+      return (
+        <div className="flex items-center gap-2.5 min-w-0">
+          {b.logoUrl ? (
+            <img
+              src={b.logoUrl}
+              alt={b.platformName}
+              className={`${logoSize} object-contain shrink-0 ${dark ? "bg-white/10 p-1" : "bg-[#F4F2EE] p-1"}`}
+            />
+          ) : null}
+          <TitleTag className={`${textSize} font-bold leading-none tracking-tight truncate ${dark ? "text-white" : "text-stone-900"}`}>
+            {b.platformName || "ميدان"}
+          </TitleTag>
+          {subtitle}
+        </div>
+      );
+    }
+
+    function MXThemeStyle({ branding }) {
+      const b = branding || mxCurrentBranding();
+      const theme = PA2_PLATFORM_THEMES.find(t => t.id === b.themeId) || PA2_PLATFORM_THEMES[0];
+      useEffect(() => {
+        try {
+          document.title = `${b.platformName || "ميدان"} | منصة متابعة الكوادر والإسنادات`;
+        } catch (e) {}
+      }, [b.platformName]);
+      if (theme.id === "default") return null;
+      const css = `
+        :root {
+          --mx-canvas: ${theme.canvas};
+          --mx-surface: ${theme.surface};
+          --mx-sidebar: ${theme.sidebar};
+          --mx-primary: ${theme.primary};
+          --mx-primary-hover: ${theme.primaryHover};
+          --mx-accent: ${theme.accent};
+          --mx-accent-ink: ${theme.accentInk};
+        }
+        body, .bg-\\[\\#F4F2EE\\] { background-color: ${theme.canvas} !important; }
+        .bg-\\[\\#ECE9E3\\] { background-color: ${theme.surface} !important; }
+        .bg-\\[\\#1C1917\\] { background-color: ${theme.sidebar} !important; }
+        .bg-stone-900 { background-color: ${theme.primary} !important; }
+        .hover\\:bg-stone-800:hover { background-color: ${theme.primaryHover} !important; }
+        .ring-stone-900 { --tw-ring-color: ${theme.primary} !important; }
+        .border-stone-900 { border-color: ${theme.primary} !important; }
+        .text-orange-700, .text-orange-600 { color: ${theme.accentInk} !important; }
+        .bg-orange-500 { background-color: ${theme.accent} !important; }
+        .bg-\\[\\#FFF3E2\\] { background-color: ${theme.accentSoft} !important; }
+        .bg-orange-500\\/15 { background-color: ${theme.accentChipBg} !important; }
+        .text-orange-300 { color: ${theme.accentChipInk} !important; }
+      `;
+      return <style id="mx-theme-overrides" dangerouslySetInnerHTML={{ __html: css }} />;
+    }
+
     // ---------- الإطار المشترك (العمود الجانبي + شريط الجوال) ----------
     function MXShell({ areaLabel, chip, modeSwitch, nav, active, onNav, user, roleLabel, onLogout, children }) {
       const go = (id) => { onNav(id); window.scrollTo({ top: 0 }); };
+      const brand = mxCurrentBranding();
       return (
         <div dir="rtl" className="min-h-screen bg-[#F4F2EE] text-stone-900 lg:pr-[264px] -mb-20 pb-20">
           <aside className="hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30">
             <div className="px-2">
-              <div className="text-[24px] font-bold text-white leading-none">ميدان</div>
+              <MXBrandIdentity branding={brand} dark={true} size="md" />
               <div className="text-[13px] text-stone-500 mt-2 flex items-center gap-2 flex-wrap">
                 {areaLabel}
                 {chip && <span className="text-[11px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300">{chip}</span>}
@@ -7629,7 +8000,12 @@ CREATE POLICY "Allow public upload on madyan-media"
 
           <div className="lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3">
             <div className="flex items-center justify-between">
-              <div className="text-[18px] font-bold">ميدان <span className="text-[12px] font-normal text-stone-400">· {areaLabel}</span></div>
+              <MXBrandIdentity
+                branding={brand}
+                dark={true}
+                size="sm"
+                subtitle={<span className="text-[12px] font-normal text-stone-400">· {areaLabel}</span>}
+              />
               <button onClick={onLogout} className="w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center"><PA2Icon name="logout" /></button>
             </div>
             {modeSwitch && (
@@ -7850,11 +8226,16 @@ CREATE POLICY "Allow public upload on madyan-media"
       const [showAddQ, setShowAddQ] = useState(false);
       const [newEp, setNewEp] = useState({ title: "", instructions: "", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" });
       const [showAddEp, setShowAddEp] = useState(false);
+      const [editEpId, setEditEpId] = useState(() => (Array.isArray(def?.seriesItems) && def.seriesItems[0]?.id) || "ep_1");
 
       const set = (k, v) => setD(p => ({ ...p, [k]: v }));
       const fixedSelf = d.type === "lecture_quiz" || d.type === "daily_habit";
       const supportsSeries = d.type === "lecture_quiz" || d.type === "reading" || d.type === "practical";
       const dirty = isNew ? d.title.trim().length > 1 : true;
+
+      const updateEpisodeInSeries = (epid, patch) => {
+        set("seriesItems", (d.seriesItems || []).map(ep => ep.id === epid ? { ...ep, ...patch } : ep));
+      };
 
       const addQuestionToPool = () => {
         if (!newQ.text.trim() || newQ.options.some(o => !o.trim())) return;
@@ -7882,13 +8263,16 @@ CREATE POLICY "Allow public upload on madyan-media"
           videoUrl: newEp.videoUrl.trim() || "https://www.w3schools.com/html/mov_bbb.mp4"
         };
         set("seriesItems", [...(d.seriesItems || []), epObj]);
+        setEditEpId(epObj.id);
         setNewEp({ title: "", instructions: "", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" });
         setShowAddEp(false);
       };
 
       const removeEpisodeFromSeries = (epid) => {
         if ((d.seriesItems || []).length <= 1) return;
-        set("seriesItems", (d.seriesItems || []).filter(ep => ep.id !== epid));
+        const next = (d.seriesItems || []).filter(ep => ep.id !== epid);
+        set("seriesItems", next);
+        if (editEpId === epid) setEditEpId(next[0]?.id || null);
       };
 
       const save = () => {
@@ -7972,33 +8356,64 @@ CREATE POLICY "Allow public upload on madyan-media"
                 />
               </div>
               {d.deliveryMode === "series" && (
-                <div className="space-y-2 pt-2 border-t border-stone-200/70">
+                <div className="space-y-2.5 pt-2 border-t border-stone-200/70">
                   <div className="flex items-center justify-between">
                     <span className="text-[12px] font-semibold text-stone-700">حلقات السلسلة بالترتيب ({(d.seriesItems || []).length})</span>
                     <button type="button" onClick={() => setShowAddEp(v => !v)} className="text-[12px] font-semibold text-orange-700 hover:underline">
-                      {showAddEp ? "إلغاء" : "+ إضافة حلقة"}
+                      {showAddEp ? "إلغاء" : "+ إضافة حلقة جديدة"}
                     </button>
                   </div>
                   <p className="text-[12px] text-stone-500 leading-relaxed">
-                    حتى لو دخل العضو متأخراً، ستظهر له السلسلة من الحلقة الأولى ويتفتح له كل أسبوع ما يليه بترتيب إدخالها.
+                    اضغط على أي حلقة لتعديل عنوانها أو لصق <strong className="text-stone-700">رابط فيديو المحاضرة (يوتيوب أو MP4)</strong> الخاص بها مباشرة.
                   </p>
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {(d.seriesItems || []).map((ep, idx) => (
-                      <div key={ep.id} className="rounded-xl bg-white px-3 py-2 flex items-center justify-between gap-2 text-[13px]">
-                        <span className="truncate font-medium text-stone-800">{idx + 1}. {ep.title}</span>
-                        {(d.seriesItems || []).length > 1 && (
-                          <button type="button" onClick={() => removeEpisodeFromSeries(ep.id)} className="text-[12px] text-rose-600 hover:underline shrink-0">حذف</button>
-                        )}
-                      </div>
-                    ))}
+                  <div className="space-y-2 max-h-80 overflow-y-auto pr-0.5">
+                    {(d.seriesItems || []).map((ep, idx) => {
+                      const isExpanded = editEpId === ep.id;
+                      return (
+                        <div key={ep.id} className="rounded-xl bg-white p-3 border border-stone-200/80 space-y-2.5">
+                          <div className="flex items-center justify-between gap-2 text-[13px]">
+                            <button type="button" onClick={() => setEditEpId(isExpanded ? null : ep.id)} className="flex-1 text-right font-semibold text-stone-900 truncate flex items-center gap-1.5">
+                              <span>{idx + 1}. {ep.title}</span>
+                            </button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button type="button" onClick={() => setEditEpId(isExpanded ? null : ep.id)} className="text-[12px] text-orange-700 font-medium hover:underline">
+                                {isExpanded ? "طي" : (d.type === "lecture_quiz" ? "تعديل الرابط" : "تعديل")}
+                              </button>
+                              {(d.seriesItems || []).length > 1 && (
+                                <button type="button" onClick={() => removeEpisodeFromSeries(ep.id)} className="text-[12px] text-rose-600 hover:underline">حذف</button>
+                              )}
+                            </div>
+                          </div>
+                          {isExpanded && (
+                            <div className="space-y-2 pt-2 border-t border-stone-100">
+                              <div>
+                                <div className="text-[11px] font-medium text-stone-500 mb-1">عنوان الحلقة {idx + 1}</div>
+                                <input value={ep.title || ""} onChange={e => updateEpisodeInSeries(ep.id, { title: e.target.value })} placeholder="عنوان الحلقة" className={pa2InputCls} />
+                              </div>
+                              {d.type === "lecture_quiz" && d.lectureMode !== "quiz_only" && (
+                                <div>
+                                  <div className="text-[11px] font-medium text-stone-500 mb-1">رابط فيديو المحاضرة (يوتيوب أو MP4)</div>
+                                  <input dir="ltr" value={ep.videoUrl || ""} onChange={e => updateEpisodeInSeries(ep.id, { videoUrl: e.target.value })} placeholder="https://www.youtube.com/watch?v=... أو رابط MP4" className={pa2InputCls} />
+                                </div>
+                              )}
+                              <div>
+                                <div className="text-[11px] font-medium text-stone-500 mb-1">وصف أو تعليمات الحلقة</div>
+                                <input value={ep.instructions || ""} onChange={e => updateEpisodeInSeries(ep.id, { instructions: e.target.value })} placeholder="تعليمات للعضو" className={pa2InputCls} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                   {showAddEp && (
-                    <div className="rounded-xl bg-white p-3 space-y-2 border border-stone-200">
+                    <div className="rounded-xl bg-white p-3 space-y-2 border border-stone-300">
+                      <div className="text-[12px] font-semibold text-stone-800">إضافة حلقة جديدة للسلسلة</div>
                       <input value={newEp.title} onChange={e => setNewEp(p => ({ ...p, title: e.target.value }))} placeholder="عنوان الحلقة الجديدة" className={pa2InputCls} />
-                      <input value={newEp.instructions} onChange={e => setNewEp(p => ({ ...p, instructions: e.target.value }))} placeholder="وصف مختصر أو تعليمات الحلقة" className={pa2InputCls} />
-                      {d.type === "lecture_quiz" && (
-                        <input dir="ltr" value={newEp.videoUrl} onChange={e => setNewEp(p => ({ ...p, videoUrl: e.target.value }))} placeholder="https://... رابط فيديو الحلقة" className={pa2InputCls} />
+                      {d.type === "lecture_quiz" && d.lectureMode !== "quiz_only" && (
+                        <input dir="ltr" value={newEp.videoUrl} onChange={e => setNewEp(p => ({ ...p, videoUrl: e.target.value }))} placeholder="https://... رابط فيديو الحلقة (يوتيوب أو MP4)" className={pa2InputCls} />
                       )}
+                      <input value={newEp.instructions} onChange={e => setNewEp(p => ({ ...p, instructions: e.target.value }))} placeholder="وصف مختصر أو تعليمات الحلقة" className={pa2InputCls} />
                       <button type="button" onClick={addEpisodeToSeries} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold">حفظ الحلقة في السلسلة</button>
                     </div>
                   )}
@@ -8029,8 +8444,8 @@ CREATE POLICY "Allow public upload on madyan-media"
                     <input value={d.lectureTitle} onChange={e => set("lectureTitle", e.target.value)} className={pa2InputCls} placeholder="عنوان المحاضرة المعروضة للعضو" />
                   </div>
                   <div>
-                    <PA2Label hint="يوتيوب أو MP4">رابط الفيديو المباشر</PA2Label>
-                    <input dir="ltr" value={d.videoUrl} onChange={e => set("videoUrl", e.target.value)} className={pa2InputCls} placeholder="https://..." />
+                    <PA2Label hint="يوتيوب أو MP4">رابط فيديو المحاضرة المباشر</PA2Label>
+                    <input dir="ltr" value={d.videoUrl} onChange={e => set("videoUrl", e.target.value)} className={pa2InputCls} placeholder="https://www.youtube.com/watch?v=... أو رابط MP4" />
                   </div>
                 </div>
               )}
@@ -9623,7 +10038,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             setAttempt(nextAttempt);
             setAnswers({});
             onPatch({ quizSubmission, quizAttempts: nextAttempt });
-            setQuizMsg({ ok: false, text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، تم سحب مجموعة أسئلة جديدة لإعادة المحاولة` });
+            setQuizMsg({ ok: false, text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، أعد المحاولة` });
           }
         };
 
@@ -9649,11 +10064,6 @@ CREATE POLICY "Allow public upload on madyan-media"
               </div>
             ) : showQuiz && qs.length > 0 ? (
               <div className="space-y-4">
-                {poolTotal > qs.length && (
-                  <div className="rounded-2xl bg-[#F4F2EE] px-3.5 py-2 text-[12px] text-stone-600">
-                    تم سحب {qs.length} أسئلة عشوائياً لك من بنك الأسئلة ({poolTotal} أسئلة) بترتيب خاص بك.
-                  </div>
-                )}
                 {qs.map((q, qi) => (
                   <div key={q.id}>
                     <div className="text-[14px] font-medium text-stone-800 mb-2">{qi + 1}. {q.text}</div>
