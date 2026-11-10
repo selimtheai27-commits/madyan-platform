@@ -326,9 +326,23 @@
           username: "exec",
           password: "1234",
           roleType: "executive",
-          name: "د. طارق المنصور",
-          jobTitle: "عضو المكتب التنفيذي",
+          isExecHead: true,
+          name: "د. طارق المنصور (قائد المكتب التنفيذي)",
+          jobTitle: "المدير التنفيذي (قائد المكتب التنفيذي)",
           unit: "القيادة التنفيذية"
+        },
+        {
+          id: "u_office",
+          username: "office",
+          password: "1234",
+          roleType: "executive",
+          isExecHead: false,
+          joinedAt: SYSTEM_ANCHOR_DATE - (3 * MS_PER_WEEK),
+          name: "أ. منصور العلي (المكتب التنفيذي)",
+          jobTitle: "عضو المكتب التنفيذي",
+          unit: "المكتب التنفيذي",
+          assignedDepartments: [],
+          tasksRecord: {}
         },
         {
           id: "u_admin",
@@ -566,7 +580,16 @@
         hrMgr.tasksRecord = genRecords(["dept_tarbawi"], 3, { p: 0.8, cur: 0.4 }, rngFor(99));
       }
       const tbMgr = users.find(u => u.id === "u_tarbawi");
-      if (tbMgr && !tbMgr.assignedDepartments) tbMgr.assignedDepartments = [];
+      if (tbMgr) {
+        if (!tbMgr.assignedDepartments) tbMgr.assignedDepartments = [];
+        if (!tbMgr.joinedAt) tbMgr.joinedAt = SYSTEM_ANCHOR_DATE - 2 * MS_PER_WEEK - (todayIdx + 1) * DAY;
+      }
+      users.forEach((u, idx) => {
+        if (u.roleType === "cadre" && !u.deptTeamId) {
+          if (idx % 6 === 0 && (u.assignedDepartments || []).includes("dept_hr")) u.deptTeamId = "dept_hr";
+          else if (idx % 6 === 1 && (u.assignedDepartments || []).includes("dept_tarbawi")) u.deptTeamId = "dept_tarbawi";
+        }
+      });
 
       // قادة الوحدات
       const leaders = { unit_strategy: "u_1", unit_ops: "u_2", unit_field: "u_m05", unit_youth: "u_m08", unit_media: "u_m09" };
@@ -587,6 +610,69 @@
     // ============================================================================
     // 2. HELPER & DUAL-PILLAR SCORING ENGINE FUNCTIONS
     // ============================================================================
+    function mxSha256(ascii) {
+      const rightRotate = (v, a) => (v >>> a) | (v << (32 - a));
+      const mathPow = Math.pow, maxWord = mathPow(2, 32);
+      let result = "", words = [], asciiBitLength = ascii.length * 8;
+      let hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+      const k = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+      ];
+      const utf8 = unescape(encodeURIComponent(String(ascii)));
+      asciiBitLength = utf8.length * 8;
+      let str = utf8 + "\x80";
+      while ((str.length % 64) - 56) str += "\x00";
+      for (let i = 0; i < str.length; i++) {
+        const j = str.charCodeAt(i);
+        words[i >> 2] |= j << ((3 - (i % 4)) * 8);
+      }
+      words[words.length] = (asciiBitLength / maxWord) | 0;
+      words[words.length] = asciiBitLength;
+      for (let j = 0; j < words.length;) {
+        const w = words.slice(j, (j += 16));
+        const oldHash = hash.slice(0);
+        for (let i = 0; i < 64; i++) {
+          if (i >= 16) {
+            const w15 = w[i - 15], w2 = w[i - 2];
+            w[i] = (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0;
+          }
+          const a = hash[0], e = hash[4];
+          const temp1 = (hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ (~e & hash[6])) + k[i] + w[i]) | 0;
+          const temp2 = ((rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]))) | 0;
+          hash = [(temp1 + temp2) | 0, a, hash[1], hash[2], (hash[3] + temp1) | 0, e, hash[5], hash[6]];
+        }
+        for (let i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+      }
+      for (let i = 0; i < 8; i++) {
+        for (let j = 3; j + 1; j--) {
+          const b = (hash[i] >> (j * 8)) & 255;
+          result += (b < 16 ? "0" : "") + b.toString(16);
+        }
+      }
+      return result;
+    }
+
+    function mxHashPw(raw) {
+      const s = String(raw || "");
+      if (!s || s.startsWith("sha256:")) return s;
+      return "sha256:" + mxSha256("maydan_salt_v1:" + s);
+    }
+
+    function mxVerifyPw(inputPw, storedPw) {
+      if (!storedPw) return false;
+      const clean = String(inputPw || "").trim();
+      const stored = String(storedPw);
+      if (stored.startsWith("sha256:")) return mxHashPw(clean) === stored;
+      return clean === stored;
+    }
+
     function calculateWeeksSinceJoin(joinedAtTimestamp) {
       if (!joinedAtTimestamp) return 1;
       const diffMs = Math.max(0, Date.now() - joinedAtTimestamp);
@@ -941,10 +1027,31 @@
         },
         tarbawiTaskDefinitions: rawTarbawiDefs,
         deptTasks: (() => {
+          const defaults = mxBuildDefaultDeptTasks(raw.systemConfig || {});
+          const isOldSeed = (raw.seedVersion || 0) < 4;
           const base = (raw.systemConfig?.deptTasks && typeof raw.systemConfig.deptTasks === "object")
             ? { ...raw.systemConfig.deptTasks }
-            : mxBuildDefaultDeptTasks(raw.systemConfig || {});
-          rawDepartments.forEach(d => { if (!Array.isArray(base[d.id])) base[d.id] = []; });
+            : defaults;
+          rawDepartments.forEach(d => {
+            if (!Array.isArray(base[d.id])) base[d.id] = defaults[d.id] || [];
+            else if (isOldSeed && defaults[d.id]) {
+              base[d.id] = base[d.id].map(t => {
+                const defT = defaults[d.id].find(dt => dt.id === t.id);
+                return defT ? { ...defT, ...t, questionPool: t.questionPool || defT.questionPool, seriesItems: t.seriesItems || defT.seriesItems, deliveryMode: t.deliveryMode || defT.deliveryMode, lectureMode: t.lectureMode || defT.lectureMode, useStructuredAgenda: t.useStructuredAgenda ?? defT.useStructuredAgenda, approval: (t.id === "tarbawi_amal" && (!t.approval || t.approval === "self")) ? defT.approval : (t.approval || defT.approval), approverUserId: t.approverUserId || defT.approverUserId } : t;
+              });
+            }
+          });
+          return base;
+        })(),
+        execTasks: Array.isArray(raw.systemConfig?.execTasks) && raw.systemConfig.execTasks.length > 0
+          ? raw.systemConfig.execTasks
+          : mxBuildDefaultExecTasks(),
+        unitTasks: (() => {
+          const defaults = mxBuildDefaultUnitTasks(rawUnits);
+          const base = (raw.systemConfig?.unitTasks && typeof raw.systemConfig.unitTasks === "object")
+            ? { ...raw.systemConfig.unitTasks }
+            : defaults;
+          rawUnits.forEach(un => { if (!Array.isArray(base[un.id])) base[un.id] = defaults[un.id] || []; });
           return base;
         })(),
         deptWeights: raw.systemConfig?.deptWeights || {}
@@ -957,18 +1064,25 @@
       };
 
       const rawUsers = Array.isArray(raw.users) && raw.users.length > 0 ? raw.users : INITIAL_STATE.users;
-      // التأكد من وجود الحسابات الأساسية للمستويات الأربعة (مدير المنصة، التنفيذي، الموارد البشرية، التربوية)
       let mergedUsers = [...rawUsers];
-      // ترقية بيانات التجربة (الإصدار 3): إضافة الأعضاء التجريبيين الثلاثين واستكمال حقول الحسابات الأساسية
       const needsSeedV3 = (raw.seedVersion || 0) < 3;
-      if (needsSeedV3) {
+      const needsSeedV4 = (raw.seedVersion || 0) < 4;
+      if (needsSeedV3 || needsSeedV4) {
         mergedUsers = mergedUsers.map(u => {
           const seedUser = INITIAL_STATE.users.find(su => su.id === u.id);
-          return seedUser ? { ...seedUser, ...u, assignedDepartments: u.assignedDepartments || seedUser.assignedDepartments, joinedAt: u.joinedAt || seedUser.joinedAt, tasksRecord: (u.tasksRecord && Object.keys(u.tasksRecord).length) ? u.tasksRecord : seedUser.tasksRecord } : u;
+          return seedUser ? {
+            ...seedUser,
+            ...u,
+            isExecHead: u.id === "u_exec" ? true : (u.isExecHead ?? seedUser.isExecHead),
+            deptTeamId: u.deptTeamId !== undefined ? u.deptTeamId : seedUser.deptTeamId,
+            assignedDepartments: u.assignedDepartments || seedUser.assignedDepartments,
+            joinedAt: u.joinedAt || seedUser.joinedAt,
+            tasksRecord: (u.tasksRecord && Object.keys(u.tasksRecord).length) ? u.tasksRecord : seedUser.tasksRecord
+          } : u;
         });
         INITIAL_STATE.users.forEach(su => { if (!mergedUsers.some(u => u.id === su.id)) mergedUsers.push(su); });
       }
-      ["u_platform", "u_exec", "u_admin", "u_tarbawi"].forEach(seedId => {
+      ["u_platform", "u_exec", "u_office", "u_admin", "u_tarbawi"].forEach(seedId => {
         if (!mergedUsers.some(u => u.id === seedId)) {
           const seedUser = INITIAL_STATE.users.find(su => su.id === seedId);
           if (seedUser) mergedUsers.unshift(seedUser);
@@ -982,8 +1096,11 @@
           ...u,
           id: String(u.id || ("u_" + Date.now())),
           username: String(u.username || ""),
+          password: mxHashPw(u.password || "1234"),
           name: String(u.name || ""),
-          roleType: cleanRole
+          roleType: cleanRole,
+          isExecHead: u.id === "u_exec" ? true : Boolean(u.isExecHead),
+          joinedAt: u.joinedAt || Date.now()
         };
         // تحويل الحسابات القديمة ذات النوع admin إلى operational_admin مع ربطها بإدارة الموارد البشرية
         if (cleanRole === "admin") {
@@ -1015,8 +1132,8 @@
         }
 
         return {
-          ...u,
-          joinedAt: u.joinedAt || Date.now(),
+          ...baseU,
+          joinedAt: baseU.joinedAt,
           assignedDepartments: Array.isArray(u.assignedDepartments)
             ? u.assignedDepartments
             : ["dept_hr", "dept_tarbawi"],
@@ -1044,7 +1161,7 @@
       }
 
       return {
-        seedVersion: 3,
+        seedVersion: 4,
         directives: Array.isArray(raw.directives) ? raw.directives : [],
         systemConfig: safeSystemConfig,
         bulletins: safeBulletins,
@@ -1405,23 +1522,27 @@ CREATE POLICY "Allow public upload on madyan-media"
             </div>
           )}
 
-          {supervisoryAdminId && currentUser && currentUser.id !== supervisoryAdminId && (
-            <div className="sticky top-0 z-50 bg-stone-900 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-black shadow-lg border-b border-orange-500/40">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-[11px]">👁️ وضع الإشراف والمعاينة</span>
-                <span>تستعرض الآن شاشة المستوى ببيانات: {currentUser.name} ({currentUser.unit})</span>
+          {supervisoryAdminId && currentUser && currentUser.id !== supervisoryAdminId && (() => {
+            const supUser = db.users.find(u => u.id === supervisoryAdminId);
+            const backLabel = supUser?.roleType === "executive" ? "العودة إلى بوابة القيادة التنفيذية ←" : "العودة إلى بوابة إدارة المنصة ←";
+            return (
+              <div className="sticky top-0 z-50 bg-stone-900 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-black shadow-lg border-b border-orange-500/40">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-[11px]">👁️ وضع الإشراف والمعاينة</span>
+                  <span>تستعرض الآن شاشة المستوى ببيانات: {currentUser.name} ({currentUser.unit})</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setCurrentUserId(supervisoryAdminId);
+                    setSupervisoryAdminId(null);
+                  }}
+                  className="px-4 py-1.5 rounded-xl bg-white text-stone-900 hover:bg-orange-50 font-black transition"
+                >
+                  {backLabel}
+                </button>
               </div>
-              <button
-                onClick={() => {
-                  setCurrentUserId(supervisoryAdminId);
-                  setSupervisoryAdminId(null);
-                }}
-                className="px-4 py-1.5 rounded-xl bg-white text-stone-900 hover:bg-orange-50 font-black transition"
-              >
-                العودة إلى بوابة إدارة المنصة ←
-              </button>
-            </div>
-          )}
+            );
+          })()}
 
           {!currentUser ? (
             <LoginView
@@ -1473,21 +1594,13 @@ CREATE POLICY "Allow public upload on madyan-media"
               }}
               showToast={showToast}
             />
-          ) : (currentUser.roleType === "admin" || currentUser.roleType === "operational_admin") ? (
-            <MXWorkspace
-              db={db}
-              setDb={setDb}
-              currentUser={currentUser}
-              isUsernameTaken={isUsernameTaken}
-              onAcknowledgeBulletin={acknowledgeBulletin}
-              onLogout={() => setCurrentUserId(null)}
-              showToast={showToast}
-            />
-          ) : currentUser.roleType === "executive" ? (
+          ) : mxIsExecHead(currentUser) ? (
             <ExecutivePortalV3
               db={db}
               setDb={setDb}
               currentUser={currentUser}
+              isHead={true}
+              modeSwitch={null}
               onPreviewUser={(targetUserId) => {
                 setSupervisoryAdminId(currentUser.id);
                 setCurrentUserId(targetUserId);
@@ -1496,47 +1609,19 @@ CREATE POLICY "Allow public upload on madyan-media"
               showToast={showToast}
             />
           ) : (
-            <CadrePortalV3
+            <MXWorkspace
               db={db}
               setDb={setDb}
               currentUser={currentUser}
               isUsernameTaken={isUsernameTaken}
               onAcknowledgeBulletin={acknowledgeBulletin}
+              onPreviewUser={(targetUserId) => {
+                setSupervisoryAdminId(currentUser.id);
+                setCurrentUserId(targetUserId);
+              }}
               onLogout={() => setCurrentUserId(null)}
               showToast={showToast}
-              modeSwitch={null}
             />
-          )}
-
-          {/* مؤشر الاتصال السحابي العائم (يخفى في إدارة المنصة لوجوده أسفل العمود الجانبي) */}
-          {currentUser?.roleType !== "platform_admin" && (
-            <div className="fixed bottom-4 left-4 z-40">
-              <button
-                onClick={() => setCloudModalOpen(true)}
-                className={`px-3 py-1.5 rounded-full text-[11px] font-bold shadow-md border flex items-center gap-1.5 transition backdrop-blur-md ${
-                  cloudStatus === "connected"
-                    ? "bg-white/90 text-emerald-800 border-emerald-200 hover:bg-emerald-50"
-                    : cloudStatus === "error"
-                    ? "bg-rose-950/95 text-rose-100 border-rose-700"
-                    : "bg-white/90 text-stone-600 border-stone-200 hover:bg-stone-100"
-                }`}
-              >
-                <span className={`w-2 h-2 rounded-full ${
-                  cloudStatus === "connected"
-                    ? "bg-emerald-500 animate-pulse"
-                    : cloudStatus === "error"
-                    ? "bg-rose-400"
-                    : "bg-amber-400"
-                }`} />
-                <span>
-                  {cloudStatus === "connected"
-                    ? "متصل سحابياً"
-                    : cloudStatus === "error"
-                    ? "تنبيه اتصال سحابي"
-                    : "الربط السحابي"}
-                </span>
-              </button>
-            </div>
           )}
 
           <CloudSetupModal
@@ -1608,10 +1693,12 @@ CREATE POLICY "Allow public upload on madyan-media"
                   <button type="button" onClick={() => onPick("sysadmin", "v1")} className="h-11 rounded-2xl bg-[#F4F2EE] text-stone-700 text-[13px]">نسخة جيميناي</button>
                 </div>
               </Group>
-              <Group label="القيادة والإدارات">
-                <Row title="الإدارة التنفيذية" sub={pa2Short(byUser("exec")?.name)} onClick={() => onPick("exec")} />
+              <Group label="القيادة والإدارات والوحدات">
+                <Row title="قائد المكتب التنفيذي (المدير التنفيذي)" sub={pa2Short(byUser("exec")?.name)} onClick={() => onPick("exec")} />
+                <Row title="المكتب التنفيذي" sub={`${pa2Short(byUser("office")?.name)} · واجهة مزدوجة`} onClick={() => onPick("office")} />
                 <Row title="الموارد البشرية" sub={`${pa2Short(byUser("admin")?.name)} · واجهة مزدوجة`} onClick={() => onPick("admin")} />
-                <Row title="الإدارة التربوية" sub={pa2Short(byUser("tarbawi")?.name)} onClick={() => onPick("tarbawi")} />
+                <Row title="الإدارة التربوية" sub={`${pa2Short(byUser("tarbawi")?.name)} · واجهة مزدوجة`} onClick={() => onPick("tarbawi")} />
+                <Row title="مدير وحدة (التخطيط الاستراتيجي)" sub={`${pa2Short(byUser("maydan")?.name)} · واجهة مزدوجة`} onClick={() => onPick("maydan")} />
               </Group>
               <Group label="أعضاء (الأعلى والأقل التزاماً)">
                 {samples.map(({ u, pct }) => <Row key={u.id} title={pa2Short(u.name)} sub={u.unit} tag={pct === null ? null : `${pct}%`} onClick={() => onPick(u.username)} />)}
@@ -1638,8 +1725,8 @@ CREATE POLICY "Allow public upload on madyan-media"
         const cleanP = pInput.trim();
         return users.find(u => {
           const uname = (u.username || "").toLowerCase();
-          if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) return u.password === cleanP;
-          return uname === cleanU && u.password === cleanP;
+          if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) return mxVerifyPw(cleanP, u.password);
+          return uname === cleanU && mxVerifyPw(cleanP, u.password);
         });
       };
 
@@ -1667,7 +1754,7 @@ CREATE POLICY "Allow public upload on madyan-media"
           <div className="bg-white rounded-[32px] w-full max-w-[420px] p-8 sm:p-10">
             <div className="text-[13px] font-medium text-orange-700">منصة المتابعة</div>
             <h1 className="text-[34px] font-bold text-stone-900 leading-tight mt-1">ميدان</h1>
-            <p className="text-[15px] text-stone-500 mt-2 leading-relaxed">مهماتك، وتعميمات الإدارة، ونسبة إنجازك في مكان واحد.</p>
+            <p className="text-[15px] text-stone-500 mt-2 leading-relaxed">إسناداتك، وتعميمات الإدارة، ونسبة إنجازك في مكان واحد.</p>
 
             <form onSubmit={handleSubmit} className="space-y-4 mt-8">
               <div>
@@ -6158,7 +6245,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             username: draft.username.trim(),
             unit: role === "executive" ? "القيادة التنفيذية" : role === "platform_admin" ? "إدارة المنصة التقنية" : (deptObj?.name || "")
           };
-          if (isNew) return { ...prev, users: [...users, { id, ...base, password: draft.password || pa2TempPassword(), mustChangePassword: true }] };
+          if (isNew) return { ...prev, users: [...users, { id, ...base, password: mxHashPw(draft.password || pa2TempPassword()), mustChangePassword: true, joinedAt: Date.now(), tasksRecord: {} }] };
           return { ...prev, users: users.map(u => u.id === id ? { ...u, ...base } : u) };
         });
         if (isNew) setLeaderSel(id);
@@ -6181,7 +6268,7 @@ CREATE POLICY "Allow public upload on madyan-media"
 
       const resetPassword = (userId) => {
         const temp = pa2TempPassword();
-        setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === userId ? { ...u, password: temp, mustChangePassword: true } : u) }));
+        setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === userId ? { ...u, password: mxHashPw(temp), mustChangePassword: true } : u) }));
         return temp;
       };
 
@@ -6515,7 +6602,7 @@ CREATE POLICY "Allow public upload on madyan-media"
               const mgr = findDeptManager(d.id);
               return {
                 key: d.id, tone: pa2DeptTone(d, i), title: d.name, sub: mgr ? pa2Short(mgr.name) : "بدون مدير", warn: !mgr,
-                meta: d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع مهام`,
+                meta: d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع إسنادات`,
                 selected: isSel("dept", d.id), onClick: () => setStructSel({ kind: "dept", id: d.id })
               };
             })}
@@ -6573,7 +6660,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             <Header
               eyebrow="الحسابات والصلاحيات"
               title={isCadreTab ? "حسابات الأعضاء" : "حسابات القيادة"}
-              desc={isCadreTab ? "تُدار بالمشاركة مع الموارد البشرية: الوحدة والإدارات التي تصل العضو مهامها." : "من يدخل المنصة بصلاحيات قيادية."}
+              desc={isCadreTab ? "تُدار بالمشاركة مع الموارد البشرية: الوحدة والإدارات التي تصل العضو إسناداتها." : "من يدخل المنصة بصلاحيات قيادية."}
               actions={isCadreTab
                 ? <PrimaryBtn onClick={() => setLeaderSel("new_cadre")}><PA2Icon name="plus" className="w-4 h-4" /> عضو جديد</PrimaryBtn>
                 : <PrimaryBtn onClick={() => setLeaderSel("new_leader")}><PA2Icon name="plus" className="w-4 h-4" /> قائد جديد</PrimaryBtn>}
@@ -6805,10 +6892,10 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
-    // 9.7 MX CORE — محرك المهام الموحد + الإطار المشترك لكل الواجهات (نسخة كلاود)
+    // 9.7 MX CORE — محرك الإسنادات الموحد + الإطار المشترك لكل الواجهات (نسخة كلاود)
     // ============================================================================
     const MX_TYPE_META = {
-      lecture_quiz: { label: "محاضرة واختبار", icon: "🎬", approval: "self" },
+      lecture_quiz: { label: "محاضرة / اختبار", icon: "🎬", approval: "self" },
       daily_habit: { label: "عادة يومية", icon: "🔄", approval: "self" },
       reading: { label: "مطالعة", icon: "📖", approval: "self" },
       meeting: { label: "حضور لقاء", icon: "🤝", approval: "manager" },
@@ -6817,21 +6904,128 @@ CREATE POLICY "Allow public upload on madyan-media"
     };
     const MX_DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
+    // المحاور الخمسة المقسّمة لإسناد أجندة الاجتماع
+    const MX_AGENDA_PROMPTS = [
+      { key: "faithThought", label: "هل هناك خاطرة إيمانية ترغب بإيصالها للوحدة هذا الأسبوع؟", placeholder: "اكتب الخاطرة أو المعنى الإيماني الذي تود افتتاح اللقاء به..." },
+      { key: "adminUpdates", label: "اكتب ما هي أهم التحديثات الإدارية التي ترغب بإيصالها للوحدة؟", placeholder: "أهم القرارات أو المستجدات أو التنبيهات الإدارية..." },
+      { key: "lastWeekReview", label: "ما هي المشاريع والمسؤوليات التي عمل عليها كل فرد بالوحدة الأسبوع الماضي وترغب بمراجعتها في اللقاء؟", placeholder: "المشاريع والإسنادات السابقة المراد مراجعة إنجازها مع كل فرد..." },
+      { key: "unitChallenge", label: "ما هو التحدي الذي يواجه الوحدة هذه الفترة وترغب بعقد عصف ذهني لمناقشته مع أعضاء الوحدة؟", placeholder: "وصف التحدي الحالي والأسئلة المطروحة للعصف الذهني..." },
+      { key: "nextWeekAssignments", label: "ما هي المشاريع والمسؤوليات التي سيتم إسنادها لأفراد الوحدة الأسبوع القادم بإذن الله؟", placeholder: "توزيع المسؤوليات والإسنادات المستهدفة للأسبوع القادم..." }
+    ];
+
+    const DEFAULT_HR_QUESTION_POOL = [
+      { id: "q1", text: "ما هو التوقيت المعياري لإرسال أجندة اللقاء الأسبوعي قبل موعد الاجتماع؟", options: ["قبل الاجتماع بساعة واحدة", "قبل الاجتماع بـ 24 ساعة على الأقل", "أثناء انعقاد الاجتماع", "بعد انتهاء الاجتماع"], correctIndex: 1 },
+      { id: "q2", text: "ما الهدف الأساسي من توثيق محضر الاجتماع خلال 24 ساعة؟", options: ["حفظ الأرشيف فقط", "تثبيت المخرجات المعتمدة والإسنادات الزمنية بوضوح", "زيادة عدد التقارير الورقية", "إلغاء الاجتماع القادم"], correctIndex: 1 },
+      { id: "q3", text: "عند إنجاز إسناد أسبوع سابق بعد انتهاء أسبوعه، كيف يتعامل النظام معه؟", options: ["يرفض النظام فتحه نهائياً", "يُحتسب مكتملاً في الموعد بـ 100%", "يُوسم كمكتمل متأخر ويأخذ نسبة نقاط التأخير المقررة", "تُحذف جميع نقاط العضو"], correctIndex: 2 },
+      { id: "q4", text: "كيف تعمل خاصية «سلسلة الإسنادات المتتابعة» مع العضو الذي التحق متأخراً؟", options: ["تعرض له آخر حلقة فقط وتفوّت الباقي", "تبدأ معه من الحلقة الأولى بالترتيب وتفتح له كل أسبوع ما يليه", "تمنعه من مشاهدة السلسلة", "تُلزمه بإعادة جميع الحلقات في يوم واحد"], correctIndex: 1 },
+      { id: "q5", text: "ما فائدة تقسيم أجندة اللقاء الأسبوعي إلى محاور واضحة قبل الاجتماع؟", options: ["إطالة زمن الاجتماع", "ضمان شمول الجانب الإيماني والإداري ومراجعة الإسنادات والعصف الذهني", "الاستغناء عن حضور الأعضاء", "تأجيل القرارات للأسبوع القادم"], correctIndex: 1 }
+    ];
+
+    const DEFAULT_HR_LECTURE_SERIES = [
+      {
+        id: "ep_hr_1",
+        title: "الحلقة 1: منهجية التخطيط الأسبوعي وإدارة الأولويات",
+        instructions: "شاهد المحاضرة التأسيسية الأولى ثم أجب عن الأسئلة المنتقاة لك.",
+        videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+        questions: DEFAULT_HR_QUESTION_POOL
+      },
+      {
+        id: "ep_hr_2",
+        title: "الحلقة 2: إدارة الاجتماعات الفعالة وصناعة القرار",
+        instructions: "تفتح بعد إتمام الحلقة الأولى؛ تركّز على إدارة وقت اللقاء وتحويل النقاش إلى إسنادات محددة.",
+        videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+        questions: DEFAULT_HR_QUESTION_POOL
+      },
+      {
+        id: "ep_hr_3",
+        title: "الحلقة 3: المتابعة المؤسسية وقياس الأثر",
+        instructions: "تفتح بعد إتمام الحلقة الثانية؛ تشرح آليات المتابعة الهادئة ودعم المتأخرين.",
+        videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+        questions: DEFAULT_HR_QUESTION_POOL
+      }
+    ];
+
+    const DEFAULT_TARBAWI_READING_SERIES = [
+      { id: "ep_tb_1", title: "الجزء 1: فقه الأولويات والتوازن في حياة الكادر", instructions: "اقرأ القدر المقرر من الجزء الأول ودوّن أهم فائدة عملية خرجت بها." },
+      { id: "ep_tb_2", title: "الجزء 2: تزكية النفس وأثرها في العمل الجماعي", instructions: "اقرأ القدر المقرر من الجزء الثاني وسجّل خلاصة الفكرة." },
+      { id: "ep_tb_3", title: "الجزء 3: صناعة القدوة والأثر المستدام", instructions: "اقرأ القدر المقرر من الجزء الثالث ودوّن تطبيقاً عملياً واحداً." }
+    ];
+
     function mxBuildDefaultDeptTasks(sc) {
       const hrDefs = { ...INITIAL_STATE.systemConfig.taskDefinitions, ...(sc?.taskDefinitions || {}) };
       const hr = [
-        { id: "lecture", type: "lecture_quiz", approval: "self", title: "المحاضرة الأسبوعية واختبارها", subtitle: hrDefs.lecture?.subtitle || "", instructions: hrDefs.lecture?.instructions || "", enabled: true },
-        { id: "agenda", type: "agenda_minutes", approval: "self", title: "إرسال أجندة اللقاء", subtitle: hrDefs.agenda?.subtitle || "", instructions: hrDefs.agenda?.instructions || "", enabled: true },
-        { id: "attendance", type: "meeting", approval: "manager", title: "حضور اللقاء الأسبوعي", subtitle: hrDefs.attendance?.subtitle || "", instructions: hrDefs.attendance?.instructions || "", enabled: true },
-        { id: "minutes", type: "agenda_minutes", approval: "self", title: "توثيق محضر اللقاء", subtitle: hrDefs.minutes?.subtitle || "", instructions: hrDefs.minutes?.instructions || "", enabled: true }
+        {
+          id: "lecture",
+          type: "lecture_quiz",
+          lectureMode: "lecture_and_quiz",
+          deliveryMode: "series",
+          approval: "self",
+          targetScope: "all_units",
+          title: "المحاضرة الأسبوعية واختبارها",
+          subtitle: hrDefs.lecture?.subtitle || "",
+          instructions: hrDefs.lecture?.instructions || "شاهد محاضرة السلسلة المقررة لك بالترتيب ثم أجب عن الأسئلة.",
+          lectureTitle: "منهجية التخطيط الأسبوعي وإدارة الأولويات",
+          lectureDesc: "كيف تبني إيقاع عمل مؤسسي مستدام يمنع تراكم الإسنادات ويرفع كفاءة الاجتماعات.",
+          videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+          videoType: "mp4",
+          questionsPerMember: 3,
+          shuffleQuestions: true,
+          questionPool: DEFAULT_HR_QUESTION_POOL,
+          seriesItems: DEFAULT_HR_LECTURE_SERIES,
+          enabled: true
+        },
+        {
+          id: "agenda",
+          type: "agenda_minutes",
+          useStructuredAgenda: true,
+          deliveryMode: "direct",
+          approval: "self",
+          targetScope: "all_units",
+          title: "إرسال أجندة اللقاء",
+          subtitle: hrDefs.agenda?.subtitle || "",
+          instructions: hrDefs.agenda?.instructions || "املأ محاور أجندة اللقاء الأسبوعي قبل موعد الاجتماع بـ 24 ساعة.",
+          enabled: true
+        },
+        {
+          id: "attendance",
+          type: "meeting",
+          deliveryMode: "direct",
+          approval: "manager",
+          targetScope: "all_units",
+          title: "حضور اللقاء الأسبوعي",
+          subtitle: hrDefs.attendance?.subtitle || "",
+          instructions: hrDefs.attendance?.instructions || "",
+          enabled: true
+        },
+        {
+          id: "minutes",
+          type: "agenda_minutes",
+          useStructuredAgenda: false,
+          deliveryMode: "direct",
+          approval: "self",
+          targetScope: "all_units",
+          title: "توثيق محضر اللقاء",
+          subtitle: hrDefs.minutes?.subtitle || "",
+          instructions: hrDefs.minutes?.instructions || "",
+          enabled: true
+        }
       ];
       const tDefs = Array.isArray(sc?.tarbawiTaskDefinitions) && sc.tarbawiTaskDefinitions.length ? sc.tarbawiTaskDefinitions : DEFAULT_TARBAWI_TASKS;
       const tarbawi = tDefs.map(t => {
         const type = t.trackType === "daily_days" ? "daily_habit" : t.id === "tarbawi_majlis" ? "meeting" : t.id === "tarbawi_reading" ? "reading" : "practical";
+        const isReading = t.id === "tarbawi_reading";
+        const isAmal = t.id === "tarbawi_amal";
         return {
-          id: t.id, type,
-          approval: type === "meeting" ? "manager" : "self",
-          title: t.title, subtitle: t.subtitle || "", instructions: t.instructions || "",
+          id: t.id,
+          type,
+          deliveryMode: isReading ? "series" : "direct",
+          seriesItems: isReading ? DEFAULT_TARBAWI_READING_SERIES : undefined,
+          approval: type === "meeting" ? "manager" : isAmal ? "person" : "self",
+          approverUserId: isAmal ? "u_m04" : undefined,
+          targetScope: "all_units",
+          title: t.title,
+          subtitle: t.subtitle || "",
+          instructions: t.instructions || "",
           targetDays: type === "daily_habit" ? (t.targetDays || 5) : undefined,
           enabled: t.enabled !== false
         };
@@ -6839,30 +7033,198 @@ CREATE POLICY "Allow public upload on madyan-media"
       return { dept_hr: hr, dept_tarbawi: tarbawi };
     }
 
+    function mxBuildDefaultExecTasks() {
+      return [
+        {
+          id: "exec_unit_agenda",
+          title: "إعداد أجندة لقاء الوحدة الأسبوعي",
+          type: "agenda_minutes",
+          useStructuredAgenda: true,
+          deliveryMode: "direct",
+          approval: "manager",
+          targetGroup: "unit_leaders",
+          assignedBy: "exec_office",
+          instructions: "املأ محاور أجندة لقاء وحدتك الخمسة؛ تُحفظ في مساحتك وتُرسل تلقائياً للمكتب التنفيذي والمدير التنفيذي.",
+          enabled: true
+        },
+        {
+          id: "exec_dept_brief",
+          title: "موجز متابعة الإدارة والمكتب التنفيذي",
+          type: "agenda_minutes",
+          useStructuredAgenda: false,
+          deliveryMode: "direct",
+          approval: "manager",
+          targetGroup: "exec_office",
+          assignedBy: "exec_head",
+          instructions: "دوّن أبرز مؤشرات الأسبوع والتحديات التي تحتاج قراراً أو دعماً من قائد المكتب التنفيذي.",
+          enabled: true
+        }
+      ];
+    }
+
+    function mxBuildDefaultUnitTasks(units) {
+      const list = Array.isArray(units) && units.length ? units : DEFAULT_UNITS;
+      const out = {};
+      list.forEach(un => {
+        out[un.id] = [
+          {
+            id: `ut_${un.id}_1`,
+            title: "إسناد الوحدة الأسبوعي",
+            type: "practical",
+            deliveryMode: "direct",
+            approval: "manager",
+            instructions: "أنجز التكليف العملي المتفق عليه في لقاء الوحدة وأرسله لاعتماد مدير الوحدة.",
+            enabled: true
+          }
+        ];
+      });
+      return out;
+    }
+
     const mxRules = (db) => ({ ...DEFAULT_GOVERNANCE_RULES, ...(db.systemConfig?.governanceRules || {}) });
     const mxDepartments = (db) => db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
     const mxUnits = (db) => db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
     const mxDeptById = (db, id) => mxDepartments(db).find(d => d.id === id) || null;
-    const mxIsLeaderRole = (u) => u && (u.roleType === "platform_admin" || u.roleType === "executive");
+
+    // فحص الأدوار في هيكلة ميدان
+    const mxIsExecHead = (u) => Boolean(u && u.roleType === "executive" && (u.isExecHead || u.id === "u_exec"));
+    const mxIsExecOfficeMember = (u) => Boolean(u && u.roleType === "executive" && !mxIsExecHead(u));
+    const mxIsOperationalMgr = (u) => Boolean(u && (u.roleType === "operational_admin" || u.roleType === "admin"));
+    const mxIsLeaderRole = (u) => Boolean(u && (u.roleType === "platform_admin" || u.roleType === "executive"));
+    const mxUnitLedByUser = (db, u) => u ? (mxUnits(db).find(un => un.leaderUserId === u.id) || null) : null;
+    const mxIsUnitLeader = (db, u) => Boolean(mxUnitLedByUser(db, u));
 
     function mxDeptTaskDefs(db, deptId, includeDisabled = false) {
       const list = (db.systemConfig?.deptTasks && db.systemConfig.deptTasks[deptId]) || [];
       return includeDisabled ? list : list.filter(t => t.enabled !== false);
     }
+    function mxExecTaskDefs(db, includeDisabled = false) {
+      const list = db.systemConfig?.execTasks || [];
+      return includeDisabled ? list : list.filter(t => t.enabled !== false);
+    }
+    function mxUnitTaskDefs(db, unitId, includeDisabled = false) {
+      const list = (db.systemConfig?.unitTasks && db.systemConfig.unitTasks[unitId]) || [];
+      return includeDisabled ? list : list.filter(t => t.enabled !== false);
+    }
+
     function mxUserDeptIds(db, user) {
-      if (!user || mxIsLeaderRole(user)) return [];
+      if (!user || user.roleType === "platform_admin" || mxIsExecHead(user)) return [];
       const list = Array.isArray(user.assignedDepartments) ? user.assignedDepartments : [];
       return list.filter(id => { const d = mxDeptById(db, id); return d && d.enabled !== false; });
     }
+
+    // الإسنادات المطلوبة من أي عضو في ميدان (حسب موقعه في الهيكلة)
     function mxUserTasks(db, user, deptFilter = null) {
-      return mxUserDeptIds(db, user)
-        .filter(did => !deptFilter || did === deptFilter)
-        .flatMap(did => mxDeptTaskDefs(db, did).map(t => ({ ...t, deptId: did })));
+      if (!user || user.roleType === "platform_admin" || mxIsExecHead(user)) return [];
+      const out = [];
+      const isOffice = mxIsExecOfficeMember(user);
+      const isOpMgr = mxIsOperationalMgr(user);
+      const ledUnit = mxUnitLedByUser(db, user);
+
+      // 1. إسنادات القيادة التنفيذية / المكتب التنفيذي (للمكتب التنفيذي، مديري الإدارات، ومديري الوحدات)
+      if (isOffice || isOpMgr || ledUnit) {
+        mxExecTaskDefs(db).forEach(t => {
+          const tg = t.targetGroup || "unit_leaders";
+          const forOffice = (tg === "exec_office" || tg === "all_leaders") && (isOffice || isOpMgr) && !(isOffice && t.assignedBy === "exec_office");
+          const forUnitLeader = (tg === "unit_leaders" || tg === "all_leaders") && Boolean(ledUnit);
+          if (forOffice || forUnitLeader) {
+            out.push({ ...t, deptId: "src_exec", sourceName: t.assignedBy === "exec_office" ? "المكتب التنفيذي" : "المدير التنفيذي" });
+          }
+        });
+      }
+
+      // 2. إسنادات الإدارات التشغيلية (الموارد البشرية + التربوية + أي إدارة مستحدثة)
+      mxUserDeptIds(db, user).forEach(did => {
+        const d = mxDeptById(db, did);
+        mxDeptTaskDefs(db, did).forEach(t => {
+          if (t.targetScope === "dept_team" && user.deptTeamId !== did) return;
+          out.push({ ...t, deptId: did, sourceName: d?.shortName || d?.name || did });
+        });
+      });
+
+      // 3. إسنادات مدير الوحدة لأفراد وحدته
+      const memberUnit = mxUnits(db).find(un => un.name === user.unit);
+      if (memberUnit && memberUnit.leaderUserId !== user.id && !isOffice && !isOpMgr) {
+        mxUnitTaskDefs(db, memberUnit.id).forEach(t => {
+          out.push({ ...t, deptId: "src_unit_" + memberUnit.id, unitId: memberUnit.id, sourceName: memberUnit.name });
+        });
+      }
+
+      return deptFilter && deptFilter !== "all" ? out.filter(t => t.deptId === deptFilter) : out;
     }
+
     const mxCurrentWeek = (user) => calculateWeeksSinceJoin(user?.joinedAt);
     const mxRec = (user, week, taskId) => (user?.tasksRecord && user.tasksRecord[week] && user.tasksRecord[week][taskId]) || { status: "pending" };
     const mxApproval = (def) => def.approval || MX_TYPE_META[def.type]?.approval || "self";
     const mxTargetDays = (def, rules) => Math.max(1, Math.min(7, def.targetDays || rules?.dailyTaskTargetDays || 5));
+
+    // سحب عشوائي ثابت البذرة لأسئلة الاختبار لكل عضو
+    function mxDrawQuestions(def, curriculum, userId, week, attempt = 0, episode = null) {
+      const basePool = (episode && Array.isArray(episode.questions) && episode.questions.length)
+        ? episode.questions
+        : (Array.isArray(def?.questionPool) && def.questionPool.length)
+        ? def.questionPool
+        : (curriculum?.questions || []);
+      if (!basePool.length) return [];
+      const seedStr = `${userId || "u"}:${def?.id || "t"}:${episode?.id || week}:${attempt}`;
+      let h = 2166136261;
+      for (let i = 0; i < seedStr.length; i++) {
+        h ^= seedStr.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      const rng = () => {
+        h += 0x6D2B79F5;
+        let t = Math.imul(h ^ (h >>> 15), 1 | h);
+        t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const copy = basePool.map(q => ({ ...q }));
+      if (def?.shuffleQuestions !== false) {
+        for (let i = copy.length - 1; i > 0; i--) {
+          const j = Math.floor(rng() * (i + 1));
+          const tmp = copy[i]; copy[i] = copy[j]; copy[j] = tmp;
+        }
+      }
+      const limit = parseInt(def?.questionsPerMember, 10);
+      return (limit && limit > 0 && limit < copy.length) ? copy.slice(0, limit) : copy;
+    }
+
+    // حالة سلسلة الإسنادات المتتابعة للعضو (تبدأ من الحلقة الأولى دائماً وتفتح أسبوعياً بالترتيب)
+    function mxSeriesInfo(def, user, selectedWeek) {
+      if (!def || def.deliveryMode !== "series" || !Array.isArray(def.seriesItems) || def.seriesItems.length === 0) return null;
+      const items = def.seriesItems;
+      const curWeek = mxCurrentWeek(user);
+      const maxUnlockedByWeek = Math.max(1, Math.min(items.length, selectedWeek || curWeek));
+      const doneMap = {};
+      const allWeeks = Object.keys(user?.tasksRecord || {}).map(Number).sort((a, b) => a - b);
+      allWeeks.forEach(w => {
+        const r = user.tasksRecord[w] && user.tasksRecord[w][def.id];
+        if (!r) return;
+        if (r.seriesDone && typeof r.seriesDone === "object") {
+          Object.keys(r.seriesDone).forEach(epId => { if (r.seriesDone[epId]) doneMap[epId] = r.seriesDone[epId]; });
+        } else if ((r.status === "on_time" || r.status === "late") && w >= 1 && w <= items.length) {
+          const ep = items[w - 1];
+          if (ep && !doneMap[ep.id]) doneMap[ep.id] = { at: r.completedAt || true };
+        }
+      });
+      // الحلقة رقم i تفتح إذا كانت <= أسبوع العضو الحالي وأتمّ العضو جميع الحلقات السابقة لها بالترتيب
+      let unlockedCount = 1;
+      for (let i = 0; i < items.length; i++) {
+        if (doneMap[items[i].id]) unlockedCount = Math.min(items.length, Math.max(unlockedCount, i + 2));
+        else break;
+      }
+      unlockedCount = Math.min(unlockedCount, Math.max(maxUnlockedByWeek, Object.keys(doneMap).length + 1), items.length);
+      const nextIdx = items.findIndex(ep => !doneMap[ep.id]);
+      const activeIdx = nextIdx === -1 ? items.length - 1 : Math.min(nextIdx, unlockedCount - 1);
+      return {
+        items,
+        doneMap,
+        unlockedCount,
+        completedCount: Object.keys(doneMap).filter(k => items.some(x => x.id === k)).length,
+        totalCount: items.length,
+        activeIdx
+      };
+    }
 
     function mxTaskState(def, rec, rules) {
       const s = rec?.status || "pending";
@@ -6889,7 +7251,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         points += st.points;
         if (st.done) done++;
         if (st.key === "submitted") submitted++;
-        const b = byDept[t.deptId] || (byDept[t.deptId] = { total: 0, done: 0, points: 0, pct: 0 });
+        const b = byDept[t.deptId] || (byDept[t.deptId] = { total: 0, done: 0, points: 0, pct: 0, label: t.sourceName || mxDeptById(db, t.deptId)?.name || t.deptId });
         b.total++; b.points += st.points; if (st.done) b.done++;
       });
       Object.values(byDept).forEach(b => { b.pct = b.total ? Math.round(b.points / b.total) : 0; });
@@ -6909,15 +7271,17 @@ CREATE POLICY "Allow public upload on madyan-media"
       return { key: "not_started", label: "لم يبدأ", dot: "bg-stone-400", ink: "text-stone-500", bg: "bg-stone-100" };
     }
 
-    // أعضاء إدارة = كل من أُسندت له مهام هذه الإدارة (أعضاء أو قادة)
-    function mxDeptMembers(db, deptId) {
-      return db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).includes(deptId));
+    // أعضاء إدارة = كل من أُسندت له إسنادات هذه الإدارة (أعضاء الوحدات أو فريق الإدارة)
+    function mxDeptMembers(db, deptId, scopeFilter = "all") {
+      const all = db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).includes(deptId));
+      if (scopeFilter === "dept_team") return all.filter(u => u.deptTeamId === deptId);
+      return all;
     }
     function mxDeptManager(db, deptId) {
       return db.users.find(u => (u.roleType === "operational_admin" || u.roleType === "admin") && u.departmentId === deptId) || null;
     }
 
-    // المهام التي تنتظر اعتماد المدير (في كل الأسابيع)
+    // الإسنادات التي تنتظر اعتماد مدير الإدارة
     function mxPendingApprovals(db, deptId) {
       const defs = mxDeptTaskDefs(db, deptId);
       const out = [];
@@ -6932,26 +7296,82 @@ CREATE POLICY "Allow public upload on madyan-media"
       return out.sort((a, b) => b.week - a.week);
     }
 
+    // الإسنادات التي تنتظر اعتماد القيادة التنفيذية / المكتب التنفيذي
+    function mxPendingExecApprovals(db, isHead = true) {
+      const defs = mxExecTaskDefs(db).filter(t => isHead || t.targetGroup === "unit_leaders" || t.assignedBy === "exec_office");
+      const out = [];
+      db.users.forEach(u => {
+        Object.keys(u.tasksRecord || {}).forEach(wk => {
+          defs.forEach(t => {
+            const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+            if (r && r.status === "submitted") out.push({ user: u, task: t, week: Number(wk), rec: r });
+          });
+        });
+      });
+      return out.sort((a, b) => b.week - a.week);
+    }
+
+    // الإسنادات التي تنتظر اعتماد مدير الوحدة
+    function mxPendingUnitApprovals(db, unit) {
+      if (!unit) return [];
+      const defs = mxUnitTaskDefs(db, unit.id);
+      const out = [];
+      db.users.filter(u => u.unit === unit.name && u.id !== unit.leaderUserId).forEach(u => {
+        Object.keys(u.tasksRecord || {}).forEach(wk => {
+          defs.forEach(t => {
+            const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+            if (r && r.status === "submitted") out.push({ user: u, task: t, week: Number(wk), rec: r });
+          });
+        });
+      });
+      return out.sort((a, b) => b.week - a.week);
+    }
+
+    // الإسنادات الموكلة لشخص محدد في الإدارة/الوحدة لاعتمادها (approval === "person")
+    function mxPendingForReviewer(db, reviewerUserId) {
+      if (!reviewerUserId) return [];
+      const allDefs = [
+        ...mxDepartments(db).flatMap(d => mxDeptTaskDefs(db, d.id).map(t => ({ ...t, sourceName: d.shortName || d.name }))),
+        ...mxExecTaskDefs(db).map(t => ({ ...t, sourceName: "القيادة التنفيذية" })),
+        ...mxUnits(db).flatMap(un => mxUnitTaskDefs(db, un.id).map(t => ({ ...t, sourceName: un.name })))
+      ].filter(t => t.approval === "person" && t.approverUserId === reviewerUserId);
+      if (!allDefs.length) return [];
+      const out = [];
+      db.users.forEach(u => {
+        Object.keys(u.tasksRecord || {}).forEach(wk => {
+          allDefs.forEach(t => {
+            const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+            if (r && r.status === "submitted") out.push({ user: u, task: t, week: Number(wk), rec: r });
+          });
+        });
+      });
+      return out.sort((a, b) => b.week - a.week);
+    }
+
     function mxDeptStats(db, deptId) {
       const rules = mxRules(db);
       const defs = mxDeptTaskDefs(db, deptId);
       const rows = mxDeptMembers(db, deptId).map(u => {
         const week = mxCurrentWeek(u);
+        const userDefs = defs.filter(t => t.targetScope !== "dept_team" || u.deptTeamId === deptId);
         let pts = 0, done = 0;
-        defs.forEach(t => { const st = mxTaskState(t, mxRec(u, week, t.id), rules); pts += st.points; if (st.done) done++; });
-        const pct = defs.length ? Math.round(pts / defs.length) : 0;
-        return { user: u, week, pct, done, total: defs.length, status: mxStatusOf(pct), recentPct: mxRecentPct(db, u, 4, deptId) };
+        userDefs.forEach(t => { const st = mxTaskState(t, mxRec(u, week, t.id), rules); pts += st.points; if (st.done) done++; });
+        const pct = userDefs.length ? Math.round(pts / userDefs.length) : 0;
+        return { user: u, week, pct, done, total: userDefs.length, status: mxStatusOf(pct), recentPct: mxRecentPct(db, u, 4, deptId) };
       });
       const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
       const byUnit = mxUnits(db).map(un => {
         const r = rows.filter(x => x.user.unit === un.name);
         return { unit: un, count: r.length, pct: r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0 };
       }).filter(x => x.count > 0);
-      const byTask = defs.map(t => ({
-        task: t,
-        done: rows.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length,
-        total: rows.length
-      }));
+      const byTask = defs.map(t => {
+        const eligible = rows.filter(r => t.targetScope !== "dept_team" || r.user.deptTeamId === deptId);
+        return {
+          task: t,
+          done: eligible.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length,
+          total: eligible.length
+        };
+      });
       const counts = { committed: 0, behind: 0, not_started: 0 };
       rows.forEach(r => { counts[r.status.key]++; });
       return { deptId, defs, rows, avg, byUnit, byTask, counts, pending: mxPendingApprovals(db, deptId) };
@@ -6977,9 +7397,12 @@ CREATE POLICY "Allow public upload on madyan-media"
 
     // ---------- التعميمات ----------
     function mxBulletinRecipients(db, b) {
-      const pool = db.users.filter(u => u.roleType !== "platform_admin" && u.id !== b.senderId && u.roleType !== "executive");
+      const pool = db.users.filter(u => u.roleType !== "platform_admin" && !mxIsExecHead(u) && u.id !== b.senderId);
       if (!b.targetType || b.targetType === "all") return pool;
-      if (b.targetType === "dept") return pool.filter(u => u.departmentId === b.targetDeptId || mxUserDeptIds(db, u).includes(b.targetDeptId));
+      if (b.targetType === "exec_office") return pool.filter(u => mxIsExecOfficeMember(u) || mxIsOperationalMgr(u));
+      if (b.targetType === "unit_leaders") return pool.filter(u => mxIsUnitLeader(db, u));
+      if (b.targetType === "dept_team") return pool.filter(u => u.deptTeamId === b.targetDeptId);
+      if (b.targetType === "dept") return pool.filter(u => u.departmentId === b.targetDeptId || u.deptTeamId === b.targetDeptId || mxUserDeptIds(db, u).includes(b.targetDeptId));
       if (b.targetType === "unit") return pool.filter(u => u.unit === b.targetUnit);
       if (b.targetType === "custom") return pool.filter(u => (b.recipientIds || []).includes(u.id));
       return pool;
@@ -6993,7 +7416,10 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
     const mxIsAcked = (b, userId) => Boolean(b.acknowledgedBy && b.acknowledgedBy[userId]);
     function mxBulletinTargetLabel(db, b) {
-      if (!b.targetType || b.targetType === "all") return "كل المنصة";
+      if (!b.targetType || b.targetType === "all") return "كل أفراد الحركة";
+      if (b.targetType === "exec_office") return "المكتب التنفيذي ومديرو الإدارات";
+      if (b.targetType === "unit_leaders") return "مديرو الوحدات";
+      if (b.targetType === "dept_team") return `فريق ${mxDeptById(db, b.targetDeptId)?.shortName || "الإدارة"}`;
       if (b.targetType === "dept") return mxDeptById(db, b.targetDeptId)?.name || "إدارة";
       if (b.targetType === "unit") return b.targetUnit || "وحدة";
       return "أعضاء محددون";
@@ -7003,7 +7429,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       return `${d.getDate()} ${MONTHS_AR[d.getMonth()]} • ${formatTimeAr(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`)}`;
     }
 
-    // تحديث سجل مهمة لعضو
+    // تحديث سجل إسناد لعضو
     function mxPatchRecord(setDb, userId, week, taskId, patch) {
       setDb(prev => ({
         ...prev,
@@ -7072,10 +7498,11 @@ CREATE POLICY "Allow public upload on madyan-media"
         </span>
       );
     }
-    function MXDeptChip({ dept, idx = 0 }) {
-      if (!dept) return null;
-      const tone = pa2DeptTone(dept, idx);
-      return <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[12px] whitespace-nowrap shrink-0 ${tone.bg} ${tone.ink}`}>{dept.shortName || dept.name}</span>;
+    function MXDeptChip({ dept, label, idx = 0 }) {
+      const text = label || dept?.shortName || dept?.name;
+      if (!text) return null;
+      const tone = dept ? pa2DeptTone(dept, idx) : PA2_PASTELS[idx % PA2_PASTELS.length];
+      return <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[12px] whitespace-nowrap shrink-0 ${tone.bg} ${tone.ink}`}>{text}</span>;
     }
     // شريط «يحتاج انتباهك»
     function MXAttention({ title, items, emptyText, onPrimary, primaryLabel = "معالجة الآن" }) {
@@ -7155,7 +7582,6 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ---------- الإطار المشترك (العمود الجانبي + شريط الجوال) ----------
-    // modeSwitch: { value, onChange, options: [{ value, label, badge }] } — يظهر فقط للواجهة المزدوجة
     function MXShell({ areaLabel, chip, modeSwitch, nav, active, onNav, user, roleLabel, onLogout, children }) {
       const go = (id) => { onNav(id); window.scrollTo({ top: 0 }); };
       return (
@@ -7230,30 +7656,62 @@ CREATE POLICY "Allow public upload on madyan-media"
     }
 
     // ============================================================================
-    // 9.8 MX WORKSPACE — الواجهة المزدوجة (إدارة القسم ⇄ مهماتي)
+    // 9.8 MX WORKSPACE — الواجهة المزدوجة (إدارة الفريق ⇄ إسناداتي)
     // ============================================================================
-    function MXWorkspace({ db, setDb, currentUser, isUsernameTaken, onAcknowledgeBulletin, onLogout, showToast }) {
-      const myTasks = mxUserTasks(db, currentUser);
-      const hasTasks = myTasks.length > 0;
+    // كل أعضاء ميدان (إلا قائد المكتب التنفيذي حصراً) لديهم واجهة «إسناداتي»؛
+    // والمكتب التنفيذي + الموارد البشرية + التربوية + مديري الوحدات لديهم واجهتان (إدارة فرقهم ⇄ إسناداتي)
+    function MXWorkspace({ db, setDb, currentUser, isUsernameTaken, onAcknowledgeBulletin, onPreviewUser, onLogout, showToast }) {
+      const isOffice = mxIsExecOfficeMember(currentUser);
+      const isOpMgr = mxIsOperationalMgr(currentUser);
+      const ledUnit = mxUnitLedByUser(db, currentUser);
+      const canManage = isOffice || isOpMgr || Boolean(ledUnit);
+
       const [mode, setMode] = useState(() => {
-        try { return new URLSearchParams(window.location.search).get("ws") === "mine" ? "mine" : "manage"; } catch (e) { return "manage"; }
+        try {
+          const ws = new URLSearchParams(window.location.search).get("ws");
+          if (ws === "mine") return "mine";
+          if (ws === "manage") return "manage";
+        } catch (e) {}
+        return canManage ? "manage" : "mine";
       });
+
       const week = mxCurrentWeek(currentUser);
-      const sum = hasTasks ? mxWeekSummary(db, currentUser, week) : null;
+      const sum = mxWeekSummary(db, currentUser, week);
       const unread = mxBulletinsForUser(db, currentUser).filter(b => !mxIsAcked(b, currentUser.id)).length;
-      const pendingApprovals = currentUser.departmentId ? mxPendingApprovals(db, currentUser.departmentId).length : 0;
-      const modeSwitch = hasTasks ? {
+      const revPending = mxPendingForReviewer(db, currentUser.id).length;
+
+      let manageLabel = "إدارة القسم";
+      let pendingManage = 0;
+      if (isOffice) {
+        manageLabel = "المكتب التنفيذي";
+        pendingManage = mxPendingExecApprovals(db, false).length;
+      } else if (isOpMgr) {
+        manageLabel = "إدارة القسم";
+        pendingManage = currentUser.departmentId ? mxPendingApprovals(db, currentUser.departmentId).length : 0;
+      } else if (ledUnit) {
+        manageLabel = "إدارة الوحدة";
+        pendingManage = mxPendingUnitApprovals(db, ledUnit).length;
+      }
+
+      const modeSwitch = canManage ? {
         value: mode,
         onChange: setMode,
         options: [
-          { value: "manage", label: "إدارة القسم", badge: pendingApprovals || null },
-          { value: "mine", label: "مهماتي", badge: ((sum ? sum.remaining : 0) + unread) || null }
+          { value: "manage", label: manageLabel, badge: pendingManage || null },
+          { value: "mine", label: "إسناداتي", badge: ((sum ? sum.remaining : 0) + unread + revPending) || null }
         ]
       } : null;
-      if (hasTasks && mode === "mine") {
+
+      if (!canManage || mode === "mine") {
         return <CadrePortalV3 db={db} setDb={setDb} currentUser={currentUser} isUsernameTaken={isUsernameTaken} onAcknowledgeBulletin={onAcknowledgeBulletin} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
       }
-      return <OperationalPortalV3 db={db} setDb={setDb} currentUser={currentUser} isUsernameTaken={isUsernameTaken} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
+      if (isOffice) {
+        return <ExecutivePortalV3 db={db} setDb={setDb} currentUser={currentUser} isHead={false} modeSwitch={modeSwitch} onPreviewUser={onPreviewUser} onLogout={onLogout} showToast={showToast} />;
+      }
+      if (isOpMgr) {
+        return <OperationalPortalV3 db={db} setDb={setDb} currentUser={currentUser} isUsernameTaken={isUsernameTaken} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
+      }
+      return <UnitLeaderPortalV3 db={db} setDb={setDb} currentUser={currentUser} unit={ledUnit} onLogout={onLogout} showToast={showToast} modeSwitch={modeSwitch} />;
     }
 
     // ==== PART:OPS START ====
@@ -7278,18 +7736,36 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
-    // لوحة متابعة عضو: مهام الأسبوع + الاعتمادات المعلّقة
-    function MXMemberFollowPanel({ db, deptId, user, onApprove, onReject, onClose }) {
+    // عرض المحاور الخمسة المقسّمة لأجندة الاجتماع داخل لوحة المتابعة
+    function MXAgendaFieldsPreview({ fields }) {
+      if (!fields || typeof fields !== "object") return null;
+      const entries = MX_AGENDA_PROMPTS.filter(p => (fields[p.key] || "").trim().length > 0);
+      if (entries.length === 0) return null;
+      return (
+        <div className="mt-2.5 space-y-2 rounded-2xl bg-white/80 p-3 border border-stone-200/70">
+          <div className="text-[12px] font-semibold text-orange-700">محاور أجندة الاجتماع ({entries.length} من {MX_AGENDA_PROMPTS.length}):</div>
+          {entries.map((p, idx) => (
+            <div key={p.key} className="text-[12px] text-stone-700 leading-relaxed">
+              <span className="font-semibold text-stone-900 block">{idx + 1}. {p.label}</span>
+              <span className="text-stone-600 whitespace-pre-line">{fields[p.key]}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // لوحة متابعة عضو: إسنادات الأسبوع + الاعتمادات المعلّقة + استعراض الأجندة المقسّمة
+    function MXMemberFollowPanel({ db, deptId, customDefs, customPending, user, onApprove, onReject, onClose }) {
       const rules = mxRules(db);
       const week = mxCurrentWeek(user);
-      const defs = mxDeptTaskDefs(db, deptId);
-      const pending = mxPendingApprovals(db, deptId).filter(p => p.user.id === user.id);
-      const s = mxWeekSummary(db, user, week, deptId);
+      const defs = customDefs || mxDeptTaskDefs(db, deptId).filter(t => t.targetScope !== "dept_team" || user.deptTeamId === deptId);
+      const pending = (customPending || mxPendingApprovals(db, deptId)).filter(p => p.user.id === user.id);
+      const s = mxWeekSummary(db, user, week, deptId || null);
       return (
-        <PA2PanelShell eyebrow={`${user.unit || "بدون وحدة"} · الأسبوع ${week}`} title={pa2Short(user.name)} onClose={onClose}>
+        <PA2PanelShell eyebrow={`${user.unit || pa2RoleLabel(user)} · الأسبوع ${week}`} title={pa2Short(user.name)} onClose={onClose}>
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3"><div className="text-[22px] font-bold tabular-nums">{s.pct}%</div><div className="text-[12px] text-stone-500">هذا الأسبوع</div></div>
-            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3"><div className="text-[22px] font-bold tabular-nums">{mxRecentPct(db, user, 4, deptId)}%</div><div className="text-[12px] text-stone-500">آخر 4 أسابيع</div></div>
+            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3"><div className="text-[22px] font-bold tabular-nums">{mxRecentPct(db, user, 4, deptId || null)}%</div><div className="text-[12px] text-stone-500">آخر 4 أسابيع</div></div>
           </div>
           {pending.length > 0 && (
             <div>
@@ -7299,7 +7775,7 @@ CREATE POLICY "Allow public upload on madyan-media"
                   <div key={`${p.week}:${p.task.id}`} className="rounded-2xl bg-[#ECE7FA]/60 px-4 py-3">
                     <div className="text-[14px] font-medium text-stone-900">{p.task.title}</div>
                     <div className="text-[12px] text-stone-500 mt-0.5">الأسبوع {p.week}{p.rec.lateSubmit ? " · متأخرة" : ""}</div>
-                    {p.rec.note && <p className="text-[13px] text-stone-600 mt-2 leading-relaxed">«{p.rec.note}»</p>}
+                    {p.rec.agendaFields ? <MXAgendaFieldsPreview fields={p.rec.agendaFields} /> : (p.rec.note && <p className="text-[13px] text-stone-600 mt-2 leading-relaxed whitespace-pre-line">«{p.rec.note}»</p>)}
                     <div className="flex items-center gap-2 mt-3">
                       <button onClick={() => onApprove(p)} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold">اعتماد</button>
                       <button onClick={() => onReject(p)} className="h-9 px-4 rounded-full text-[13px] text-rose-600 hover:bg-rose-50">إعادة للمراجعة</button>
@@ -7310,14 +7786,22 @@ CREATE POLICY "Allow public upload on madyan-media"
             </div>
           )}
           <div>
-            <PA2Label>مهام هذا الأسبوع</PA2Label>
+            <PA2Label>إسنادات هذا الأسبوع</PA2Label>
             <div className="divide-y divide-stone-100">
               {defs.map(t => {
-                const st = mxTaskState(t, mxRec(user, week, t.id), rules);
+                const rec = mxRec(user, week, t.id);
+                const st = mxTaskState(t, rec, rules);
+                const sInfo = mxSeriesInfo(t, user, week);
                 return (
-                  <div key={t.id} className="flex items-center justify-between gap-3 py-2.5">
-                    <span className="text-[14px] text-stone-700 truncate">{t.title}</span>
-                    <MXStateTag st={st} />
+                  <div key={t.id} className="py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[14px] text-stone-700 truncate">
+                        {t.title}
+                        {sInfo && <span className="text-[12px] text-orange-700 mr-1.5">({sInfo.completedCount}/{sInfo.totalCount})</span>}
+                      </span>
+                      <MXStateTag st={st} />
+                    </div>
+                    {rec.agendaFields && <MXAgendaFieldsPreview fields={rec.agendaFields} />}
                   </div>
                 );
               })}
@@ -7327,31 +7811,144 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
-    // لوحة تعريف مهمة (إنشاء/تعديل بمسودة وحفظ صريح)
-    function MXTaskDefPanel({ def, isNew, allowedTypes, onSave, onDelete, onClose }) {
+    // لوحة تعريف إسناد (إنشاء/تعديل مع إعدادات متقدمة: نوع المحاضرة/الاختبار، بنك الأسئلة العشوائي، السلسلة المتتابعة، الأجندة المقسّمة، و3 خيارات اعتماد)
+    function MXTaskDefPanel({ db, deptId, scopeMode = "dept", isHead = true, def, isNew, allowedTypes, onSave, onDelete, onClose }) {
+      const candidates = useMemo(() => {
+        if (!db) return [];
+        if (deptId) {
+          const team = db.users.filter(u => u.deptTeamId === deptId || u.departmentId === deptId || (Array.isArray(u.assignedDepartments) && u.assignedDepartments.includes(deptId)));
+          return team.length ? team : db.users.filter(u => u.roleType === "cadre");
+        }
+        return db.users.filter(u => u.roleType !== "platform_admin");
+      }, [db, deptId]);
+
       const [d, setD] = useState(() => ({
         title: def?.title || "",
         type: def?.type || allowedTypes[0] || "practical",
         approval: def?.approval || MX_TYPE_META[def?.type || allowedTypes[0]]?.approval || "self",
+        approverUserId: def?.approverUserId || candidates[0]?.id || "",
+        targetScope: def?.targetScope || "all_units",
+        targetGroup: def?.targetGroup || "unit_leaders",
+        deliveryMode: def?.deliveryMode || "direct",
+        lectureMode: def?.lectureMode || "lecture_and_quiz",
+        lectureTitle: def?.lectureTitle || "",
+        lectureDesc: def?.lectureDesc || "",
+        videoUrl: def?.videoUrl || "https://www.w3schools.com/html/mov_bbb.mp4",
+        questionsPerMember: def?.questionsPerMember || 3,
+        shuffleQuestions: def?.shuffleQuestions !== false,
+        questionPool: Array.isArray(def?.questionPool) && def.questionPool.length ? def.questionPool : DEFAULT_HR_QUESTION_POOL,
+        seriesItems: Array.isArray(def?.seriesItems) && def.seriesItems.length ? def.seriesItems : [
+          { id: "ep_1", title: "الحلقة 1: المدخل التأسيسي", instructions: "شاهد الحلقة الأولى وأتمم المطلوب لتفتح لك الحلقة التالية في الأسبوع القادم.", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" },
+          { id: "ep_2", title: "الحلقة 2: التطبيق العملي", instructions: "تفتح بعد إتمام الحلقة الأولى.", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" }
+        ],
+        useStructuredAgenda: Boolean(def?.useStructuredAgenda),
         targetDays: def?.targetDays || 5,
         instructions: def?.instructions || ""
       }));
+
+      const [newQ, setNewQ] = useState({ text: "", options: ["", "", "", ""], correctIndex: 0 });
+      const [showAddQ, setShowAddQ] = useState(false);
+      const [newEp, setNewEp] = useState({ title: "", instructions: "", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" });
+      const [showAddEp, setShowAddEp] = useState(false);
+
       const set = (k, v) => setD(p => ({ ...p, [k]: v }));
       const fixedSelf = d.type === "lecture_quiz" || d.type === "daily_habit";
-      const dirty = isNew ? d.title.trim().length > 1 : (d.title !== def.title || d.type !== def.type || d.approval !== (def.approval || "self") || d.targetDays !== (def.targetDays || 5) || d.instructions !== (def.instructions || ""));
+      const supportsSeries = d.type === "lecture_quiz" || d.type === "reading" || d.type === "practical";
+      const dirty = isNew ? d.title.trim().length > 1 : true;
+
+      const addQuestionToPool = () => {
+        if (!newQ.text.trim() || newQ.options.some(o => !o.trim())) return;
+        const qObj = {
+          id: "q_" + Date.now().toString(36),
+          text: newQ.text.trim(),
+          options: newQ.options.map(o => o.trim()),
+          correctIndex: Number(newQ.correctIndex) || 0
+        };
+        set("questionPool", [...(d.questionPool || []), qObj]);
+        setNewQ({ text: "", options: ["", "", "", ""], correctIndex: 0 });
+        setShowAddQ(false);
+      };
+
+      const removeQuestionFromPool = (qid) => {
+        set("questionPool", (d.questionPool || []).filter(q => q.id !== qid));
+      };
+
+      const addEpisodeToSeries = () => {
+        if (!newEp.title.trim()) return;
+        const epObj = {
+          id: "ep_" + Date.now().toString(36),
+          title: newEp.title.trim(),
+          instructions: newEp.instructions.trim(),
+          videoUrl: newEp.videoUrl.trim() || "https://www.w3schools.com/html/mov_bbb.mp4"
+        };
+        set("seriesItems", [...(d.seriesItems || []), epObj]);
+        setNewEp({ title: "", instructions: "", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4" });
+        setShowAddEp(false);
+      };
+
+      const removeEpisodeFromSeries = (epid) => {
+        if ((d.seriesItems || []).length <= 1) return;
+        set("seriesItems", (d.seriesItems || []).filter(ep => ep.id !== epid));
+      };
+
       const save = () => {
         if (!d.title.trim()) return;
-        onSave({ ...d, title: d.title.trim(), approval: fixedSelf ? "self" : d.approval, targetDays: d.type === "daily_habit" ? d.targetDays : undefined });
+        const out = {
+          ...d,
+          title: d.title.trim(),
+          approval: fixedSelf ? "self" : d.approval,
+          approverUserId: (!fixedSelf && d.approval === "person") ? d.approverUserId : undefined,
+          deliveryMode: supportsSeries ? d.deliveryMode : "direct",
+          seriesItems: (supportsSeries && d.deliveryMode === "series") ? d.seriesItems : undefined,
+          useStructuredAgenda: d.type === "agenda_minutes" ? Boolean(d.useStructuredAgenda) : undefined,
+          targetDays: d.type === "daily_habit" ? d.targetDays : undefined
+        };
+        onSave(out);
       };
+
       return (
-        <PA2PanelShell eyebrow={isNew ? "مهمة جديدة" : "تعديل مهمة"} title={d.title || "بدون عنوان"} onClose={onClose}
-          footer={<PA2SaveFooter dirty={dirty} onSave={save} saveLabel={isNew ? "إضافة المهمة" : "حفظ التغييرات"} danger={!isNew && <PA2DangerAction label="حذف المهمة" confirmLabel="تأكيد الحذف" onConfirm={onDelete} />} />}>
+        <PA2PanelShell eyebrow={isNew ? "إسناد جديد" : "إعدادات الإسناد"} title={d.title || "بدون عنوان"} onClose={onClose}
+          footer={<PA2SaveFooter dirty={dirty} onSave={save} saveLabel={isNew ? "إضافة الإسناد" : "حفظ الإعدادات"} danger={!isNew && <PA2DangerAction label="حذف الإسناد" confirmLabel="تأكيد الحذف" onConfirm={onDelete} />} />}>
           <div>
-            <PA2Label>عنوان المهمة</PA2Label>
-            <input value={d.title} onChange={e => set("title", e.target.value)} className={pa2InputCls} placeholder="مثال: حضور اللقاء الأسبوعي" />
+            <PA2Label>عنوان الإسناد</PA2Label>
+            <input value={d.title} onChange={e => set("title", e.target.value)} className={pa2InputCls} placeholder="مثال: المحاضرة الأسبوعية أو أجندة اللقاء" />
           </div>
+
+          {scopeMode === "dept" && (
+            <div>
+              <PA2Label hint="لمن يوجّه هذا الإسناد؟">نطاق الإسناد</PA2Label>
+              <PA2Segmented
+                value={d.targetScope}
+                onChange={v => set("targetScope", v)}
+                options={[
+                  { value: "all_units", label: "كافة الوحدات" },
+                  { value: "dept_team", label: "فريق الإدارة فقط" }
+                ]}
+              />
+            </div>
+          )}
+
+          {scopeMode === "exec" && (
+            <div>
+              <PA2Label hint="حسب هيكلة القيادة التنفيذية">الجهة المسند إليها</PA2Label>
+              {isHead ? (
+                <PA2Segmented
+                  value={d.targetGroup}
+                  onChange={v => set("targetGroup", v)}
+                  options={[
+                    { value: "unit_leaders", label: "مديرو الوحدات" },
+                    { value: "exec_office", label: "المكتب التنفيذي" },
+                    { value: "all_leaders", label: "الاثنان معاً" }
+                  ]}
+                />
+              ) : (
+                <div className="rounded-2xl bg-[#F4F2EE] px-4 py-2.5 text-[13px] text-stone-700">يُسند إلى: مديري الوحدات</div>
+              )}
+            </div>
+          )}
+
           <div>
-            <PA2Label hint="حسب صلاحيات الإدارة">النوع</PA2Label>
+            <PA2Label hint="يتحكم في إمكانيات الإسناد">نوع الإسناد</PA2Label>
             <div className="grid grid-cols-2 gap-2">
               {allowedTypes.map(t => (
                 <button key={t} onClick={() => setD(p => ({ ...p, type: t, approval: MX_TYPE_META[t]?.approval || "self" }))} className={`h-11 px-3 rounded-2xl text-[13px] text-right flex items-center gap-2 transition ${d.type === t ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`}>
@@ -7360,17 +7957,184 @@ CREATE POLICY "Allow public upload on madyan-media"
               ))}
             </div>
           </div>
+
+          {supportsSeries && (
+            <div className="space-y-3 rounded-2xl bg-[#F4F2EE] p-4">
+              <div>
+                <PA2Label hint="مباشر أو سلسلة تبدأ من الحلقة 1">طريقة عرض الإسناد للعضو</PA2Label>
+                <PA2Segmented
+                  value={d.deliveryMode}
+                  onChange={v => set("deliveryMode", v)}
+                  options={[
+                    { value: "direct", label: "عرض مباشر" },
+                    { value: "series", label: "سلسلة متتابعة من البداية" }
+                  ]}
+                />
+              </div>
+              {d.deliveryMode === "series" && (
+                <div className="space-y-2 pt-2 border-t border-stone-200/70">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-stone-700">حلقات السلسلة بالترتيب ({(d.seriesItems || []).length})</span>
+                    <button type="button" onClick={() => setShowAddEp(v => !v)} className="text-[12px] font-semibold text-orange-700 hover:underline">
+                      {showAddEp ? "إلغاء" : "+ إضافة حلقة"}
+                    </button>
+                  </div>
+                  <p className="text-[12px] text-stone-500 leading-relaxed">
+                    حتى لو دخل العضو متأخراً، ستظهر له السلسلة من الحلقة الأولى ويتفتح له كل أسبوع ما يليه بترتيب إدخالها.
+                  </p>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {(d.seriesItems || []).map((ep, idx) => (
+                      <div key={ep.id} className="rounded-xl bg-white px-3 py-2 flex items-center justify-between gap-2 text-[13px]">
+                        <span className="truncate font-medium text-stone-800">{idx + 1}. {ep.title}</span>
+                        {(d.seriesItems || []).length > 1 && (
+                          <button type="button" onClick={() => removeEpisodeFromSeries(ep.id)} className="text-[12px] text-rose-600 hover:underline shrink-0">حذف</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {showAddEp && (
+                    <div className="rounded-xl bg-white p-3 space-y-2 border border-stone-200">
+                      <input value={newEp.title} onChange={e => setNewEp(p => ({ ...p, title: e.target.value }))} placeholder="عنوان الحلقة الجديدة" className={pa2InputCls} />
+                      <input value={newEp.instructions} onChange={e => setNewEp(p => ({ ...p, instructions: e.target.value }))} placeholder="وصف مختصر أو تعليمات الحلقة" className={pa2InputCls} />
+                      {d.type === "lecture_quiz" && (
+                        <input dir="ltr" value={newEp.videoUrl} onChange={e => setNewEp(p => ({ ...p, videoUrl: e.target.value }))} placeholder="https://... رابط فيديو الحلقة" className={pa2InputCls} />
+                      )}
+                      <button type="button" onClick={addEpisodeToSeries} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold">حفظ الحلقة في السلسلة</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {d.type === "lecture_quiz" && (
+            <div className="space-y-4 rounded-2xl bg-[#F4F2EE] p-4">
+              <div>
+                <PA2Label>نمط المحاضرة والاختبار</PA2Label>
+                <PA2Segmented
+                  value={d.lectureMode}
+                  onChange={v => set("lectureMode", v)}
+                  options={[
+                    { value: "lecture_and_quiz", label: "محاضرة بأسئلة" },
+                    { value: "lecture_only", label: "محاضرة فقط" },
+                    { value: "quiz_only", label: "اختبار فقط" }
+                  ]}
+                />
+              </div>
+
+              {d.lectureMode !== "quiz_only" && d.deliveryMode !== "series" && (
+                <div className="space-y-3 pt-2 border-t border-stone-200/70">
+                  <div>
+                    <PA2Label>عنوان المحاضرة</PA2Label>
+                    <input value={d.lectureTitle} onChange={e => set("lectureTitle", e.target.value)} className={pa2InputCls} placeholder="عنوان المحاضرة المعروضة للعضو" />
+                  </div>
+                  <div>
+                    <PA2Label hint="يوتيوب أو MP4">رابط الفيديو المباشر</PA2Label>
+                    <input dir="ltr" value={d.videoUrl} onChange={e => set("videoUrl", e.target.value)} className={pa2InputCls} placeholder="https://..." />
+                  </div>
+                </div>
+              )}
+
+              {d.lectureMode !== "lecture_only" && (
+                <div className="space-y-3 pt-2 border-t border-stone-200/70">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[13px] font-semibold text-stone-800">عدد الأسئلة التي تظهر لكل عضو</span>
+                    <PA2Stepper value={d.questionsPerMember} min={1} max={Math.max(1, (d.questionPool || []).length)} onChange={v => set("questionsPerMember", v)} suffix="أسئلة" />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[13px] text-stone-700">اختيار وترتيب عشوائي مختلف لكل عضو</span>
+                    <PA2Switch checked={d.shuffleQuestions} onChange={v => set("shuffleQuestions", v)} />
+                  </div>
+
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[12px] font-semibold text-stone-700">بنك الأسئلة ({(d.questionPool || []).length} سؤالاً)</span>
+                      <button type="button" onClick={() => setShowAddQ(v => !v)} className="text-[12px] font-semibold text-orange-700 hover:underline">
+                        {showAddQ ? "إلغاء" : "+ إضافة سؤال للبنك"}
+                      </button>
+                    </div>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {(d.questionPool || []).map((q, qi) => (
+                        <div key={q.id} className="rounded-xl bg-white px-3 py-2 flex items-start justify-between gap-2 text-[12px]">
+                          <span className="text-stone-800 leading-snug">{qi + 1}. {q.text}</span>
+                          {(d.questionPool || []).length > 1 && (
+                            <button type="button" onClick={() => removeQuestionFromPool(q.id)} className="text-rose-600 hover:underline shrink-0">حذف</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {showAddQ && (
+                      <div className="mt-2 rounded-xl bg-white p-3 space-y-2 border border-stone-200">
+                        <input value={newQ.text} onChange={e => setNewQ(p => ({ ...p, text: e.target.value }))} placeholder="نص السؤال الجديد" className={pa2InputCls} />
+                        <div className="grid grid-cols-2 gap-2">
+                          {newQ.options.map((opt, oi) => (
+                            <input key={oi} value={opt} onChange={e => {
+                              const next = [...newQ.options]; next[oi] = e.target.value;
+                              setNewQ(p => ({ ...p, options: next }));
+                            }} placeholder={`الخيار ${oi + 1}`} className={pa2InputCls} />
+                          ))}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <select value={newQ.correctIndex} onChange={e => setNewQ(p => ({ ...p, correctIndex: Number(e.target.value) }))} className="h-9 rounded-xl bg-[#F4F2EE] px-3 text-[12px] text-stone-700">
+                            <option value={0}>الإجابة الصحيحة: الخيار 1</option>
+                            <option value={1}>الإجابة الصحيحة: الخيار 2</option>
+                            <option value={2}>الإجابة الصحيحة: الخيار 3</option>
+                            <option value={3}>الإجابة الصحيحة: الخيار 4</option>
+                          </select>
+                          <button type="button" onClick={addQuestionToPool} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold">إضافة السؤال</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {d.type === "agenda_minutes" && (
+            <div className="rounded-2xl bg-[#F4F2EE] p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[13px] font-semibold text-stone-900">تفعيل الخانات الخمس المقسّمة لأجندة اللقاء</div>
+                  <div className="text-[12px] text-stone-500">خاطرة إيمانية · تحديثات إدارية · مراجعة الأسبوع الماضي · تحدي العصف الذهني · إسنادات الأسبوع القادم</div>
+                </div>
+                <PA2Switch checked={Boolean(d.useStructuredAgenda)} onChange={v => set("useStructuredAgenda", v)} />
+              </div>
+            </div>
+          )}
+
           {d.type === "daily_habit" ? (
             <div className="flex items-center justify-between">
               <PA2Label>الأيام المطلوبة أسبوعياً</PA2Label>
               <PA2Stepper value={d.targetDays} min={1} max={7} onChange={v => set("targetDays", v)} suffix="أيام" />
             </div>
           ) : !fixedSelf && (
-            <div>
-              <PA2Label>طريقة الاعتماد</PA2Label>
-              <PA2Segmented value={d.approval} onChange={v => set("approval", v)} options={[{ value: "self", label: "يؤكدها العضو" }, { value: "manager", label: "يعتمدها المدير" }]} />
+            <div className="space-y-3">
+              <div>
+                <PA2Label>طريقة الاعتماد</PA2Label>
+                <PA2Segmented
+                  value={d.approval}
+                  onChange={v => set("approval", v)}
+                  options={[
+                    { value: "self", label: "اعتماد فوري" },
+                    { value: "manager", label: "مدير الإدارة" },
+                    { value: "person", label: "شخص في الإدارة" }
+                  ]}
+                />
+              </div>
+              {d.approval === "person" && (
+                <div>
+                  <PA2Label hint="مثال: مسؤول تسميع الورد أو مراجع التكليف">الشخص الموكل إليه الاعتماد</PA2Label>
+                  <select value={d.approverUserId} onChange={e => set("approverUserId", e.target.value)} className={pa2InputCls}>
+                    {candidates.map(u => (
+                      <option key={u.id} value={u.id}>{pa2Short(u.name)} ({u.jobTitle || u.unit || "عضو"})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
+
           <div>
             <PA2Label hint="اختياري">تعليمات للعضو</PA2Label>
             <textarea value={d.instructions} onChange={e => set("instructions", e.target.value)} rows={3} className={`${pa2InputCls} h-auto py-3 resize-none`} />
@@ -7388,6 +8152,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         username: user?.username || "",
         jobTitle: user?.jobTitle || "",
         unit: user?.unit || units[0]?.name || "",
+        deptTeamId: user?.deptTeamId || "",
         assignedDepartments: Array.isArray(user?.assignedDepartments) ? user.assignedDepartments : depts.map(x => x.id),
         password: isNew ? pa2TempPassword() : ""
       }));
@@ -7395,14 +8160,14 @@ CREATE POLICY "Allow public upload on madyan-media"
       const set = (k, v) => setD(p => ({ ...p, [k]: v }));
       const toggleDept = (id) => set("assignedDepartments", d.assignedDepartments.includes(id) ? d.assignedDepartments.filter(x => x !== id) : [...d.assignedDepartments, id]);
       const same = (a, b) => a.length === b.length && a.every(x => b.includes(x));
-      const dirty = isNew ? (d.name.trim() && d.username.trim()) : (d.name !== user.name || d.username !== user.username || d.jobTitle !== (user.jobTitle || "") || d.unit !== (user.unit || "") || !same(d.assignedDepartments, user.assignedDepartments || []));
+      const dirty = isNew ? (d.name.trim() && d.username.trim()) : (d.name !== user.name || d.username !== user.username || d.jobTitle !== (user.jobTitle || "") || d.unit !== (user.unit || "") || (d.deptTeamId || "") !== (user.deptTeamId || "") || !same(d.assignedDepartments, user.assignedDepartments || []));
       const save = () => {
         setErr("");
         const uname = d.username.trim().toLowerCase();
         if (!d.name.trim() || !uname) { setErr("الاسم واسم المستخدم مطلوبان"); return; }
         if (!/^[a-z0-9._-]{3,}$/.test(uname)) { setErr("اسم المستخدم بالإنجليزية 3 أحرف على الأقل، بدون مسافات"); return; }
         if (isUsernameTaken(uname, user?.id)) { setErr("اسم المستخدم مستخدم بالفعل"); return; }
-        onSave({ ...d, name: d.name.trim(), username: uname, jobTitle: d.jobTitle.trim() });
+        onSave({ ...d, name: d.name.trim(), username: uname, jobTitle: d.jobTitle.trim(), deptTeamId: d.deptTeamId || null });
       };
       return (
         <PA2PanelShell eyebrow={isNew ? "عضو جديد" : (user.unit || "عضو")} title={d.name || "عضو جديد"} onClose={onClose}
@@ -7412,16 +8177,25 @@ CREATE POLICY "Allow public upload on madyan-media"
             <div><PA2Label>اسم المستخدم</PA2Label><input dir="ltr" value={d.username} onChange={e => set("username", e.target.value)} className={pa2InputCls} /></div>
             <div><PA2Label hint="اختياري">المسمى</PA2Label><input value={d.jobTitle} onChange={e => set("jobTitle", e.target.value)} className={pa2InputCls} /></div>
           </div>
-          <div>
-            <PA2Label>الوحدة</PA2Label>
-            <select value={d.unit} onChange={e => set("unit", e.target.value)} className={pa2InputCls}>
-              {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-            </select>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <PA2Label>الوحدة</PA2Label>
+              <select value={d.unit} onChange={e => set("unit", e.target.value)} className={pa2InputCls}>
+                {units.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <PA2Label hint="اختياري">فريق الإدارة الداخلي</PA2Label>
+              <select value={d.deptTeamId} onChange={e => set("deptTeamId", e.target.value)} className={pa2InputCls}>
+                <option value="">عضو وحدة (عام)</option>
+                {depts.map(x => <option key={x.id} value={x.id}>فريق {x.shortName || x.name}</option>)}
+              </select>
+            </div>
           </div>
           <div>
-            <PA2Label hint="بدون إدارات = لا مهام">تصله مهام من</PA2Label>
+            <PA2Label hint="تحدد الإدارات التي تصله إسناداتها">تصله إسنادات من</PA2Label>
             <div className="space-y-2">
-              {depts.map((x, i) => (
+              {depts.map((x) => (
                 <div key={x.id} className="flex items-center justify-between rounded-2xl bg-[#F4F2EE] px-4 h-12">
                   <span className="text-[14px] text-stone-700">{x.name}</span>
                   <PA2Switch checked={d.assignedDepartments.includes(x.id)} onChange={() => toggleDept(x.id)} />
@@ -7447,13 +8221,278 @@ CREATE POLICY "Allow public upload on madyan-media"
       if (isNew) {
         const id = "u_" + Date.now().toString(36);
         setDb(prev => ({ ...prev, users: [...prev.users, {
-          id, roleType: "cadre", name: draft.name, username: draft.username, password: draft.password, mustChangePassword: true,
-          jobTitle: draft.jobTitle, unit: draft.unit, assignedDepartments: draft.assignedDepartments, joinedAt: Date.now(), tasksRecord: {}, profile: {}
+          id, roleType: "cadre", name: draft.name, username: draft.username, password: mxHashPw(draft.password), mustChangePassword: true,
+          jobTitle: draft.jobTitle, unit: draft.unit, deptTeamId: draft.deptTeamId || null, assignedDepartments: draft.assignedDepartments, joinedAt: Date.now(), tasksRecord: {}, profile: {}
         }] }));
         return id;
       }
-      setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === user.id ? { ...u, name: draft.name, username: draft.username, jobTitle: draft.jobTitle, unit: draft.unit, assignedDepartments: draft.assignedDepartments } : u) }));
+      setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === user.id ? { ...u, name: draft.name, username: draft.username, jobTitle: draft.jobTitle, unit: draft.unit, deptTeamId: draft.deptTeamId || null, assignedDepartments: draft.assignedDepartments } : u) }));
       return user.id;
+    }
+
+    // ---------- بوابة مدير الوحدة (الواجهة الأولى من الواجهة المزدوجة لمدير الوحدة: إدارة الوحدة ⇄ إسناداتي) ----------
+    function UnitLeaderPortalV3({ db, setDb, currentUser, unit, onLogout, showToast, modeSwitch }) {
+      const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+      const rules = mxRules(db);
+      const [view, setView] = useState("follow");
+      const [sel, setSel] = useState(null);
+      const [statusF, setStatusF] = useState("all");
+
+      const members = db.users.filter(u => u.unit === unit.name && u.id !== me.id && !mxIsLeaderRole(u));
+      const allUnitDefs = mxUnitTaskDefs(db, unit.id, true);
+      const activeUnitDefs = mxUnitTaskDefs(db, unit.id, false);
+      const pending = mxPendingUnitApprovals(db, unit);
+      const directives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+
+      const rows = members.map(u => {
+        const week = mxCurrentWeek(u);
+        const s = mxWeekSummary(db, u, week);
+        return { user: u, week, pct: s.pct, done: s.done, total: s.total, status: mxStatusOf(s.pct), recentPct: mxRecentPct(db, u, 4) };
+      });
+      const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+      const counts = { committed: 0, behind: 0, not_started: 0 };
+      rows.forEach(r => counts[r.status.key]++);
+
+      const myWeek = mxCurrentWeek(me);
+      const myAgendaRec = mxRec(me, myWeek, "exec_unit_agenda");
+
+      const patchUnitTasks = (fn) => setDb(prev => {
+        const sc = prev.systemConfig || {};
+        const ut = { ...(sc.unitTasks || {}) };
+        ut[unit.id] = fn([...(ut[unit.id] || [])]);
+        return { ...prev, systemConfig: { ...sc, unitTasks: ut } };
+      });
+
+      const approve = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: p.rec.lateSubmit ? "late" : "on_time", completedAt: Date.now(), approvedBy: me.id });
+        showToast("تم اعتماد إسناد العضو");
+      };
+      const reject = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: "rejected", rejectedBy: me.id });
+        showToast("أُعيد للمراجعة");
+      };
+
+      const unitBulletins = (db.bulletins || []).filter(b => b.targetType === "unit" && b.targetUnit === unit.name);
+      const [bulDraft, setBulDraft] = useState({ title: "", content: "", category: "تعميم وحدة" });
+      const publishUnitBulletin = () => {
+        if (bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5) return;
+        const b = {
+          id: "bul_" + Date.now().toString(36),
+          title: bulDraft.title.trim(),
+          content: bulDraft.content.trim(),
+          category: bulDraft.category || "تعميم وحدة",
+          senderId: me.id,
+          senderName: pa2Short(me.name),
+          senderRole: `مدير ${unit.name}`,
+          createdAt: mxNowStamp(),
+          createdAtTs: Date.now(),
+          targetType: "unit",
+          targetUnit: unit.name,
+          recipientIds: [],
+          acknowledgedBy: {}
+        };
+        setDb(prev => ({ ...prev, bulletins: [b, ...(prev.bulletins || [])] }));
+        setBulDraft({ title: "", content: "", category: "تعميم وحدة" });
+        setSel(null);
+        showToast(`نُشر التعميم لأفراد ${unit.name}`);
+      };
+
+      const nav = [
+        { id: "follow", label: "متابعة الوحدة", icon: "chart", badge: (pending.length + directives.length) || null },
+        { id: "tasks", label: "إسنادات الوحدة", icon: "tasks" },
+        { id: "bulletins", label: "تعميمات الوحدة", icon: "megaphone" }
+      ];
+      const go = (v, s = null) => { setView(v); setSel(s); window.scrollTo({ top: 0 }); };
+
+      let main = null, panel = null;
+      if (view === "follow") {
+        const filteredRows = rows
+          .filter(r => statusF === "all" || r.status.key === statusF)
+          .sort((a, b) => a.pct - b.pct);
+        const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+        if (selUser) {
+          panel = (
+            <MXMemberFollowPanel
+              db={db}
+              customDefs={mxUserTasks(db, selUser)}
+              customPending={pending}
+              user={selUser}
+              onApprove={approve}
+              onReject={reject}
+              onClose={() => setSel(null)}
+            />
+          );
+        }
+        main = (
+          <>
+            <MXHeader
+              eyebrow={unit.name}
+              title="متابعة أفراد الوحدة"
+              desc={`متابعة التزام ${rows.length} أعضاء في ${unit.name} بإسناداتهم هذا الأسبوع.`}
+              actions={<MXPrimaryBtn onClick={() => go("tasks", { kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد للوحدة</MXPrimaryBtn>}
+            />
+            <MXDirectiveStrip directives={directives} onRead={(id) => mxMarkDirectiveRead(setDb, id)} />
+            <MXScoreCard
+              label={`التزام ${unit.name} هذا الأسبوع`}
+              pct={avg}
+              caption={`${rows.length} أعضاء · ${activeUnitDefs.length} إسنادات داخلية`}
+              bars={activeUnitDefs.map(t => {
+                const dCount = rows.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length;
+                const p = rows.length ? Math.round((dCount / rows.length) * 100) : 0;
+                return { label: t.title, value: `${dCount} / ${rows.length}`, pct: p, tone: "bg-teal-500" };
+              })}
+              stats={[{ n: counts.committed, l: "ملتزم" }, { n: counts.behind, l: "متأخر" }, { n: counts.not_started, l: "لم يبدأ" }]}
+            />
+
+            <MXCard className="p-6 mb-8">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <div className="text-[13px] font-medium text-orange-700">أجندة الاجتماع الأسبوعي</div>
+                  <div className="text-[17px] font-bold text-stone-900 mt-0.5">أجندة لقاء {unit.name} (المحاور الخمسة)</div>
+                </div>
+                {modeSwitch && (
+                  <button onClick={() => modeSwitch.onChange("mine")} className="h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800">
+                    {myAgendaRec?.agendaFields ? "تعديل الأجندة في إسناداتي" : "كتابة الأجندة في إسناداتي"}
+                  </button>
+                )}
+              </div>
+              {myAgendaRec?.agendaFields ? (
+                <MXAgendaFieldsPreview fields={myAgendaRec.agendaFields} />
+              ) : (
+                <p className="text-[13px] text-stone-500 mt-2">لم تُملأ محاور أجندة هذا الأسبوع بعد. افتح «إسناداتي» لملء المحاور الخمسة وحفظها في مساحتك وإرسالها للمكتب التنفيذي.</p>
+              )}
+            </MXCard>
+
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`}>
+              <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                  <h2 className="text-xl font-bold text-stone-900">أفراد الوحدة</h2>
+                  <PA2Segmented size="sm" value={statusF} onChange={setStatusF} options={[{ value: "all", label: "الكل" }, { value: "committed", label: "ملتزم" }, { value: "behind", label: "متأخر" }, { value: "not_started", label: "لم يبدأ" }]} />
+                </div>
+                <div className="bg-white rounded-[28px] p-2">
+                  {filteredRows.map(r => {
+                    const active = selUser?.id === r.user.id;
+                    const uPend = pending.filter(p => p.user.id === r.user.id).length;
+                    return (
+                      <button key={r.user.id} onClick={() => setSel(active ? null : { kind: "member", id: r.user.id })} className={`w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`}>
+                        <PA2Avatar user={r.user} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(r.user.name)}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{r.user.jobTitle || "عضو"}</span>
+                        </span>
+                        {uPend > 0 && <span className="h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] inline-flex items-center">{uPend} للاعتماد</span>}
+                        <span className="hidden md:block w-28"><MXProgress pct={r.pct} /></span>
+                        <span className="w-12 text-left text-[14px] font-semibold tabular-nums text-stone-900">{r.pct}%</span>
+                        <span className="hidden sm:block"><MXStatusPill status={r.status} /></span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "tasks") {
+        const selDef = sel?.kind === "task" ? (sel.id === "__new" ? "__new" : allUnitDefs.find(t => t.id === sel.id)) : null;
+        if (selDef) {
+          panel = (
+            <MXTaskDefPanel
+              key={sel.id}
+              db={db}
+              scopeMode="unit"
+              def={selDef === "__new" ? null : selDef}
+              isNew={selDef === "__new"}
+              allowedTypes={["practical", "meeting", "reading", "agenda_minutes", "daily_habit"]}
+              onClose={() => setSel(null)}
+              onDelete={() => { patchUnitTasks(list => list.filter(t => t.id !== selDef.id)); setSel(null); showToast("حُذف الإسناد"); }}
+              onSave={(draft) => {
+                if (selDef === "__new") {
+                  const id = "ut_" + Date.now().toString(36);
+                  patchUnitTasks(list => [...list, { id, ...draft, enabled: true }]);
+                  setSel({ kind: "task", id });
+                  showToast(`أُضيف الإسناد لأفراد ${unit.name}`);
+                } else {
+                  patchUnitTasks(list => list.map(t => t.id === selDef.id ? { ...t, ...draft } : t));
+                  showToast("تم حفظ الإسناد");
+                }
+              }}
+            />
+          );
+        }
+        main = (
+          <>
+            <MXHeader
+              eyebrow={unit.name}
+              title="إسنادات الوحدة"
+              desc={`إسنادات خاصة بأفراد ${unit.name} (${rows.length} أعضاء).`}
+              actions={<MXPrimaryBtn onClick={() => setSel({ kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد جديد</MXPrimaryBtn>}
+            />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+              <div className="space-y-2 min-w-0">
+                {allUnitDefs.length === 0 && <PA2EmptyPanel title="لا توجد إسنادات خاصة بالوحدة" text="أضف أول إسناد ليظهر لأفراد وحدتك." />}
+                {allUnitDefs.map(t => {
+                  const active = sel?.id === t.id;
+                  const off = t.enabled === false;
+                  return (
+                    <div key={t.id} className={`flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`}>
+                      <button onClick={() => setSel(active ? null : { kind: "task", id: t.id })} className="flex-1 min-w-0 flex items-center gap-4 text-right">
+                        <span className="w-11 h-11 rounded-full bg-teal-50 text-teal-800 inline-flex items-center justify-center text-[18px] shrink-0">{MX_TYPE_META[t.type]?.icon}</span>
+                        <span className="min-w-0">
+                          <span className={`block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`}>{t.title}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{MX_TYPE_META[t.type]?.label} · {mxApproval(t) === "manager" ? "يعتمده مدير الوحدة" : "يؤكده العضو"}</span>
+                        </span>
+                      </button>
+                      <PA2Switch checked={!off} onChange={(v) => patchUnitTasks(list => list.map(x => x.id === t.id ? { ...x, enabled: v } : x))} />
+                    </div>
+                  );
+                })}
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
+      if (view === "bulletins") {
+        main = (
+          <>
+            <MXHeader eyebrow={unit.name} title="تعميمات الوحدة" desc={`إرسال تعميم خاص لأفراد ${unit.name} ومتابعة اطلاعهم.`} />
+            <div className="grid lg:grid-cols-[1fr_380px] gap-6 items-start">
+              <div className="space-y-3">
+                {unitBulletins.length === 0 ? <PA2EmptyPanel title="لا توجد تعميمات خاصة بالوحدة بعد" text="انشر تعميماً من النموذج الجانبي ليصل لأفراد وحدتك." /> : unitBulletins.map(b => {
+                  const rec = mxBulletinRecipients(db, b);
+                  const acked = rec.filter(u => mxIsAcked(b, u.id)).length;
+                  return (
+                    <MXCard key={b.id} className="p-5">
+                      <div className="flex items-center justify-between text-[12px] text-stone-400">
+                        <span>{b.category} · {b.createdAt}</span>
+                        <span className="text-stone-700 font-semibold">اطّلع {acked} / {rec.length}</span>
+                      </div>
+                      <div className="text-[16px] font-semibold text-stone-900 mt-2">{b.title}</div>
+                      <p className="text-[14px] text-stone-600 mt-1 leading-relaxed whitespace-pre-line">{b.content}</p>
+                    </MXCard>
+                  );
+                })}
+              </div>
+              <MXCard className="p-6 space-y-4">
+                <div className="text-[16px] font-semibold text-stone-900">تعميم جديد لأفراد {unit.name}</div>
+                <div><PA2Label>العنوان</PA2Label><input value={bulDraft.title} onChange={e => setBulDraft(p => ({ ...p, title: e.target.value }))} className={pa2InputCls} placeholder="عنوان التعميم" /></div>
+                <div><PA2Label>النص</PA2Label><textarea value={bulDraft.content} onChange={e => setBulDraft(p => ({ ...p, content: e.target.value }))} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none`} placeholder="نص التعميم لأفراد وحدتك..." /></div>
+                <MXPrimaryBtn onClick={publishUnitBulletin} disabled={bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5}><PA2Icon name="send" className="w-4 h-4" />نشر لأفراد الوحدة</MXPrimaryBtn>
+              </MXCard>
+            </div>
+          </>
+        );
+      }
+
+      return (
+        <MXShell areaLabel={unit.name} chip="إدارة وحدة" modeSwitch={modeSwitch} nav={nav} active={view} onNav={(v) => go(v)} user={me} roleLabel={`مدير ${unit.name}`} onLogout={onLogout}>
+          {main}
+        </MXShell>
+      );
     }
 
     function OperationalPortalV3({ db, setDb, currentUser, isUsernameTaken, onLogout, showToast, modeSwitch }) {
@@ -7471,6 +8510,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       const [unitF, setUnitF] = useState("all");
       const [q, setQ] = useState("");
       const [descDraft, setDescDraft] = useState(dept?.description || "");
+      const [bulDraft, setBulDraft] = useState({ title: "", content: "", category: "تعميم فريق الإدارة" });
 
       if (!dept) {
         return (
@@ -7486,6 +8526,8 @@ CREATE POLICY "Allow public upload on madyan-media"
       const allowedTypes = (dept.allowedTaskTypes || []).filter(t => MX_TYPE_META[t]);
       const maxTasks = dept.maxTotalTasks || 6;
       const units = mxUnits(db);
+      const deptTeamMembers = db.users.filter(u => u.deptTeamId === deptId);
+      const deptBulletins = (db.bulletins || []).filter(b => (b.targetType === "dept_team" || b.targetType === "dept") && b.targetDeptId === deptId);
 
       const go = (v, s = null) => { setView(v); setSel(s); window.scrollTo({ top: 0 }); };
 
@@ -7503,22 +8545,45 @@ CREATE POLICY "Allow public upload on madyan-media"
         return { ...prev, systemConfig: { ...sc, deptTasks: all } };
       });
 
+      const publishTeamBulletin = () => {
+        if (bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5) return;
+        const b = {
+          id: "bul_" + Date.now().toString(36),
+          title: bulDraft.title.trim(),
+          content: bulDraft.content.trim(),
+          category: bulDraft.category || "تعميم فريق الإدارة",
+          senderId: me.id,
+          senderName: pa2Short(me.name),
+          senderRole: `مدير ${dept.shortName || dept.name}`,
+          createdAt: mxNowStamp(),
+          createdAtTs: Date.now(),
+          targetType: "dept_team",
+          targetDeptId: deptId,
+          recipientIds: [],
+          acknowledgedBy: {}
+        };
+        setDb(prev => ({ ...prev, bulletins: [b, ...(prev.bulletins || [])] }));
+        setBulDraft({ title: "", content: "", category: "تعميم فريق الإدارة" });
+        showToast(`نُشر التعميم لأفراد فريق ${dept.shortName || dept.name}`);
+      };
+
       // ----- يحتاج انتباهك -----
       const attention = [];
       const pendByUser = {};
       stats.pending.forEach(p => { (pendByUser[p.user.id] = pendByUser[p.user.id] || []).push(p); });
       Object.values(pendByUser).forEach(list => attention.push({
         key: "ap_" + list[0].user.id,
-        text: `${pa2Short(list[0].user.name)} — ${list.length === 1 ? list[0].task.title : `${list.length} مهام`} بانتظار اعتمادك`,
-        go: () => { setView("follow"); setSel({ kind: "member", id: list[0].user.id }); setTimeout(() => { const el = document.getElementById("mx-members"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60); },
+        text: `${pa2Short(list[0].user.name)} — ${list.length === 1 ? list[0].task.title : `${list.length} إسنادات`} بانتظار اعتمادك`,
+        go: () => go("follow", { kind: "member", id: list[0].user.id }),
         cta: "اعتماد"
       }));
-      if (stats.counts.not_started > 0) attention.push({ key: "ns", text: `${stats.counts.not_started} ${stats.counts.not_started === 1 ? "عضو لم يبدأ" : "أعضاء لم يبدؤوا"} مهام هذا الأسبوع`, go: () => { setStatusF("not_started"); setSel(null); }, cta: "عرض" });
+      if (stats.counts.not_started > 0) attention.push({ key: "ns", text: `${stats.counts.not_started} ${stats.counts.not_started === 1 ? "عضو لم يبدأ" : "أعضاء لم يبدؤوا"} إسنادات هذا الأسبوع`, go: () => { setStatusF("not_started"); setSel(null); }, cta: "عرض" });
       if (me.mustChangePassword) attention.push({ key: "pw", text: "ما زلت تستخدم كلمة مرور مؤقتة", go: () => modeSwitch ? modeSwitch.onChange("mine") : null, cta: "تغيير" });
 
       const nav = [
         { id: "follow", label: "المتابعة", icon: "chart", badge: (stats.pending.length + directives.length) || null },
-        { id: "tasks", label: "المهمات", icon: "tasks" },
+        { id: "tasks", label: "الإسنادات", icon: "tasks" },
+        { id: "bulletins", label: "تعميمات الفريق", icon: "megaphone" },
         { id: "members", label: isHR ? "الأعضاء والوحدات" : "الأعضاء", icon: "users" },
         { id: "settings", label: "الإعدادات", icon: "cog" }
       ];
@@ -7529,30 +8594,31 @@ CREATE POLICY "Allow public upload on madyan-media"
       if (view === "follow") {
         const rows = stats.rows
           .filter(r => statusF === "all" || r.status.key === statusF)
-          .filter(r => unitF === "all" || r.user.unit === unitF)
+          .filter(r => unitF === "all" || (unitF === "__team" ? r.user.deptTeamId === deptId : r.user.unit === unitF))
           .sort((a, b) => a.pct - b.pct || pa2Short(a.user.name).localeCompare(pa2Short(b.user.name), "ar"));
         const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
         if (selUser) panel = <MXMemberFollowPanel db={db} deptId={deptId} user={selUser} onApprove={approve} onReject={reject} onClose={() => setSel(null)} />;
         main = (
           <>
-            <MXHeader eyebrow={dept.name} title="المتابعة" desc={`التزام ${stats.rows.length} عضواً بمهام الإدارة في أسبوعهم الحالي.`}
-              actions={<MXPrimaryBtn onClick={() => go("tasks", { kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />مهمة جديدة</MXPrimaryBtn>} />
+            <MXHeader eyebrow={dept.name} title="المتابعة" desc={`التزام ${stats.rows.length} عضواً بإسنادات الإدارة في أسبوعهم الحالي.`}
+              actions={<MXPrimaryBtn onClick={() => go("tasks", { kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد جديد</MXPrimaryBtn>} />
             <MXDirectiveStrip directives={directives} onRead={(id) => mxMarkDirectiveRead(setDb, id)} />
             <MXAttention title="يحتاج انتباهك" items={attention} emptyText="لا اعتمادات معلّقة، والجميع بدأ أسبوعه." primaryLabel={stats.pending.length ? "ابدأ الاعتماد" : "عرض"} />
             <MXScoreCard
               label="التزام الإدارة هذا الأسبوع"
               pct={stats.avg}
-              caption={`${stats.defs.length} مهام · ${stats.rows.length} عضواً`}
+              caption={`${stats.defs.length} إسنادات · ${stats.rows.length} عضواً`}
               bars={stats.byUnit.map(b => ({ label: b.unit.name, value: `${b.pct}%`, pct: b.pct, tone: tone.dot }))}
               stats={[{ n: stats.counts.committed, l: "ملتزم" }, { n: stats.counts.behind, l: "متأخر" }, { n: stats.counts.not_started, l: "لم يبدأ" }]}
             />
-            <div id="mx-members" className={`grid gap-6 items-start scroll-mt-6 ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`}>
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`}>
               <div className="min-w-0">
                 <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                   <h2 className="text-xl font-bold text-stone-900">الأعضاء</h2>
                   <div className="flex items-center gap-2 flex-wrap">
                     <select value={unitF} onChange={e => setUnitF(e.target.value)} className="h-9 rounded-full bg-[#ECE9E3] px-4 text-[13px] text-stone-700 focus:outline-none">
-                      <option value="all">كل الوحدات</option>
+                      <option value="all">كل الوحدات ({stats.rows.length})</option>
+                      <option value="__team">فريق {dept.shortName || dept.name} الداخلي ({deptTeamMembers.length})</option>
                       {stats.byUnit.map(b => <option key={b.unit.id} value={b.unit.name}>{b.unit.name}</option>)}
                     </select>
                     <PA2Segmented size="sm" value={statusF} onChange={setStatusF} options={[{ value: "all", label: "الكل" }, { value: "committed", label: "ملتزم" }, { value: "behind", label: "متأخر" }, { value: "not_started", label: "لم يبدأ" }]} />
@@ -7568,7 +8634,7 @@ CREATE POLICY "Allow public upload on madyan-media"
                         <PA2Avatar user={r.user} />
                         <span className="flex-1 min-w-0">
                           <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(r.user.name)}</span>
-                          <span className="block text-[13px] text-stone-400 truncate">{r.user.unit}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{r.user.unit}{r.user.deptTeamId === deptId ? ` · فريق ${dept.shortName || dept.name}` : ""}</span>
                         </span>
                         {pend > 0 && <span className="hidden sm:inline-flex h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] items-center">{pend} للاعتماد</span>}
                         <span className="hidden md:block w-28"><MXProgress pct={r.pct} /></span>
@@ -7579,7 +8645,7 @@ CREATE POLICY "Allow public upload on madyan-media"
                   })}
                 </div>
                 <div className="mt-10">
-                  <MXSectionTitle>إنجاز كل مهمة</MXSectionTitle>
+                  <MXSectionTitle>إنجاز كل إسناد</MXSectionTitle>
                   <div className="bg-white rounded-[28px] p-6 grid sm:grid-cols-2 gap-x-10 gap-y-5">
                     {stats.byTask.map(b => {
                       const pct = b.total ? Math.round((b.done / b.total) * 100) : 0;
@@ -7604,46 +8670,54 @@ CREATE POLICY "Allow public upload on madyan-media"
         const atCap = allDefs.length >= maxTasks;
         if (selDef) {
           panel = (
-            <MXTaskDefPanel key={sel.id} def={selDef === "__new" ? null : selDef} isNew={selDef === "__new"} allowedTypes={allowedTypes.length ? allowedTypes : ["practical"]}
+            <MXTaskDefPanel key={sel.id} db={db} deptId={deptId} scopeMode="dept" def={selDef === "__new" ? null : selDef} isNew={selDef === "__new"} allowedTypes={allowedTypes.length ? allowedTypes : ["practical"]}
               onClose={() => setSel(null)}
-              onDelete={() => { patchDeptTasks(list => list.filter(t => t.id !== selDef.id)); setSel(null); showToast("حُذفت المهمة"); }}
+              onDelete={() => { patchDeptTasks(list => list.filter(t => t.id !== selDef.id)); setSel(null); showToast("حُذف الإسناد"); }}
               onSave={(draft) => {
                 if (selDef === "__new") {
                   if (atCap) return;
                   const id = "t_" + Date.now().toString(36);
                   patchDeptTasks(list => [...list, { id, ...draft, subtitle: "", enabled: true }]);
                   setSel({ kind: "task", id });
-                  showToast("أُضيفت المهمة لكل أعضاء الإدارة");
+                  showToast("أُضيف الإسناد بنجاح");
                 } else {
                   patchDeptTasks(list => list.map(t => t.id === selDef.id ? { ...t, ...draft } : t));
-                  showToast("تم حفظ المهمة");
+                  showToast("تم حفظ إعدادات الإسناد");
                 }
               }} />
           );
         }
         main = (
           <>
-            <MXHeader eyebrow={dept.name} title="المهمات" desc={`تُسند أسبوعياً لكل أعضاء الإدارة (${stats.rows.length} عضواً) دفعة واحدة.`}
-              actions={<MXPrimaryBtn disabled={atCap} onClick={() => setSel({ kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />مهمة جديدة</MXPrimaryBtn>} />
-            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+            <MXHeader eyebrow={dept.name} title="الإسنادات" desc={`تُسند لكافة الوحدات تحت التنفيذي (${stats.rows.length} عضواً) أو لفريق الإدارة الداخلي (${deptTeamMembers.length} أعضاء).`}
+              actions={<MXPrimaryBtn disabled={atCap} onClick={() => setSel({ kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد جديد</MXPrimaryBtn>} />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_440px]" : ""}`}>
               <div className="min-w-0">
-                <div className="text-[13px] text-stone-500 mb-3">{allDefs.length} من {maxTasks} مهام مسموحة{atCap ? " · وصلت للسقف" : ""}</div>
+                <div className="text-[13px] text-stone-500 mb-3">{allDefs.length} من {maxTasks} إسنادات مسموحة{atCap ? " · وصلت للسقف" : ""}</div>
                 <div className="space-y-2">
-                  {allDefs.length === 0 && <PA2EmptyPanel title="لا توجد مهام بعد" text="أضف أول مهمة لتظهر لكل أعضاء الإدارة." />}
+                  {allDefs.length === 0 && <PA2EmptyPanel title="لا توجد إسنادات بعد" text="أضف أول إسناد ليظهر للأعضاء." />}
                   {allDefs.map(t => {
                     const bt = stats.byTask.find(b => b.task.id === t.id);
                     const active = sel?.id === t.id;
                     const off = t.enabled === false;
+                    const approverUser = t.approval === "person" && t.approverUserId ? db.users.find(u => u.id === t.approverUserId) : null;
                     return (
                       <div key={t.id} className={`flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`}>
                         <button onClick={() => setSel(active ? null : { kind: "task", id: t.id })} className="flex-1 min-w-0 flex items-center gap-4 text-right">
                           <span className={`w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${off ? "opacity-40" : ""}`}>{MX_TYPE_META[t.type]?.icon}</span>
                           <span className="min-w-0">
                             <span className={`block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`}>{t.title}</span>
-                            <span className="block text-[13px] text-stone-400 truncate">{MX_TYPE_META[t.type]?.label} · {mxApproval(t) === "manager" && t.type !== "lecture_quiz" && t.type !== "daily_habit" ? "يعتمدها المدير" : "يؤكدها العضو"}{t.type === "daily_habit" ? ` · ${mxTargetDays(t, rules)} أيام` : ""}</span>
+                            <span className="block text-[13px] text-stone-400 truncate">
+                              {MX_TYPE_META[t.type]?.label}
+                              {t.targetScope === "dept_team" ? " · فريق الإدارة فقط" : " · كافة الوحدات"}
+                              {t.deliveryMode === "series" ? ` · سلسلة (${(t.seriesItems || []).length} حلقات)` : ""}
+                              {t.useStructuredAgenda ? " · أجندة 5 محاور" : ""}
+                              {mxApproval(t) === "person" ? ` · يعتمده ${approverUser ? pa2Short(approverUser.name) : "عضو مختص"}` : mxApproval(t) === "manager" && t.type !== "lecture_quiz" && t.type !== "daily_habit" ? " · يعتمده المدير" : " · اعتماد فوري"}
+                              {t.type === "daily_habit" ? ` · ${mxTargetDays(t, rules)} أيام` : ""}
+                            </span>
                           </span>
                         </button>
-                        {!off && bt && <span className="hidden sm:block text-[13px] text-stone-500 tabular-nums whitespace-nowrap">{bt.done} / {bt.total} أنجزوها</span>}
+                        {!off && bt && <span className="hidden sm:block text-[13px] text-stone-500 tabular-nums whitespace-nowrap">{bt.done} / {bt.total} أنجزوه</span>}
                         <PA2Switch checked={!off} onChange={(v) => patchDeptTasks(list => list.map(x => x.id === t.id ? { ...x, enabled: v } : x))} />
                       </div>
                     );
@@ -7656,10 +8730,45 @@ CREATE POLICY "Allow public upload on madyan-media"
         );
       }
 
+      if (view === "bulletins") {
+        main = (
+          <>
+            <MXHeader eyebrow={dept.name} title="تعميمات فريق الإدارة" desc={`توجيه التعميمات الداخلية لأفراد فريق ${dept.shortName || dept.name} (${deptTeamMembers.length} أعضاء) ومتابعة اطلاعهم.`} />
+            <div className="grid lg:grid-cols-[1fr_380px] gap-6 items-start">
+              <div className="space-y-3">
+                {deptBulletins.length === 0 ? <PA2EmptyPanel title="لا توجد تعميمات لفريق الإدارة بعد" text="انشر تعميماً من النموذج الجانبي ليصل لأفراد فريق إدارتك." /> : deptBulletins.map(b => {
+                  const rec = mxBulletinRecipients(db, b);
+                  const acked = rec.filter(u => mxIsAcked(b, u.id)).length;
+                  return (
+                    <MXCard key={b.id} className="p-5">
+                      <div className="flex items-center justify-between text-[12px] text-stone-400">
+                        <span>{b.category} · {mxBulletinTargetLabel(db, b)} · {b.createdAt}</span>
+                        <span className="text-stone-700 font-semibold">اطّلع {acked} / {rec.length}</span>
+                      </div>
+                      <div className="text-[16px] font-semibold text-stone-900 mt-2">{b.title}</div>
+                      <p className="text-[14px] text-stone-600 mt-1 leading-relaxed whitespace-pre-line">{b.content}</p>
+                    </MXCard>
+                  );
+                })}
+              </div>
+              <MXCard className="p-6 space-y-4">
+                <div className="text-[16px] font-semibold text-stone-900">تعميم جديد لفريق {dept.shortName || dept.name}</div>
+                <div className="rounded-2xl bg-[#F4F2EE] px-3.5 py-2.5 text-[12px] text-stone-600">
+                  يصل حصراً لأفراد فريق {dept.shortName || dept.name} الداخلي ({deptTeamMembers.length} أعضاء). التعميمات العامة للحركة تصدر من القيادة التنفيذية والمكتب التنفيذي.
+                </div>
+                <div><PA2Label>العنوان</PA2Label><input value={bulDraft.title} onChange={e => setBulDraft(p => ({ ...p, title: e.target.value }))} className={pa2InputCls} placeholder="عنوان التعميم" /></div>
+                <div><PA2Label>النص</PA2Label><textarea value={bulDraft.content} onChange={e => setBulDraft(p => ({ ...p, content: e.target.value }))} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none`} placeholder="نص التعميم لأفراد فريق إدارتك..." /></div>
+                <MXPrimaryBtn onClick={publishTeamBulletin} disabled={bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5}><PA2Icon name="send" className="w-4 h-4" />نشر لفريق الإدارة</MXPrimaryBtn>
+              </MXCard>
+            </div>
+          </>
+        );
+      }
+
       if (view === "members") {
         const pool = isHR ? db.users.filter(u => u.roleType === "cadre") : stats.rows.map(r => r.user);
         const rowsAll = pool
-          .filter(u => unitF === "all" || u.unit === unitF)
+          .filter(u => unitF === "all" || (unitF === "__team" ? u.deptTeamId === deptId : u.unit === unitF))
           .filter(u => !q.trim() || (u.name || "").includes(q.trim()) || (u.username || "").includes(q.trim().toLowerCase()))
           .sort((a, b) => (a.unit || "").localeCompare(b.unit || "", "ar") || pa2Short(a.name).localeCompare(pa2Short(b.name), "ar"));
         const selUser = sel?.kind === "cadre" ? (sel.id === "__new" ? "__new" : db.users.find(u => u.id === sel.id)) : null;
@@ -7669,7 +8778,7 @@ CREATE POLICY "Allow public upload on madyan-media"
               onClose={() => setSel(null)}
               onSave={(draft) => { const id = mxSaveCadre(setDb, selUser === "__new" ? null : selUser, selUser === "__new", draft); setSel({ kind: "cadre", id }); showToast(selUser === "__new" ? "أُنشئ الحساب" : "تم الحفظ"); }}
               onDelete={() => { setDb(prev => ({ ...prev, users: prev.users.filter(u => u.id !== selUser.id) })); setSel(null); showToast("حُذف الحساب"); }}
-              onResetPassword={() => { const temp = pa2TempPassword(); setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === selUser.id ? { ...u, password: temp, mustChangePassword: true } : u) })); pa2Copy(temp); showToast(`كلمة المرور المؤقتة: ${temp} (نُسخت)`); }} />
+              onResetPassword={() => { const temp = pa2TempPassword(); setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === selUser.id ? { ...u, password: mxHashPw(temp), mustChangePassword: true } : u) })); pa2Copy(temp); showToast(`كلمة المرور المؤقتة: ${temp} (نُسخت)`); }} />
           );
         }
         const unitCards = units.map(un => {
@@ -7681,7 +8790,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         });
         main = (
           <>
-            <MXHeader eyebrow={dept.name} title={isHR ? "الأعضاء والوحدات" : "الأعضاء"} desc={isHR ? "إنشاء حسابات الأعضاء، وتسكينهم في الوحدات، وتحديد الإدارات التي تصلهم مهامها." : "أعضاء الإدارة موزعين على الوحدات. إدارة الحسابات من الموارد البشرية."}
+            <MXHeader eyebrow={dept.name} title={isHR ? "الأعضاء والوحدات" : "الأعضاء"} desc={isHR ? "إنشاء حسابات الأعضاء، وتسكينهم في الوحدات، وتحديد الإدارات التي تصلهم إسناداتها." : "أعضاء الإدارة موزعين على الوحدات وفريق الإدارة. إدارة الحسابات من الموارد البشرية."}
               actions={isHR ? <MXPrimaryBtn onClick={() => setSel({ kind: "cadre", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />عضو جديد</MXPrimaryBtn> : null} />
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-10">
               {unitCards.map(c => (
@@ -7695,7 +8804,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
               <div className="min-w-0">
                 <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                  <h2 className="text-xl font-bold text-stone-900">{unitF === "all" ? "كل الأعضاء" : unitF} <span className="text-stone-400 font-normal text-[15px]">· {rowsAll.length}</span></h2>
+                  <h2 className="text-xl font-bold text-stone-900">{unitF === "all" ? "كل الأعضاء" : unitF === "__team" ? `فريق ${dept.shortName || dept.name}` : unitF} <span className="text-stone-400 font-normal text-[15px]">· {rowsAll.length}</span></h2>
                   <div className="relative">
                     <PA2Icon name="search" className="w-4 h-4 absolute right-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
                     <input value={q} onChange={e => setQ(e.target.value)} placeholder="بحث بالاسم" className="h-10 w-56 rounded-full bg-white pr-10 pl-4 text-[14px] focus:outline-none focus:ring-2 focus:ring-stone-200" />
@@ -7712,9 +8821,9 @@ CREATE POLICY "Allow public upload on madyan-media"
                         <PA2Avatar user={u} />
                         <span className="flex-1 min-w-0">
                           <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(u.name)}</span>
-                          <span className="block text-[13px] text-stone-400 truncate">{u.unit}{u.jobTitle ? ` · ${u.jobTitle}` : ""}</span>
+                          <span className="block text-[13px] text-stone-400 truncate">{u.unit}{u.jobTitle ? ` · ${u.jobTitle}` : ""}{u.deptTeamId ? ` · فريق ${mxDeptById(db, u.deptTeamId)?.shortName || ""}` : ""}</span>
                         </span>
-                        <span className="hidden sm:flex gap-1.5">{ud.length ? ud.map(id => <MXDeptChip key={id} dept={mxDeptById(db, id)} idx={depts.findIndex(x => x.id === id)} />) : <span className="text-[12px] text-stone-400">بلا مهام</span>}</span>
+                        <span className="hidden sm:flex gap-1.5">{ud.length ? ud.map(id => <MXDeptChip key={id} dept={mxDeptById(db, id)} idx={depts.findIndex(x => x.id === id)} />) : <span className="text-[12px] text-stone-400">بلا إسنادات</span>}</span>
                         {isHR && <span dir="ltr" className="hidden md:block w-20 text-[13px] text-stone-400 text-left">{u.username}</span>}
                       </Tag>
                     );
@@ -7730,7 +8839,7 @@ CREATE POLICY "Allow public upload on madyan-media"
       if (view === "settings") {
         const dirty = descDraft !== (dept.description || "");
         const ruleRows = [
-          ["سقف المهمات", `${maxTasks} مهام`],
+          ["سقف الإسنادات", `${maxTasks} إسنادات`],
           ["الأنواع المسموحة", allowedTypes.map(t => MX_TYPE_META[t]?.label).join("، ") || "—"],
           ["نقاط الإنجاز المتأخر", `${rules.latePointsPct}%`],
           ["نسبة النجاح في الاختبار", `${rules.quizPassThresholdPct}%`],
@@ -7773,16 +8882,29 @@ CREATE POLICY "Allow public upload on madyan-media"
     // ==== PART:OPS END ====
 
     // ==== PART:EXEC START ====
-    // ---------- بوابة الإدارة التنفيذية ----------
+    // ---------- بوابة القيادة التنفيذية والمكتب التنفيذي ----------
     const MX_BULLETIN_CATEGORIES = ["تعميم إداري", "سياسة جديدة", "تذكير", "تعميم مشروع", "تهنئة"];
 
-    function MXBulletinComposer({ db, onPublish, onClose }) {
+    function MXBulletinComposer({ db, isHead = true, onPublish, onClose }) {
       const depts = mxDepartments(db).filter(d => d.enabled !== false);
       const units = mxUnits(db);
       const [d, setD] = useState({ title: "", content: "", category: MX_BULLETIN_CATEGORIES[0], targetType: "all", targetDeptId: depts[0]?.id || "", targetUnit: units[0]?.name || "" });
       const set = (k, v) => setD(p => ({ ...p, [k]: v }));
       const reach = mxBulletinRecipients(db, { ...d, senderId: "__none" }).length;
       const ok = d.title.trim().length > 2 && d.content.trim().length > 4;
+      const targetOptions = isHead
+        ? [
+            { value: "all", label: "كل أفراد الحركة" },
+            { value: "exec_office", label: "المكتب التنفيذي" },
+            { value: "unit_leaders", label: "مديرو الوحدات" },
+            { value: "dept", label: "إدارة" },
+            { value: "unit", label: "وحدة" }
+          ]
+        : [
+            { value: "all", label: "كل أفراد الحركة" },
+            { value: "unit_leaders", label: "مديرو الوحدات" },
+            { value: "unit", label: "وحدة" }
+          ];
       return (
         <PA2PanelShell eyebrow="تعميم جديد" title={d.title || "بدون عنوان"} onClose={onClose}
           footer={
@@ -7800,8 +8922,8 @@ CREATE POLICY "Allow public upload on madyan-media"
             </div>
           </div>
           <div>
-            <PA2Label>الجمهور</PA2Label>
-            <PA2Segmented value={d.targetType} onChange={v => set("targetType", v)} options={[{ value: "all", label: "كل المنصة" }, { value: "dept", label: "إدارة" }, { value: "unit", label: "وحدة" }]} />
+            <PA2Label>الجمهور المستهدف</PA2Label>
+            <PA2Segmented value={d.targetType} onChange={v => set("targetType", v)} options={targetOptions} />
             {d.targetType === "dept" && (
               <select value={d.targetDeptId} onChange={e => set("targetDeptId", e.target.value)} className={`${pa2InputCls} mt-3`}>{depts.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
             )}
@@ -7900,8 +9022,9 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
-    function ExecutivePortalV3({ db, setDb, currentUser, onPreviewUser, onLogout, showToast }) {
+    function ExecutivePortalV3({ db, setDb, currentUser, isHead = true, modeSwitch = null, onPreviewUser, onLogout, showToast }) {
       const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+      const rules = mxRules(db);
       const [view, setView] = useState("pulse");
       const [sel, setSel] = useState(null);
       const [exKind, setExKind] = useState("dept");
@@ -7914,18 +9037,24 @@ CREATE POLICY "Allow public upload on madyan-media"
 
       const bulletins = [...(db.bulletins || [])].map((b, i) => ({ b, i })).sort((x, y) => (y.b.createdAtTs || 0) - (x.b.createdAtTs || 0) || y.i - x.i).map(x => x.b);
       const directives = [...(db.directives || [])].sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const execPending = mxPendingExecApprovals(db, isHead);
+      const allExecDefs = mxExecTaskDefs(db, true).filter(t => isHead || t.targetGroup === "unit_leaders" || t.assignedBy === "exec_office");
+
       const counts = { committed: 0, behind: 0, not_started: 0 };
       org.memberRows.forEach(r => counts[r.status.key]++);
 
+      const officeUsers = db.users.filter(u => (mxIsExecOfficeMember(u) || mxIsOperationalMgr(u)) && u.id !== me.id);
+      const unitLeaderUsers = units.map(un => ({ unit: un, user: un.leaderUserId ? db.users.find(x => x.id === un.leaderUserId) : null })).filter(x => x.user);
+
       const targets = [
-        ...depts.map(d => ({ user: mxDeptManager(db, d.id), role: `مدير ${d.shortName || d.name}` })).filter(t => t.user),
-        ...units.map(u => ({ user: u.leaderUserId ? db.users.find(x => x.id === u.leaderUserId) : null, role: `قائد ${u.name}` })).filter(t => t.user)
+        ...(isHead ? officeUsers.map(u => ({ user: u, role: u.jobTitle || pa2RoleLabel(u) })) : []),
+        ...unitLeaderUsers.map(x => ({ user: x.user, role: `مدير ${x.unit.name}` }))
       ];
 
       const publish = (d) => {
         const b = {
           id: "bul_" + Date.now().toString(36), title: d.title.trim(), content: d.content.trim(), category: d.category,
-          senderId: me.id, senderName: pa2Short(me.name), senderRole: "الإدارة التنفيذية",
+          senderId: me.id, senderName: pa2Short(me.name), senderRole: isHead ? "المدير التنفيذي" : "المكتب التنفيذي",
           createdAt: mxNowStamp(), createdAtTs: Date.now(), targetType: d.targetType,
           targetDeptId: d.targetType === "dept" ? d.targetDeptId : undefined, targetUnit: d.targetType === "unit" ? d.targetUnit : undefined,
           recipientIds: [], acknowledgedBy: {}
@@ -7941,10 +9070,23 @@ CREATE POLICY "Allow public upload on madyan-media"
         showToast("أُرسل التوجيه");
       };
       const setWeight = (deptId, w) => setDb(prev => ({ ...prev, systemConfig: { ...prev.systemConfig, deptWeights: { ...(prev.systemConfig?.deptWeights || {}), [deptId]: w } } }));
+      const patchExecTasks = (fn) => setDb(prev => {
+        const sc = prev.systemConfig || {};
+        return { ...prev, systemConfig: { ...sc, execTasks: fn([...(sc.execTasks || [])]) } };
+      });
+      const approveExecTask = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: p.rec.lateSubmit ? "late" : "on_time", completedAt: Date.now(), approvedBy: me.id });
+        showToast("تم اعتماد الإسناد");
+      };
+      const rejectExecTask = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: "rejected", rejectedBy: me.id });
+        showToast("أُعيد للمراجعة");
+      };
 
-      const unreadReach = bulletins.slice(0, 1).map(b => { const r = mxBulletinRecipients(db, b); return r.length - r.filter(u => mxIsAcked(b, u.id)).length; })[0] || 0;
+      const eyebrowLabel = isHead ? "المدير التنفيذي (قائد المكتب التنفيذي)" : "المكتب التنفيذي";
       const nav = [
         { id: "pulse", label: "النبض العام", icon: "chart" },
+        { id: "tasks", label: "الإسنادات", icon: "tasks", badge: execPending.length || null },
         { id: "bulletins", label: "التعميمات", icon: "megaphone" },
         { id: "directives", label: "التوجيهات", icon: "send" },
         { id: "explore", label: "استعراض", icon: "eye" }
@@ -7958,8 +9100,25 @@ CREATE POLICY "Allow public upload on madyan-media"
         const bottom = [...ranked].reverse().slice(0, 5);
         main = (
           <>
-            <MXHeader eyebrow="الإدارة التنفيذية" title="النبض العام" desc={`صورة الانضباط هذا الأسبوع عبر الإدارات (${depts.length}) والوحدات (${org.units.length}).`}
-              actions={<MXPrimaryBtn onClick={() => go("bulletins", { kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>} />
+            <MXHeader eyebrow={eyebrowLabel} title="النبض العام" desc={`صورة الانضباط عبر ${depts.length} إدارات و${org.units.length} وحدات هذا الأسبوع.`}
+              actions={
+                <>
+                  <MXGhostBtn onClick={() => go("tasks", { kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد جديد</MXGhostBtn>
+                  <MXPrimaryBtn onClick={() => go("bulletins", { kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>
+                </>
+              } />
+            {execPending.length > 0 && (
+              <MXAttention
+                title="إسنادات قيادية بانتظار اعتمادك"
+                items={execPending.map(p => ({
+                  key: `${p.user.id}:${p.task.id}:${p.week}`,
+                  text: `${pa2Short(p.user.name)} — ${p.task.title} (الأسبوع ${p.week})`,
+                  go: () => go("tasks", { kind: "member", id: p.user.id }),
+                  cta: "مراجعة واعتماد"
+                }))}
+                primaryLabel="مراجعة الإسنادات"
+              />
+            )}
             <MXScoreCard
               label="مؤشر الانضباط العام"
               pct={org.index}
@@ -8005,13 +9164,135 @@ CREATE POLICY "Allow public upload on madyan-media"
         );
       }
 
+      if (view === "tasks") {
+        const selDef = sel?.kind === "task" ? (sel.id === "__new" ? "__new" : allExecDefs.find(t => t.id === sel.id)) : null;
+        const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+        if (selDef) {
+          panel = (
+            <MXTaskDefPanel
+              key={sel.id}
+              db={db}
+              scopeMode="exec"
+              isHead={isHead}
+              def={selDef === "__new" ? null : selDef}
+              isNew={selDef === "__new"}
+              allowedTypes={["agenda_minutes", "practical", "meeting", "reading", "lecture_quiz"]}
+              onClose={() => setSel(null)}
+              onDelete={() => { patchExecTasks(list => list.filter(t => t.id !== selDef.id)); setSel(null); showToast("حُذف الإسناد"); }}
+              onSave={(draft) => {
+                const targetGroup = isHead ? (draft.targetGroup || "unit_leaders") : "unit_leaders";
+                const assignedBy = isHead ? "exec_head" : "exec_office";
+                if (selDef === "__new") {
+                  const id = "exec_" + Date.now().toString(36);
+                  patchExecTasks(list => [...list, { id, ...draft, targetGroup, assignedBy, enabled: true }]);
+                  setSel({ kind: "task", id });
+                  showToast("أُضيف الإسناد بنجاح");
+                } else {
+                  patchExecTasks(list => list.map(t => t.id === selDef.id ? { ...t, ...draft, targetGroup } : t));
+                  showToast("تم حفظ إعدادات الإسناد");
+                }
+              }}
+            />
+          );
+        } else if (selUser) {
+          panel = (
+            <MXMemberFollowPanel
+              db={db}
+              customDefs={mxUserTasks(db, selUser).filter(t => t.deptId === "src_exec")}
+              customPending={execPending}
+              user={selUser}
+              onApprove={approveExecTask}
+              onReject={rejectExecTask}
+              onClose={() => setSel(null)}
+            />
+          );
+        }
+
+        const recipientRows = [
+          ...(isHead ? officeUsers.map(u => ({ user: u, roleLabel: u.jobTitle || "المكتب التنفيذي / مدير إدارة" })) : []),
+          ...unitLeaderUsers.map(x => ({ user: x.user, roleLabel: `مدير ${x.unit.name}` }))
+        ];
+
+        main = (
+          <>
+            <MXHeader
+              eyebrow={eyebrowLabel}
+              title="الإسنادات القيادية وأجندات الوحدات"
+              desc={isHead ? "إسناد المهمات للمكتب التنفيذي ومديري الوحدات، ومراجعة أجندات الاجتماعات الأسبوعية المعتمدة." : "إسناد المهمات لمديري الوحدات ومتابعة أجندات اجتماعات الوحدات الأسبوعية."}
+              actions={<MXPrimaryBtn onClick={() => setSel({ kind: "task", id: "__new" })}><PA2Icon name="plus" className="w-4 h-4" />إسناد جديد</MXPrimaryBtn>}
+            />
+            <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_440px]" : ""}`}>
+              <div className="space-y-8 min-w-0">
+                <div>
+                  <MXSectionTitle>قائمة الإسنادات ({allExecDefs.length})</MXSectionTitle>
+                  <div className="space-y-2">
+                    {allExecDefs.length === 0 && <PA2EmptyPanel title="لا توجد إسنادات قيادية بعد" text="أضف أول إسناد ليظهر للمسؤولين في واجهة «إسناداتي»." />}
+                    {allExecDefs.map(t => {
+                      const active = sel?.kind === "task" && sel?.id === t.id;
+                      const off = t.enabled === false;
+                      const targetText = t.targetGroup === "exec_office" ? "المكتب التنفيذي ومديرو الإدارات" : t.targetGroup === "all_leaders" ? "المكتب التنفيذي + مديرو الوحدات" : "مديرو الوحدات";
+                      return (
+                        <div key={t.id} className={`flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`}>
+                          <button onClick={() => setSel(active ? null : { kind: "task", id: t.id })} className="flex-1 min-w-0 flex items-center gap-4 text-right">
+                            <span className="w-11 h-11 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center justify-center text-[18px] shrink-0">{MX_TYPE_META[t.type]?.icon}</span>
+                            <span className="min-w-0">
+                              <span className={`block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`}>{t.title}</span>
+                              <span className="block text-[13px] text-stone-400 truncate">
+                                موجه إلى: {targetText}
+                                {t.useStructuredAgenda ? " · أجندة مقسّمة (5 محاور)" : ""}
+                                {mxApproval(t) === "manager" ? " · باعتماد القيادة" : " · اعتماد فوري"}
+                              </span>
+                            </span>
+                          </button>
+                          <PA2Switch checked={!off} onChange={(v) => patchExecTasks(list => list.map(x => x.id === t.id ? { ...x, enabled: v } : x))} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <MXSectionTitle>متابعة المسند إليهم وأجندات الوحدات ({recipientRows.length})</MXSectionTitle>
+                  <div className="bg-white rounded-[28px] p-2">
+                    {recipientRows.map(({ user: u, roleLabel }) => {
+                      const week = mxCurrentWeek(u);
+                      const uTasks = mxUserTasks(db, u).filter(t => t.deptId === "src_exec");
+                      const doneCount = uTasks.filter(t => mxTaskState(t, mxRec(u, week, t.id), rules).done).length;
+                      const pct = uTasks.length ? Math.round((doneCount / uTasks.length) * 100) : 0;
+                      const uPend = execPending.filter(p => p.user.id === u.id).length;
+                      const agendaRec = mxRec(u, week, "exec_unit_agenda");
+                      const hasAgenda = agendaRec?.agendaFields && Object.values(agendaRec.agendaFields).some(v => (v || "").trim().length > 0);
+                      const active = sel?.kind === "member" && sel?.id === u.id;
+                      return (
+                        <button key={u.id} onClick={() => setSel(active ? null : { kind: "member", id: u.id })} className={`w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`}>
+                          <PA2Avatar user={u} />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-[15px] font-medium text-stone-900 truncate">{pa2Short(u.name)}</span>
+                            <span className="block text-[13px] text-stone-400 truncate">{roleLabel}</span>
+                          </span>
+                          {hasAgenda && <span className="hidden sm:inline-flex h-7 px-2.5 rounded-full bg-orange-50 text-orange-700 text-[12px] items-center">أجندة اللقاء مرفقة</span>}
+                          {uPend > 0 && <span className="h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] inline-flex items-center">{uPend} للاعتماد</span>}
+                          <span className="text-[13px] font-semibold text-stone-700 tabular-nums">{doneCount} / {uTasks.length}</span>
+                          <span className="hidden sm:block"><MXStatusPill pct={pct} /></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              {panel && <div className="lg:sticky lg:top-6">{panel}</div>}
+            </div>
+          </>
+        );
+      }
+
       if (view === "bulletins") {
         const selB = sel?.kind === "bulletin" ? bulletins.find(b => b.id === sel.id) : null;
-        if (sel?.kind === "compose") panel = <MXBulletinComposer db={db} onPublish={publish} onClose={() => setSel(null)} />;
+        if (sel?.kind === "compose") panel = <MXBulletinComposer db={db} isHead={isHead} onPublish={publish} onClose={() => setSel(null)} />;
         else if (selB) panel = <MXBulletinReachPanel db={db} b={selB} onClose={() => setSel(null)} />;
         main = (
           <>
-            <MXHeader eyebrow="الإدارة التنفيذية" title="التعميمات" desc="انشر للمنصة كلها أو لإدارة أو وحدة، وتابع من اطّلع." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>} />
+            <MXHeader eyebrow={eyebrowLabel} title="التعميمات" desc="انشر لكل أفراد الحركة أو للمكتب التنفيذي أو لمديري الوحدات، وتابع من اطّلع." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />تعميم جديد</MXPrimaryBtn>} />
             <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
               <div className="space-y-2 min-w-0">
                 {bulletins.length === 0 && <PA2EmptyPanel title="لا توجد تعميمات" text="انشر أول تعميم ليصل للأعضاء." />}
@@ -8043,7 +9324,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         if (sel?.kind === "compose") panel = <MXDirectiveComposer db={db} targets={targets} onSend={sendDirective} onClose={() => setSel(null)} />;
         main = (
           <>
-            <MXHeader eyebrow="الإدارة التنفيذية" title="التوجيهات" desc="ملاحظة مباشرة لمدير إدارة أو قائد وحدة، تظهر في أعلى مساحته حتى يؤكد اطلاعه." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />توجيه جديد</MXPrimaryBtn>} />
+            <MXHeader eyebrow={eyebrowLabel} title="التوجيهات" desc="ملاحظة مباشرة لمدير إدارة أو قائد وحدة، تظهر في أعلى مساحته حتى يؤكد اطلاعه." actions={<MXPrimaryBtn onClick={() => setSel({ kind: "compose" })}><PA2Icon name="plus" className="w-4 h-4" />توجيه جديد</MXPrimaryBtn>} />
             <div className={`grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`}>
               <div className="space-y-2 min-w-0">
                 {directives.length === 0 && <PA2EmptyPanel title="لم تُرسل توجيهات بعد" text="التوجيه أداة هادئة لتنبيه مسؤول بعينه دون تعميم." />}
@@ -8082,12 +9363,12 @@ CREATE POLICY "Allow public upload on madyan-media"
           rows = org.memberRows.filter(r => r.user.unit === un?.name).map(r => ({ user: r.user, pct: r.pct, status: r.status }));
           const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
           const c = { committed: 0, behind: 0, not_started: 0 }; rows.forEach(r => c[r.status.key]++);
-          summary = { pct: avg, caption: `القائد: ${leader ? pa2Short(leader.name) : "غير معيّن"}`, bars: depts.map((d, i) => { const ds = org.deptStats.find(x => x.dept.id === d.id); const rr = (ds?.rows || []).filter(x => x.user.unit === un?.name); const p = rr.length ? Math.round(rr.reduce((a, x) => a + x.pct, 0) / rr.length) : 0; return { label: d.name, value: rr.length ? `${p}%` : "—", pct: p, tone: pa2DeptTone(d, allDepts.findIndex(x => x.id === d.id)).dot }; }), stats: [{ n: c.committed, l: "ملتزم" }, { n: c.behind, l: "متأخر" }, { n: c.not_started, l: "لم يبدأ" }] };
+          summary = { pct: avg, caption: `القائد: ${leader ? pa2Short(leader.name) : "غير معيّن"}`, bars: depts.map((d) => { const ds = org.deptStats.find(x => x.dept.id === d.id); const rr = (ds?.rows || []).filter(x => x.user.unit === un?.name); const p = rr.length ? Math.round(rr.reduce((a, x) => a + x.pct, 0) / rr.length) : 0; return { label: d.name, value: rr.length ? `${p}%` : "—", pct: p, tone: pa2DeptTone(d, allDepts.findIndex(x => x.id === d.id)).dot }; }), stats: [{ n: c.committed, l: "ملتزم" }, { n: c.behind, l: "متأخر" }, { n: c.not_started, l: "لم يبدأ" }] };
         }
         rows.sort((a, b) => b.pct - a.pct);
         main = (
           <>
-            <MXHeader eyebrow="الإدارة التنفيذية" title="استعراض" desc="نظرة للقراءة فقط على أي إدارة أو وحدة." />
+            <MXHeader eyebrow={eyebrowLabel} title="استعراض" desc="نظرة للقراءة فقط على أي إدارة أو وحدة." />
             <div className="flex items-center gap-3 flex-wrap mb-6">
               <PA2Segmented value={exKind} onChange={v => { setExKind(v); setExId(null); }} options={[{ value: "dept", label: "الإدارات" }, { value: "unit", label: "الوحدات" }]} />
               <select value={curId || ""} onChange={e => setExId(e.target.value)} className="h-9 rounded-full bg-white px-4 text-[14px] text-stone-700 focus:outline-none">
@@ -8114,7 +9395,17 @@ CREATE POLICY "Allow public upload on madyan-media"
       }
 
       return (
-        <MXShell areaLabel="الإدارة التنفيذية" nav={nav} active={view} onNav={(v) => go(v)} user={me} roleLabel="الإدارة التنفيذية" onLogout={onLogout}>
+        <MXShell
+          areaLabel={isHead ? "المدير التنفيذي" : "المكتب التنفيذي"}
+          chip={isHead ? "قائد المكتب التنفيذي" : "قيادة تنفيذية"}
+          modeSwitch={modeSwitch}
+          nav={nav}
+          active={view}
+          onNav={(v) => go(v)}
+          user={me}
+          roleLabel={isHead ? "قائد المكتب التنفيذي" : "المكتب التنفيذي"}
+          onLogout={onLogout}
+        >
           {main}
         </MXShell>
       );
@@ -8122,12 +9413,23 @@ CREATE POLICY "Allow public upload on madyan-media"
     // ==== PART:EXEC END ====
 
     // ==== PART:CADRE START ====
-    // ---------- مساحة العضو: مهماتي + أرشيف التعميمات + حسابي ----------
+    // ---------- مساحة العضو: إسناداتي + أرشيف التعميمات + حسابي ----------
     const mxDeptToneById = (db, deptId) => {
+      if (deptId === "src_exec") return PA2_PASTELS[2];
+      if (deptId && deptId.startsWith("src_unit_")) return PA2_PASTELS[3];
       const list = mxDepartments(db);
       const idx = Math.max(0, list.findIndex(d => d.id === deptId));
       const d = list[idx];
       return d ? pa2DeptTone(d, idx) : PA2_PASTELS[4];
+    };
+    const mxSourceLabel = (db, deptId, fallback) => {
+      if (deptId === "src_exec") return "القيادة التنفيذية";
+      if (deptId && deptId.startsWith("src_unit_")) {
+        const uid = deptId.replace("src_unit_", "");
+        return mxUnits(db).find(u => u.id === uid)?.name || fallback || "الوحدة";
+      }
+      const d = mxDeptById(db, deptId);
+      return d?.shortName || d?.name || fallback || deptId;
     };
     const mxFirstName = (name) => pa2Short(name).replace(/^(د\.|أ\.|م\.)\s*/, "").split(" ")[0] || "";
 
@@ -8153,7 +9455,7 @@ CREATE POLICY "Allow public upload on madyan-media"
               <div className="text-[13px] font-medium text-[#4F3E8F]">تعميم جديد · {bulletin.senderName || "الإدارة"}</div>
               <div className="text-[17px] font-semibold text-stone-900 mt-0.5">{bulletin.title}</div>
               <p className="text-[14px] text-stone-600 mt-1.5 leading-relaxed">{bulletin.content}</p>
-              {more > 0 && <button onClick={onOpenAll} className="text-[13px] text-[#4F3E8F] mt-2 hover:underline">{more === 1 ? "تعميم آخر بانتظار اطلاعك" : `${more} تعميمات أخرى بانتظار اطلاعك`}</button>}
+              {more > 0 && <button onClick={onOpenAll} className="text-[13px] text-[#4F3E8F] mt-2 hover:underline">و{more} {more === 1 ? "تعميم آخر" : "تعميمات أخرى"} بانتظار اطلاعك</button>}
             </div>
             <button onClick={onAck} className="h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 shrink-0">اطلعت واستوعبت</button>
           </div>
@@ -8161,21 +9463,101 @@ CREATE POLICY "Allow public upload on madyan-media"
       );
     }
 
-    // لوحة تنفيذ المهمة (تختلف حسب نوعها)
-    function MXTaskPanel({ def, dept, deptIdx, rec, rules, week, isPast, curriculum, onPatch, onClose }) {
+    // لوحة تنفيذ الإسناد (تتكيف حسب نوع الإسناد: سلسلة متتابعة / محاضرة بأسئلة أو بدون / اختبار بعشوائية / أجندة مقسمة / 3 مستويات اعتماد)
+    function MXTaskPanel({ db, me, def, dept, rec, rules, week, isPast, curriculum, onPatch, onClose, showToast }) {
       const st = mxTaskState(def, rec, rules);
       const approval = def.type === "lecture_quiz" || def.type === "daily_habit" ? "self" : mxApproval(def);
+      const needsReview = approval === "manager" || approval === "person";
+      const approverUser = approval === "person" && def.approverUserId ? db.users.find(u => u.id === def.approverUserId) : null;
       const doneStatus = isPast ? "late" : "on_time";
-      const [note, setNote] = useState(rec.note || "");
+
+      const sInfo = mxSeriesInfo(def, me, week);
+      const [epIdx, setEpIdx] = useState(() => sInfo ? sInfo.activeIdx : 0);
+      const activeEp = sInfo ? (sInfo.items[epIdx] || sInfo.items[0]) : null;
+
+      const [note, setNote] = useState(() => (activeEp && rec.seriesNotes && rec.seriesNotes[activeEp.id]) || rec.note || "");
+      const [agendaFields, setAgendaFields] = useState(() => ({
+        faithThought: "",
+        adminUpdates: "",
+        lastWeekReview: "",
+        unitChallenge: "",
+        nextWeekAssignments: "",
+        ...(rec.agendaFields || {})
+      }));
       const [answers, setAnswers] = useState({});
+      const [attempt, setAttempt] = useState(() => rec.quizAttempts || 0);
       const [quizMsg, setQuizMsg] = useState(null);
-      const meta = MX_TYPE_META[def.type] || { label: "مهمة" };
-      const locked = st.done && approval === "manager";
+
+      const meta = MX_TYPE_META[def.type] || { label: "إسناد" };
+      const locked = st.done && needsReview;
+      const sourceLabel = def.sourceName || dept?.shortName || dept?.name || mxSourceLabel(db, def.deptId);
+
+      const selectEpisode = (idx) => {
+        if (!sInfo || idx >= sInfo.unlockedCount) return;
+        setEpIdx(idx);
+        const ep = sInfo.items[idx];
+        setNote((ep && rec.seriesNotes && rec.seriesNotes[ep.id]) || rec.note || "");
+        setAnswers({});
+        setQuizMsg(null);
+      };
+
+      const buildSeriesPatch = (extra = {}) => {
+        if (!activeEp) return extra;
+        return {
+          ...extra,
+          seriesDone: { ...(rec.seriesDone || {}), [activeEp.id]: { at: Date.now(), week } },
+          seriesNotes: note ? { ...(rec.seriesNotes || {}), [activeEp.id]: note } : rec.seriesNotes
+        };
+      };
 
       const complete = (extra = {}) => {
-        if (approval === "manager") onPatch({ status: "submitted", submittedAt: Date.now(), lateSubmit: isPast, note, ...extra });
-        else onPatch({ status: doneStatus, completedAt: Date.now(), note, ...extra });
+        const merged = buildSeriesPatch(extra);
+        if (needsReview) onPatch({ status: "submitted", submittedAt: Date.now(), lateSubmit: isPast, note, ...merged });
+        else onPatch({ status: doneStatus, completedAt: Date.now(), note, ...merged });
       };
+
+      // شريط سلسلة الإسنادات المتتابعة (إن كانت مفعّلة)
+      const seriesHeader = sInfo ? (
+        <div className="rounded-2xl bg-[#F4F2EE] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] font-semibold text-stone-900">سلسلة إسنادات متتابعة (تبدأ من الأولى بالترتيب)</span>
+            <span className="text-[12px] text-stone-500 tabular-nums">{sInfo.completedCount} / {sInfo.totalCount} مكتملة</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {sInfo.items.map((ep, i) => {
+              const isUnlocked = i < sInfo.unlockedCount;
+              const isDone = Boolean(sInfo.doneMap[ep.id]);
+              const isCurrent = i === epIdx;
+              return (
+                <button
+                  key={ep.id}
+                  type="button"
+                  disabled={!isUnlocked}
+                  onClick={() => selectEpisode(i)}
+                  className={`h-8 px-3 rounded-full text-[12px] inline-flex items-center gap-1.5 transition ${
+                    isCurrent
+                      ? "bg-stone-900 text-white font-semibold"
+                      : isDone
+                      ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      : isUnlocked
+                      ? "bg-white text-stone-700 hover:bg-stone-100"
+                      : "bg-stone-200/70 text-stone-400 cursor-not-allowed"
+                  }`}
+                >
+                  {isDone ? <PA2Icon name="check" className="w-3.5 h-3.5" /> : !isUnlocked ? <span>🔒</span> : null}
+                  <span>الحلقة {i + 1}</span>
+                </button>
+              );
+            })}
+          </div>
+          {activeEp && (
+            <div className="pt-1 border-t border-stone-200/70">
+              <div className="text-[14px] font-semibold text-stone-900">{activeEp.title}</div>
+              {activeEp.instructions && <p className="text-[13px] text-stone-500 mt-0.5 leading-relaxed">{activeEp.instructions}</p>}
+            </div>
+          )}
+        </div>
+      ) : null;
 
       let body = null;
       if (def.type === "daily_habit") {
@@ -8202,41 +9584,81 @@ CREATE POLICY "Allow public upload on madyan-media"
           </div>
         );
       } else if (def.type === "lecture_quiz") {
-        const qs = curriculum?.questions || [];
-        const embed = curriculum?.videoUrl ? getYoutubeEmbedUrl(curriculum.videoUrl) : "";
+        const lectureMode = def.lectureMode || "lecture_and_quiz"; // lecture_and_quiz | lecture_only | quiz_only
+        const showVideo = lectureMode !== "quiz_only";
+        const showQuiz = lectureMode !== "lecture_only";
+        const rawVideoUrl = (activeEp && activeEp.videoUrl) || def.videoUrl || curriculum?.videoUrl || "";
+        const videoUrl = typeof sanitizeMediaUrl === "function" ? sanitizeMediaUrl(rawVideoUrl) : rawVideoUrl;
+        const videoType = def.videoType || curriculum?.videoType || "mp4";
+        const embed = videoUrl ? getYoutubeEmbedUrl(videoUrl) : "";
+        const lecTitle = (activeEp && activeEp.title) || def.lectureTitle || curriculum?.lectureTitle || "";
+        const lecDesc = (activeEp && activeEp.instructions) || def.lectureDesc || curriculum?.lectureDesc || "";
+
+        const poolTotal = (activeEp && Array.isArray(activeEp.questions) && activeEp.questions.length)
+          ? activeEp.questions.length
+          : (Array.isArray(def.questionPool) && def.questionPool.length)
+          ? def.questionPool.length
+          : (curriculum?.questions || []).length;
+        const qs = showQuiz ? mxDrawQuestions(def, curriculum, me.id, week, attempt, activeEp) : [];
+        const epAlreadyDone = activeEp ? Boolean(sInfo?.doneMap[activeEp.id]) : st.done;
+
         const submitQuiz = () => {
-          if (qs.some(q => answers[q.id] === undefined)) { setQuizMsg({ ok: false, text: "أجب عن كل الأسئلة أولاً" }); return; }
+          if (!showQuiz || qs.length === 0) {
+            complete();
+            return;
+          }
+          if (qs.some(q => answers[q.id] === undefined)) {
+            setQuizMsg({ ok: false, text: "أجب عن كل الأسئلة المعروضة أولاً" });
+            return;
+          }
           const score = qs.filter(q => answers[q.id] === q.correctIndex).length;
           const pct = qs.length ? Math.round((score / qs.length) * 100) : 100;
           const pass = pct >= (parseInt(rules.quizPassThresholdPct, 10) || 60);
-          const quizSubmission = { score, total: qs.length, answers, pct, at: Date.now() };
-          if (pass) { onPatch({ status: doneStatus, completedAt: Date.now(), quizSubmission }); setQuizMsg({ ok: true, text: `أحسنت، نتيجتك ${score} من ${qs.length}` }); }
-          else { onPatch({ quizSubmission }); setQuizMsg({ ok: false, text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، أعد المحاولة` }); }
+          const quizSubmission = { score, total: qs.length, answers, pct, at: Date.now(), episodeId: activeEp?.id };
+          if (pass) {
+            onPatch(buildSeriesPatch({ status: doneStatus, completedAt: Date.now(), quizSubmission, quizAttempts: attempt }));
+            setQuizMsg({ ok: true, text: `أحسنت، نتيجتك ${score} من ${qs.length}` });
+          } else {
+            const nextAttempt = attempt + 1;
+            setAttempt(nextAttempt);
+            setAnswers({});
+            onPatch({ quizSubmission, quizAttempts: nextAttempt });
+            setQuizMsg({ ok: false, text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، تم سحب مجموعة أسئلة جديدة لإعادة المحاولة` });
+          }
         };
+
         body = (
           <div className="space-y-5">
-            {curriculum?.lectureTitle && (
+            {seriesHeader}
+            {!sInfo && lecTitle && (
               <div>
-                <div className="text-[16px] font-semibold text-stone-900">{curriculum.lectureTitle}</div>
-                {curriculum.lectureDesc && <p className="text-[14px] text-stone-500 mt-1 leading-relaxed">{curriculum.lectureDesc}</p>}
+                <div className="text-[16px] font-semibold text-stone-900">{lecTitle}</div>
+                {lecDesc && <p className="text-[14px] text-stone-500 mt-1 leading-relaxed">{lecDesc}</p>}
               </div>
             )}
-            {curriculum?.videoUrl && (
+            {showVideo && videoUrl && (
               <div className="rounded-2xl overflow-hidden bg-stone-900 aspect-video">
-                {isIframeVideo(curriculum.videoType, curriculum.videoUrl)
-                  ? <iframe src={embed} className="w-full h-full" sandbox="allow-scripts allow-same-origin allow-presentation" referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowFullScreen title="lecture" />
-                  : <video src={sanitizeMediaUrl(curriculum.videoUrl)} controls className="w-full h-full" />}
+                {isIframeVideo(videoType, videoUrl)
+                  ? <iframe src={embed} className="w-full h-full" allow="autoplay; encrypted-media" allowFullScreen title="lecture" />
+                  : <video src={videoUrl} controls className="w-full h-full" />}
               </div>
             )}
-            {st.done ? (
-              <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-[14px] text-emerald-800">اجتزت الاختبار{rec.quizSubmission ? ` بنتيجة ${rec.quizSubmission.score} من ${rec.quizSubmission.total}` : ""}.</div>
-            ) : (
+            {epAlreadyDone && st.done ? (
+              <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-[14px] text-emerald-800">
+                {showQuiz ? `اجتزت الاختبار${rec.quizSubmission ? ` بنتيجة ${rec.quizSubmission.score} من ${rec.quizSubmission.total}` : ""}.` : "أتممت مشاهدة المحاضرة بنجاح."}
+              </div>
+            ) : showQuiz && qs.length > 0 ? (
               <div className="space-y-4">
+                {poolTotal > qs.length && (
+                  <div className="rounded-2xl bg-[#F4F2EE] px-3.5 py-2 text-[12px] text-stone-600">
+                    تم سحب {qs.length} أسئلة عشوائياً لك من بنك الأسئلة ({poolTotal} أسئلة) بترتيب خاص بك.
+                  </div>
+                )}
                 {qs.map((q, qi) => (
                   <div key={q.id}>
                     <div className="text-[14px] font-medium text-stone-800 mb-2">{qi + 1}. {q.text}</div>
                     <div className="space-y-1.5">
-                      {q.options.map((op, oi) => (
+                      {(q.options || []).map((op, oi) => (
                         <button key={oi} onClick={() => { setAnswers(a => ({ ...a, [q.id]: oi })); setQuizMsg(null); }} className={`w-full text-right px-4 py-2.5 rounded-2xl text-[14px] transition ${answers[q.id] === oi ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`}>{op}</button>
                       ))}
                     </div>
@@ -8244,14 +9666,95 @@ CREATE POLICY "Allow public upload on madyan-media"
                 ))}
                 {quizMsg && <div className={`rounded-2xl px-4 py-3 text-[14px] ${quizMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`}>{quizMsg.text}</div>}
               </div>
+            ) : (
+              quizMsg && <div className={`rounded-2xl px-4 py-3 text-[14px] ${quizMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`}>{quizMsg.text}</div>
             )}
           </div>
         );
-        if (!st.done) {
+
+        if (!(epAlreadyDone && st.done)) {
           return (
-            <PA2PanelShell eyebrow={`${meta.label} · ${dept?.shortName || dept?.name || ""}`} title={def.title} onClose={onClose}
-              footer={<button onClick={submitQuiz} className="h-11 px-6 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">تسليم الاختبار</button>}>
+            <PA2PanelShell eyebrow={`${meta.label} · ${sourceLabel}`} title={def.title} onClose={onClose}
+              footer={
+                <button onClick={submitQuiz} className="h-11 px-6 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800">
+                  {showQuiz && qs.length > 0 ? "تسليم الاختبار" : "تأكيد إتمام المحاضرة"}
+                </button>
+              }>
               {def.instructions && <p className="text-[14px] text-stone-500 leading-relaxed">{def.instructions}</p>}
+              {body}
+            </PA2PanelShell>
+          );
+        }
+      } else if (def.type === "agenda_minutes" && def.useStructuredAgenda) {
+        const disabled = st.done || st.key === "submitted";
+        const filledCount = MX_AGENDA_PROMPTS.filter(p => (agendaFields[p.key] || "").trim().length > 0).length;
+        const canSubmit = filledCount >= 1;
+
+        const formatSummaryNote = (fields) =>
+          MX_AGENDA_PROMPTS
+            .map((p, i) => `${i + 1}. ${p.label}\n${(fields[p.key] || "").trim() || "—"}`)
+            .join("\n\n");
+
+        const saveDraftOnly = () => {
+          onPatch({ agendaFields, note: formatSummaryNote(agendaFields) });
+          if (showToast) showToast("تم حفظ مسودة الأجندة في مساحتك");
+        };
+
+        const submitAgenda = () => {
+          if (!canSubmit) return;
+          const summaryNote = formatSummaryNote(agendaFields);
+          if (needsReview) {
+            onPatch({ status: "submitted", submittedAt: Date.now(), lateSubmit: isPast, agendaFields, note: summaryNote });
+          } else {
+            onPatch({ status: doneStatus, completedAt: Date.now(), agendaFields, note: summaryNote });
+          }
+          if (showToast) showToast("تم حفظ الأجندة وإرسالها للمسؤول");
+        };
+
+        body = (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-[#F4F2EE] px-4 py-3 text-[13px] text-stone-600 leading-relaxed">
+              تُحفظ هذه الخانات المقسّمة في مساحتك للرجوع إليها أثناء إدارة اللقاء، وتُرسل في الوقت نفسه للشخص المسؤول عنك.
+            </div>
+            {MX_AGENDA_PROMPTS.map((p, idx) => (
+              <div key={p.key}>
+                <PA2Label hint={`المحور ${idx + 1}`}>{p.label}</PA2Label>
+                <textarea
+                  value={agendaFields[p.key] || ""}
+                  onChange={e => setAgendaFields(prev => ({ ...prev, [p.key]: e.target.value }))}
+                  disabled={disabled}
+                  rows={3}
+                  className={`${pa2InputCls} h-auto py-3 resize-y disabled:opacity-70`}
+                  placeholder={p.placeholder}
+                />
+              </div>
+            ))}
+            {!disabled && (
+              <div className="pt-1 flex items-center justify-between">
+                <button type="button" onClick={saveDraftOnly} className="h-9 px-4 rounded-full bg-[#F4F2EE] text-stone-700 text-[13px] font-medium hover:bg-stone-200">
+                  حفظ المسودة في مساحتي
+                </button>
+                <span className="text-[12px] text-stone-400">مُلئ {filledCount} من {MX_AGENDA_PROMPTS.length} محاور</span>
+              </div>
+            )}
+          </div>
+        );
+
+        if (!st.done && st.key !== "submitted") {
+          return (
+            <PA2PanelShell eyebrow={`${meta.label} · ${sourceLabel}`} title={def.title} onClose={onClose}
+              footer={
+                <div className="flex items-center gap-3">
+                  <button onClick={submitAgenda} disabled={!canSubmit} className={`h-11 px-6 rounded-full text-[14px] font-semibold transition ${canSubmit ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}>
+                    {needsReview ? "حفظ وإرسال للاعتماد" : "حفظ وإرسال الأجندة"}
+                  </button>
+                  <span className="mr-auto text-[12px] text-stone-400">
+                    {approval === "person" && approverUser ? `يعتمدها: ${pa2Short(approverUser.name)}` : approval === "manager" ? "تُرسل للمسؤول للاعتماد" : "تُحفظ وتُرسل للمسؤول"}
+                  </span>
+                </div>
+              }>
+              {def.instructions && <p className="text-[14px] text-stone-500 leading-relaxed">{def.instructions}</p>}
+              {st.key === "rejected" && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">أعادها المسؤول للمراجعة{rec.rejectNote ? `: ${rec.rejectNote}` : ""}. عدّل وأعد الإرسال.</div>}
               {body}
             </PA2PanelShell>
           );
@@ -8259,9 +9762,12 @@ CREATE POLICY "Allow public upload on madyan-media"
       } else {
         const needsNote = def.type === "agenda_minutes" || def.type === "reading";
         body = (
-          <div>
-            <PA2Label hint={needsNote ? "" : "اختياري"}>{def.type === "agenda_minutes" ? "النص أو الرابط" : def.type === "reading" ? "أهم فائدة خرجت بها" : "ملاحظة للمدير"}</PA2Label>
-            <textarea value={note} onChange={e => setNote(e.target.value)} disabled={st.done || st.key === "submitted"} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none disabled:opacity-70`} placeholder="اكتب هنا…" />
+          <div className="space-y-4">
+            {seriesHeader}
+            <div>
+              <PA2Label hint={needsNote ? "" : "اختياري"}>{def.type === "agenda_minutes" ? "النص أو الرابط" : def.type === "reading" ? "أهم فائدة خرجت بها" : "ملاحظة للمسؤول"}</PA2Label>
+              <textarea value={note} onChange={e => setNote(e.target.value)} disabled={st.done || st.key === "submitted"} rows={4} className={`${pa2InputCls} h-auto py-3 resize-none disabled:opacity-70`} placeholder="اكتب هنا…" />
+            </div>
           </div>
         );
       }
@@ -8272,14 +9778,18 @@ CREATE POLICY "Allow public upload on madyan-media"
         if (st.key === "submitted") {
           footer = (
             <div className="flex items-center gap-3">
-              <span className="text-[14px] text-[#4F3E8F]">أُرسلت للاعتماد، بانتظار مدير الإدارة</span>
+              <span className="text-[14px] text-[#4F3E8F]">
+                {approval === "person" && approverUser
+                  ? `أُرسلت للاعتماد، بانتظار ${pa2Short(approverUser.name)}`
+                  : "أُرسلت للاعتماد، بانتظار المسؤول"}
+              </span>
               <button onClick={() => onPatch({ status: "pending", submittedAt: null })} className="mr-auto text-[13px] text-stone-500 hover:text-stone-800">سحب الإرسال</button>
             </div>
           );
         } else if (st.done) {
           footer = (
             <div className="flex items-center gap-3">
-              <span className="text-[14px] text-emerald-700 inline-flex items-center gap-1.5"><PA2Icon name="check" className="w-4 h-4" />{locked ? "اعتمدها المدير" : st.label}</span>
+              <span className="text-[14px] text-emerald-700 inline-flex items-center gap-1.5"><PA2Icon name="check" className="w-4 h-4" />{locked ? "تم اعتماد الإسناد" : st.label}</span>
               {!locked && <span className="mr-auto"><PA2DangerAction label="التراجع عن الإنجاز" confirmLabel="تأكيد التراجع" onConfirm={() => onPatch({ status: "pending", completedAt: null, quizSubmission: def.type === "lecture_quiz" ? null : rec.quizSubmission })} /></span>}
             </div>
           );
@@ -8289,18 +9799,20 @@ CREATE POLICY "Allow public upload on madyan-media"
           footer = (
             <div className="flex items-center gap-3">
               <button onClick={() => can && complete()} disabled={!can} className={`h-11 px-6 rounded-full text-[14px] font-semibold transition ${can ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`}>
-                {approval === "manager" ? "إرسال للاعتماد" : "تأكيد الإنجاز"}
+                {needsReview ? "إرسال للاعتماد" : "تأكيد الإنجاز"}
               </button>
-              <span className="mr-auto text-[12px] text-stone-400">{isPast ? `تُحتسب متأخرة (${rules.latePointsPct}%)` : approval === "manager" ? "يعتمدها مدير الإدارة" : ""}</span>
+              <span className="mr-auto text-[12px] text-stone-400">
+                {isPast ? `تُحتسب متأخرة (${rules.latePointsPct}%)` : approval === "person" && approverUser ? `يعتمدها: ${pa2Short(approverUser.name)}` : approval === "manager" ? "يعتمدها مدير الإدارة" : ""}
+              </span>
             </div>
           );
         }
       }
 
       return (
-        <PA2PanelShell eyebrow={`${meta.label} · ${dept?.shortName || dept?.name || ""}`} title={def.title} onClose={onClose} footer={footer}>
+        <PA2PanelShell eyebrow={`${meta.label} · ${sourceLabel}`} title={def.title} onClose={onClose} footer={footer}>
           {def.instructions && <p className="text-[14px] text-stone-500 leading-relaxed">{def.instructions}</p>}
-          {st.key === "rejected" && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">أعادها المدير للمراجعة{rec.rejectNote ? `: ${rec.rejectNote}` : ""}. عدّل وأعد الإرسال.</div>}
+          {st.key === "rejected" && <div className="rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700">أعادها المسؤول للمراجعة{rec.rejectNote ? `: ${rec.rejectNote}` : ""}. عدّل وأعد الإرسال.</div>}
           {body}
         </PA2PanelShell>
       );
@@ -8317,10 +9829,10 @@ CREATE POLICY "Allow public upload on madyan-media"
         const patch = {};
         if (nameDirty) patch.name = name.trim();
         if (pwDirty) {
-          if (pw.cur !== me.password) { setErr("كلمة المرور الحالية غير صحيحة"); return; }
+          if (!mxVerifyPw(pw.cur, me.password)) { setErr("كلمة المرور الحالية غير صحيحة"); return; }
           if (pw.next.length < 4) { setErr("كلمة المرور الجديدة قصيرة (4 أحرف على الأقل)"); return; }
           if (pw.next !== pw.again) { setErr("كلمتا المرور غير متطابقتين"); return; }
-          patch.password = pw.next; patch.mustChangePassword = false;
+          patch.password = mxHashPw(pw.next); patch.mustChangePassword = false;
         }
         onSave(patch);
         setPw({ cur: "", next: "", again: "" });
@@ -8359,7 +9871,7 @@ CREATE POLICY "Allow public upload on madyan-media"
               </div>
             </div>
             <div className="text-[14px] text-stone-600 flex justify-between"><span className="text-stone-400">الوحدة</span><span>{me.unit || "—"}</span></div>
-            <div className="text-[14px] text-stone-600 flex justify-between items-center gap-3"><span className="text-stone-400">مهام من</span><span className="flex gap-1.5 flex-wrap justify-end">{depts.length ? depts.map(d => <MXDeptChip key={d.id} dept={d} idx={mxDepartments(db).findIndex(x => x.id === d.id)} />) : "—"}</span></div>
+            <div className="text-[14px] text-stone-600 flex justify-between items-center gap-3"><span className="text-stone-400">إسنادات من</span><span className="flex gap-1.5 flex-wrap justify-end">{depts.length ? depts.map(d => <MXDeptChip key={d.id} dept={d} idx={mxDepartments(db).findIndex(x => x.id === d.id)} />) : "القيادة التنفيذية"}</span></div>
             {me.joinedAt && <div className="text-[14px] text-stone-600 flex justify-between"><span className="text-stone-400">تاريخ الانضمام</span><span>{formatDateAr(me.joinedAt)}</span></div>}
           </MXCard>
         </div>
@@ -8396,10 +9908,12 @@ CREATE POLICY "Allow public upload on madyan-media"
       const [openKey, setOpenKey] = useState(null);
       const [bulFilter, setBulFilter] = useState("all");
 
-      const myDeptIds = mxUserDeptIds(db, me);
       const bulletins = mxBulletinsForUser(db, me);
       const unread = bulletins.filter(b => !mxIsAcked(b, me.id));
       const sum = mxWeekSummary(db, me, week);
+      const sourceIds = [...new Set(sum.tasks.map(t => t.deptId))];
+      const reviewerPending = mxPendingForReviewer(db, me.id);
+
       const minWeek = rules.allowLateSubmissions ? Math.max(1, curWeek - (parseInt(rules.maxPastWeeksEditable, 10) || 0)) : curWeek;
       const isPast = week < curWeek;
       const curriculum = (db.weeklyCurriculums && (db.weeklyCurriculums[week] || db.weeklyCurriculums.default)) || INITIAL_STATE.weeklyCurriculums.default;
@@ -8410,28 +9924,43 @@ CREATE POLICY "Allow public upload on madyan-media"
       const doneList = tasks.filter(t => t.st.done);
 
       const ack = (b) => onAcknowledgeBulletin(b.id, me.id);
-      const myDirectives = modeSwitch ? [] : (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const myDirectives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+      const curRemaining = sum.week === curWeek ? sum.remaining : mxWeekSummary(db, me, curWeek).remaining;
       const nav = [
-        { id: "tasks", label: "مهماتي", icon: "tasks", badge: (sum.week === curWeek ? sum.remaining : mxWeekSummary(db, me, curWeek).remaining) || null },
+        { id: "tasks", label: "إسناداتي", icon: "tasks", badge: (curRemaining + reviewerPending.length) || null },
         { id: "bulletins", label: "التعميمات", icon: "megaphone", badge: unread.length || null },
         { id: "account", label: "حسابي", icon: "user" }
       ];
       const roleLabel = modeSwitch ? pa2RoleLabel(me) : (me.jobTitle || "عضو");
+
+      const approveAsReviewer = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: p.rec.lateSubmit ? "late" : "on_time", completedAt: Date.now(), approvedBy: me.id });
+        showToast("تم اعتماد الإسناد");
+      };
+      const rejectAsReviewer = (p) => {
+        mxPatchRecord(setDb, p.user.id, p.week, p.task.id, { status: "rejected", rejectedBy: me.id });
+        showToast("أُعيد الإسناد للمراجعة");
+      };
 
       const renderRow = ({ def, st }) => {
         const key = `${def.deptId}:${def.id}`;
         const dept = mxDeptById(db, def.deptId);
         const tone = mxDeptToneById(db, def.deptId);
         const active = openKey === key;
+        const sInfo = mxSeriesInfo(def, me, week);
+        const approverUser = def.approval === "person" && def.approverUserId ? db.users.find(u => u.id === def.approverUserId) : null;
         return (
           <button key={key} onClick={() => setOpenKey(active ? null : key)} className={`w-full text-right flex items-center gap-4 px-4 sm:px-5 py-4 rounded-[22px] transition ${active ? "bg-white ring-2 ring-stone-900" : "bg-white hover:bg-[#FBFAF8]"}`}>
             <span className={`w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${st.done ? "opacity-60" : ""}`}>{st.done ? <PA2Icon name="check" className={`w-5 h-5 ${tone.ink}`} /> : (MX_TYPE_META[def.type]?.icon || "•")}</span>
             <span className="flex-1 min-w-0">
               <span className={`block text-[15px] font-medium truncate ${st.done ? "text-stone-400" : "text-stone-900"}`}>{def.title}</span>
-              <span className="flex items-center gap-2 mt-1 text-[13px] text-stone-400">
-                {myDeptIds.length > 1 && <MXDeptChip dept={dept} idx={depts.findIndex(d => d.id === def.deptId)} />}
-                <span className="whitespace-nowrap truncate">{MX_TYPE_META[def.type]?.label}</span>
-                {mxApproval(def) === "manager" && def.type !== "lecture_quiz" && def.type !== "daily_habit" && <span className="hidden sm:inline whitespace-nowrap">· يعتمدها المدير</span>}
+              <span className="flex items-center gap-2 mt-1 text-[13px] text-stone-400 flex-wrap">
+                {sourceIds.length > 1 && <MXDeptChip dept={dept} label={def.sourceName || mxSourceLabel(db, def.deptId)} idx={Math.max(0, depts.findIndex(d => d.id === def.deptId))} />}
+                <span>{MX_TYPE_META[def.type]?.label}</span>
+                {sInfo && <span className="text-orange-700 font-medium">· سلسلة (الحلقة {sInfo.activeIdx + 1} من {sInfo.totalCount})</span>}
+                {def.useStructuredAgenda && <span>· 5 محاور مقسّمة</span>}
+                {mxApproval(def) === "manager" && def.type !== "lecture_quiz" && def.type !== "daily_habit" && <span>· يعتمدها المسؤول</span>}
+                {mxApproval(def) === "person" && <span>· يعتمدها {approverUser ? pa2Short(approverUser.name) : "مُراجِع مختص"}</span>}
               </span>
             </span>
             <MXStateTag st={st} />
@@ -8444,7 +9973,7 @@ CREATE POLICY "Allow public upload on madyan-media"
         const list = bulFilter === "unread" ? unread : bulletins;
         content = (
           <>
-            <MXHeader eyebrow="التعميمات" title="أرشيف التعميمات" desc="كل ما وصلك من الإدارة التنفيذية والإدارات، الأحدث أولاً." />
+            <MXHeader eyebrow="التعميمات" title="أرشيف التعميمات" desc="كل ما وصلك من القيادة التنفيذية والمكتب التنفيذي والإدارات، الأحدث أولاً." />
             <div className="mb-6"><PA2Segmented options={[{ value: "all", label: `الكل · ${bulletins.length}` }, { value: "unread", label: `بانتظار اطلاعك · ${unread.length}` }]} value={bulFilter} onChange={setBulFilter} /></div>
             <div className="space-y-4 max-w-3xl">
               {list.length === 0 ? <PA2EmptyPanel title="لا توجد تعميمات هنا" text="ستظهر هنا التعميمات فور نشرها." /> : list.map(b => <MXBulletinCard key={b.id} db={db} b={b} me={me} onAck={() => ack(b)} />)}
@@ -8465,7 +9994,7 @@ CREATE POLICY "Allow public upload on madyan-media"
             <MXHeader
               eyebrow={`مساحتي · الأسبوع ${week}${isPast ? " (سابق)" : ""}`}
               title={`أهلاً، ${mxFirstName(me.name)}`}
-              desc={myDeptIds.length ? "مهماتك من كل الإدارات في قائمة واحدة. افتح أي مهمة لتنجزها." : "لا توجد مهام مسندة لك حالياً."}
+              desc={sum.tasks.length ? "إسناداتك المطلوبة منك في قائمة واحدة منظمة. افتح أي إسناد لتنجزه." : "تتابع من هنا التعميمات الواردة وأي إسنادات تُوكل إليك."}
               actions={minWeek < curWeek ? (
                 <div className="inline-flex items-center h-11 rounded-full bg-white p-1">
                   <button onClick={() => { setWeek(w => Math.min(curWeek, w + 1)); setOpenKey(null); }} disabled={week >= curWeek} className="w-9 h-9 rounded-full hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center rotate-180"><PA2Icon name="chevron" className="w-4 h-4" /></button>
@@ -8481,31 +10010,58 @@ CREATE POLICY "Allow public upload on madyan-media"
             <MXDirectiveStrip directives={myDirectives} onRead={(id) => mxMarkDirectiveRead(setDb, id)} />
             {unread.length > 0 && <MXBulletinStrip bulletin={unread[0]} more={unread.length - 1} onAck={() => ack(unread[0])} onOpenAll={() => setView("bulletins")} />}
 
-            {myDeptIds.length > 0 && (
+            {reviewerPending.length > 0 && (
+              <MXCard className="p-6 mb-8">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <div className="text-[13px] font-medium text-[#4F3E8F]">مراجعة واعتماد</div>
+                    <h2 className="text-[18px] font-bold text-stone-900 mt-0.5">إسنادات موكلة إليك لاعتمادها ({reviewerPending.length})</h2>
+                  </div>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  {reviewerPending.map(p => (
+                    <div key={`${p.user.id}:${p.week}:${p.task.id}`} className="rounded-2xl bg-[#ECE7FA]/60 px-4 py-3.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[14px] font-semibold text-stone-900">{pa2Short(p.user.name)}</span>
+                        <span className="text-[12px] text-stone-500">{p.user.unit || ""} · الأسبوع {p.week}</span>
+                      </div>
+                      <div className="text-[13px] text-[#4F3E8F] font-medium mt-1">{p.task.title}</div>
+                      {p.rec.note && <p className="text-[13px] text-stone-600 mt-1.5 leading-relaxed whitespace-pre-line">«{p.rec.note}»</p>}
+                      <div className="flex items-center gap-2 mt-3">
+                        <button onClick={() => approveAsReviewer(p)} className="h-8 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold">اعتماد</button>
+                        <button onClick={() => rejectAsReviewer(p)} className="h-8 px-3 rounded-full text-[12px] text-rose-600 hover:bg-rose-50">إعادة للمراجعة</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </MXCard>
+            )}
+
+            {sum.tasks.length > 0 && (
               <MXScoreCard
                 label={isPast ? `أين وصلت في الأسبوع ${week}؟` : "أين وصلت هذا الأسبوع؟"}
                 pct={sum.pct}
-                caption={`${sum.done} من ${sum.total} مهام مكتملة`}
-                bars={myDeptIds.map(id => {
-                  const b = sum.byDept[id] || { done: 0, total: 0, pct: 0 };
-                  return { label: mxDeptById(db, id)?.name || id, value: `${b.done} / ${b.total}`, pct: b.pct, tone: mxDeptToneById(db, id).dot };
+                caption={`${sum.done} من ${sum.total} إسنادات مكتملة`}
+                bars={sourceIds.map(id => {
+                  const b = sum.byDept[id] || { done: 0, total: 0, pct: 0, label: mxSourceLabel(db, id) };
+                  return { label: b.label || mxSourceLabel(db, id), value: `${b.done} / ${b.total}`, pct: b.pct, tone: mxDeptToneById(db, id).dot };
                 })}
                 stats={[{ n: sum.done, l: "مكتملة" }, { n: sum.submitted, l: "بانتظار الاعتماد" }, { n: sum.remaining, l: "متبقية" }]}
               />
             )}
 
-            {myDeptIds.length > 0 && (
-              <div className={`grid gap-6 items-start ${open ? "lg:grid-cols-[1fr_420px]" : ""}`}>
+            {sum.tasks.length > 0 ? (
+              <div className={`grid gap-6 items-start ${open ? "lg:grid-cols-[1fr_440px]" : ""}`}>
                 <div className="min-w-0">
                   <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                    <h2 className="text-xl font-bold text-stone-900">المهام</h2>
-                    {myDeptIds.length > 1 && (
+                    <h2 className="text-xl font-bold text-stone-900">الإسنادات</h2>
+                    {sourceIds.length > 1 && (
                       <PA2Segmented size="sm" value={deptFilter} onChange={(v) => { setDeptFilter(v); setOpenKey(null); }}
-                        options={[{ value: "all", label: "الكل" }, ...myDeptIds.map(id => ({ value: id, label: mxDeptById(db, id)?.shortName || mxDeptById(db, id)?.name }))]} />
+                        options={[{ value: "all", label: "الكل" }, ...sourceIds.map(id => ({ value: id, label: mxSourceLabel(db, id, sum.byDept[id]?.label) }))]} />
                     )}
                   </div>
                   {remainingList.length > 0 ? <div className="space-y-2">{remainingList.map(renderRow)}</div>
-                    : <div className="rounded-[22px] bg-[#E3F1E8] px-5 py-4 text-[15px] text-emerald-800">أنجزت كل مهام هذا الأسبوع. بارك الله فيك.</div>}
+                    : <div className="rounded-[22px] bg-[#E3F1E8] px-5 py-4 text-[15px] text-emerald-800">أنجزت كل إسنادات هذا الأسبوع. بارك الله فيك.</div>}
                   {doneList.length > 0 && (
                     <>
                       <div className="text-[13px] text-stone-400 mt-8 mb-3">المنجزة · {doneList.length}</div>
@@ -8517,6 +10073,8 @@ CREATE POLICY "Allow public upload on madyan-media"
                   <div className="lg:sticky lg:top-6">
                     <MXTaskPanel
                       key={`${openKey}:${week}`}
+                      db={db}
+                      me={me}
                       def={open.def}
                       dept={mxDeptById(db, open.def.deptId)}
                       rec={open.rec}
@@ -8524,12 +10082,15 @@ CREATE POLICY "Allow public upload on madyan-media"
                       week={week}
                       isPast={isPast}
                       curriculum={curriculum}
+                      showToast={showToast}
                       onClose={() => setOpenKey(null)}
                       onPatch={(patch) => mxPatchRecord(setDb, me.id, week, open.def.id, patch)}
                     />
                   </div>
                 )}
               </div>
+            ) : (
+              <PA2EmptyPanel title="لا توجد إسنادات مطلوبة منك هذا الأسبوع" text="ستظهر هنا أي إسنادات تُوكل إليك من القيادة التنفيذية أو الإدارات أو وحدتك." />
             )}
           </>
         );
