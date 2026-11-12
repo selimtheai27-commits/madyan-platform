@@ -1,15 +1,24 @@
 // ============================================================================
-// MADYAN SERVERLESS BACKEND API (Netlify Functions + Supabase PostgreSQL)
+// MADYAN ZERO-KNOWLEDGE E2EE SERVERLESS API (Netlify Functions + Supabase)
 // ============================================================================
-// يربط الواجهة الأمامية بقاعدة بيانات Supabase PostgreSQL عبر متغيرات البيئة في Netlify:
-// SUPABASE_URL
-// SUPABASE_ANON_KEY (أو SUPABASE_SERVICE_ROLE_KEY)
+// لا يخزن الخادم أي بيانات نصية أو جداول مستخدمين مكشوفة، بل يتعامل حصراً مع
+// الخزينة المشفرة من الطرف للطرف (id = 'live_vault' و __e2ee = 'maydan_v1').
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Content-Type": "application/json; charset=utf-8"
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+  "Pragma": "no-cache",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff"
+};
+
+const coarseUtcIso = () => {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
 };
 
 export async function handler(event) {
@@ -28,7 +37,10 @@ export async function handler(event) {
     process.env.VITE_SUPABASE_ANON_KEY ||
     "";
 
-  const safeJsonParse = (str) => JSON.parse(str, (k, v) => (k === "__proto__" || k === "constructor" || k === "prototype") ? undefined : v);
+  const safeJsonParse = (str) =>
+    JSON.parse(str, (k, v) =>
+      k === "__proto__" || k === "constructor" || k === "prototype" ? undefined : v
+    );
 
   const path = (event.path || "")
     .replace(/^\/\.netlify\/functions\/api\/?/, "")
@@ -55,7 +67,7 @@ export async function handler(event) {
       body: JSON.stringify({
         ok: false,
         configured: false,
-        message: "لم يتم ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_ANON_KEY بعد."
+        message: "لم يتم ضبط متغيرات البيئة السحابية بعد."
       })
     };
   }
@@ -69,19 +81,18 @@ export async function handler(event) {
   };
 
   try {
-    // 2. GET /api/state -> قراءة حالة المنصة من جدول madyan_app_state في Supabase
+    // 2. GET /api/state -> قراءة الخزينة المشفرة فقط (id = live_vault)
     if (event.httpMethod === "GET" && path === "state") {
-      const res = await fetch(`${restBase}/madyan_app_state?id=eq.global&select=*`, {
+      const res = await fetch(`${restBase}/madyan_app_state?id=eq.live_vault&select=id,state_data,updated_at`, {
         method: "GET",
         headers: dbHeaders
       });
 
       if (!res.ok) {
-        const errText = await res.text();
         return {
           statusCode: res.status,
           headers: CORS_HEADERS,
-          body: JSON.stringify({ ok: false, error: errText })
+          body: JSON.stringify({ ok: false, error: "State fetch error" })
         };
       }
 
@@ -98,103 +109,58 @@ export async function handler(event) {
       };
     }
 
-    // 3. POST /api/state -> حفظ وتحديث حالة المنصة والجداول العلائقية في Supabase
+    // 3. POST /api/state -> حفظ الخزينة المشفرة حصراً (يرفض أي بيانات غير مشفرة)
     if (event.httpMethod === "POST" && path === "state") {
       const body = safeJsonParse(event.body || "{}");
       const stateData = body.state;
-      const updatedBy = body.updatedBy || "client";
 
-      if (!stateData || typeof stateData !== "object") {
+      if (!stateData || typeof stateData !== "object" || stateData.__e2ee !== "maydan_v1" || typeof stateData.ct !== "string") {
         return {
           statusCode: 400,
           headers: CORS_HEADERS,
-          body: JSON.stringify({ ok: false, error: "Invalid state payload" })
+          body: JSON.stringify({
+            ok: false,
+            error: "Refused: Only Zero-Knowledge E2EE vault payloads (__e2ee = maydan_v1) are permitted."
+          })
         };
       }
 
-      // حفظ الحالة الكاملة في madyan_app_state
       const upsertRes = await fetch(`${restBase}/madyan_app_state`, {
         method: "POST",
         headers: dbHeaders,
         body: JSON.stringify({
-          id: "global",
+          id: "live_vault",
           state_data: stateData,
-          updated_at: new Date().toISOString(),
-          updated_by: updatedBy
+          updated_at: coarseUtcIso(),
+          updated_by: "vault"
         })
       });
 
       if (!upsertRes.ok) {
-        const errText = await upsertRes.text();
         return {
           statusCode: upsertRes.status,
           headers: CORS_HEADERS,
-          body: JSON.stringify({ ok: false, error: errText })
+          body: JSON.stringify({ ok: false, error: "Vault write error" })
         };
-      }
-
-      // مزامنة جدول المستخدمين madyan_users في الخلفية لسهولة الاستعلام المباشر
-      if (Array.isArray(stateData.users) && stateData.users.length > 0) {
-        const userRows = stateData.users.map(u => ({
-          id: u.id,
-          username: u.username,
-          password: u.password,
-          role_type: u.roleType,
-          name: u.name,
-          job_title: u.jobTitle || "",
-          unit: u.unit || "",
-          onboarded: Boolean(u.onboarded),
-          joined_at: u.joinedAt || Date.now(),
-          default_schedule: u.defaultSchedule || {},
-          week_overrides: u.weekOverrides || {},
-          tasks_record: u.tasksRecord || {},
-          updated_at: new Date().toISOString()
-        }));
-        await fetch(`${restBase}/madyan_users`, {
-          method: "POST",
-          headers: dbHeaders,
-          body: JSON.stringify(userRows)
-        }).catch(() => {});
-      }
-
-      // مزامنة جدول التعميمات madyan_bulletins
-      if (Array.isArray(stateData.bulletins) && stateData.bulletins.length > 0) {
-        const bulletinRows = stateData.bulletins.map(b => ({
-          id: b.id,
-          title: b.title,
-          content: b.content,
-          category: b.category || "سياسة جديدة",
-          sender_name: b.senderName || "",
-          sender_role: b.senderRole || "",
-          created_at_label: b.createdAt || "",
-          target_type: b.targetType || "all",
-          recipient_ids: b.recipientIds || [],
-          acknowledged_by: b.acknowledgedBy || {}
-        }));
-        await fetch(`${restBase}/madyan_bulletins`, {
-          method: "POST",
-          headers: dbHeaders,
-          body: JSON.stringify(bulletinRows)
-        }).catch(() => {});
       }
 
       return {
         statusCode: 200,
         headers: CORS_HEADERS,
-        body: JSON.stringify({ ok: true, savedAt: new Date().toISOString() })
+        body: JSON.stringify({ ok: true, savedAt: coarseUtcIso() })
       };
     }
 
     return {
       statusCode: 404,
       headers: CORS_HEADERS,
-      body: JSON.stringify({ ok: false, error: `Unknown endpoint: ${path}` })
+      body: JSON.stringify({ ok: false, error: "Not found" })
     };
-  } catch (err) {
+  } catch {
     return {
       statusCode: 500,
       headers: CORS_HEADERS,
-      body: JSON.stringify({ ok: false, error: String(err.message || err) })
+      body: JSON.stringify({ ok: false, error: "Internal server error" })
     };
   }
 }

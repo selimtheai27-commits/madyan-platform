@@ -1,0 +1,16128 @@
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef
+} = React;
+
+// ============================================================================
+// 0. ZERO-TRACE SECURITY CORE (RAM-ONLY, ZERO COOKIES, ZERO BROWSER STORAGE)
+// ============================================================================
+const MX_NULL_STORAGE = {
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {}
+};
+const MX_ORIGIN_BASE_HREF = (() => {
+  try {
+    if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+      const path = window.location.pathname || "/";
+      const dir = path.endsWith("/") ? path : path.replace(/[^/]*$/, "");
+      return window.location.origin + dir;
+    }
+    const baseEl = document.querySelector("base");
+    if (baseEl && baseEl.href) return baseEl.href;
+  } catch (e) {}
+  return "";
+})();
+const MX_BOOT_PARAMS = (() => {
+  const out = {};
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    sp.forEach((v, k) => {
+      out[k] = v;
+    });
+    if ((window.location.protocol === "http:" || window.location.protocol === "https:") && (window.location.search || window.location.hash)) {
+      window.history.replaceState(null, "", window.location.pathname || "/");
+    }
+  } catch (e) {}
+  return out;
+})();
+function mxGetBootParam(key, fallback = null) {
+  return Object.prototype.hasOwnProperty.call(MX_BOOT_PARAMS, key) ? MX_BOOT_PARAMS[key] : fallback;
+}
+function mxPurgeAllBrowserTraces() {
+  try {
+    window.localStorage && window.localStorage.clear();
+  } catch (e) {}
+  try {
+    window.sessionStorage && window.sessionStorage.clear();
+  } catch (e) {}
+  try {
+    const cookies = (document.cookie || "").split(";");
+    for (let i = 0; i < cookies.length; i++) {
+      const eqPos = cookies[i].indexOf("=");
+      const name = (eqPos > -1 ? cookies[i].slice(0, eqPos) : cookies[i]).trim();
+      if (name) {
+        document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Strict`;
+        document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=${window.location.pathname || "/"};SameSite=Strict`;
+      }
+    }
+  } catch (e) {}
+  try {
+    if (window.caches && typeof window.caches.keys === "function") {
+      window.caches.keys().then(keys => keys.forEach(k => window.caches.delete(k))).catch(() => {});
+    }
+  } catch (e) {}
+  try {
+    if (navigator.serviceWorker && typeof navigator.serviceWorker.getRegistrations === "function") {
+      navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())).catch(() => {});
+    }
+  } catch (e) {}
+  try {
+    if (window.indexedDB && typeof window.indexedDB.databases === "function") {
+      window.indexedDB.databases().then(dbs => {
+        (dbs || []).forEach(d => {
+          if (d && d.name) {
+            try {
+              window.indexedDB.deleteDatabase(d.name);
+            } catch (e) {}
+          }
+        });
+      }).catch(() => {});
+    }
+  } catch (e) {}
+}
+
+// تطهير فوري عند بدء التشغيل وعند إغلاق التبويب لضمان صفر آثار على الجهاز
+mxPurgeAllBrowserTraces();
+try {
+  window.addEventListener("pagehide", mxPurgeAllBrowserTraces);
+  window.addEventListener("beforeunload", mxPurgeAllBrowserTraces);
+} catch (e) {}
+function mxRandomBytes(len = 16) {
+  const arr = new Uint8Array(len);
+  if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+    window.crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < len; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
+  return arr;
+}
+function mxRandomHex(byteLen = 8) {
+  const b = mxRandomBytes(byteLen);
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+  return s;
+}
+function mxRandomId(prefix = "id") {
+  return `${prefix}_${mxRandomHex(6)}`;
+}
+
+// تقريب الطوابع الزمنية إلى بداية اليوم العالمي (UTC Midnight) لمنع كشف المنطقة الزمنية أو توقيت النشاط
+function mxCoarseNow() {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+function mxCoarseUtcIso() {
+  return new Date(mxCoarseNow()).toISOString();
+}
+function mxIsAboutBlankIsolated() {
+  try {
+    return window.location.protocol === "about:" || Boolean(window.__MX_ISOLATED_WINDOW);
+  } catch (e) {
+    return false;
+  }
+}
+async function mxDetectBrowserIsolation() {
+  if (mxIsAboutBlankIsolated()) {
+    return {
+      state: "isolated_window",
+      allowed: true,
+      label: "نافذة معزولة بلا سجل تصفح"
+    };
+  }
+  try {
+    if (window.isSecureContext && !("serviceWorker" in navigator)) {
+      return {
+        state: "private_verified",
+        allowed: true,
+        label: "متصفح خفي موثّق"
+      };
+    }
+  } catch (e) {}
+  try {
+    if (navigator.storage && typeof navigator.storage.estimate === "function") {
+      const est = await navigator.storage.estimate();
+      const quota = Number(est && est.quota) || 0;
+      // متصفحات كروميوم تقيد حصة المتصفح الخفي عند 10 جيجابايت كحد أقصى؛ أي حصة تتجاوز 14 جيجابايت تعني متصفحاً عادياً غير مخفي قطعاً
+      const FOURTEEN_GIB = 14 * 1024 * 1024 * 1024;
+      if (quota > FOURTEEN_GIB) {
+        return {
+          state: "normal_detected",
+          allowed: false,
+          canConfirmPrivate: true,
+          quotaBytes: quota,
+          label: "متصفح عادي غير معزول"
+        };
+      }
+      return {
+        state: "ambiguous_private",
+        allowed: false,
+        canConfirmPrivate: true,
+        quotaBytes: quota,
+        label: "يلزم تأكيد العزل أو المتصفح الخفي"
+      };
+    }
+  } catch (e) {}
+  return {
+    state: "ambiguous_private",
+    allowed: false,
+    canConfirmPrivate: true,
+    quotaBytes: 0,
+    label: "يلزم تأكيد العزل أو المتصفح الخفي"
+  };
+}
+function mxOpenIsolatedBlankWindow() {
+  const baseHref = MX_ORIGIN_BASE_HREF || window.location.origin + "/";
+  const safeBase = String(baseHref).replace(/"/g, "&quot;");
+  const win = window.open("about:blank", "_blank");
+  if (!win || !win.document) return false;
+  const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <base href="${safeBase}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; media-src 'self' https: blob: data:; frame-src 'self' https://www.youtube-nocookie.com https://drive.google.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; form-action 'self';" />
+  <title>بوابة المتابعة</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%231C1917'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23EA580C'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./vendor/styles.css" />
+</head>
+<body class="min-h-screen">
+  <div id="root"></div>
+  <script src="./vendor/react.production.min.js"><\/script>
+  <script src="./vendor/react-dom.production.min.js"><\/script>
+  <script src="./vendor/supabase.min.js"><\/script>
+  <script src="./vendor/app.js"><\/script>
+</body>
+</html>`;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  try {
+    win.opener = null;
+  } catch (e) {}
+  setTimeout(() => {
+    try {
+      window.location.replace("about:blank");
+    } catch (e) {}
+  }, 120);
+  return true;
+}
+
+// ============================================================================
+// 1. CONSTANTS & INITIAL DATABASE SEED (MAYDAN 4-TIER ARCHITECTURE)
+// ============================================================================
+const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const DAYS_SHORT_AR = ['أحد', 'اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
+const MONTHS_AR = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+const SYSTEM_ANCHOR_DATE = mxCoarseNow();
+const TASK_TEMPLATES_LIBRARY = [{
+  id: "lecture_quiz",
+  title: "محاضرة واختبار استيعاب",
+  icon: "🎬",
+  defaultEval: "self"
+}, {
+  id: "daily_habit",
+  title: "ورد أو عادة يومية مستمرة",
+  icon: "🔄",
+  defaultEval: "self"
+}, {
+  id: "reading",
+  title: "مطالعة وقراءة منهجية",
+  icon: "📖",
+  defaultEval: "self"
+}, {
+  id: "meeting",
+  title: "حضور لقاء أو مجلس",
+  icon: "🤝",
+  defaultEval: "manager"
+}, {
+  id: "practical",
+  title: "تكليف عملي أو ميداني",
+  icon: "📋",
+  defaultEval: "manager"
+}, {
+  id: "agenda_minutes",
+  title: "أجندة ومحضر اجتماع",
+  icon: "📝",
+  defaultEval: "self"
+}];
+const DEFAULT_DEPARTMENTS = [{
+  id: "dept_hr",
+  name: "إدارة الموارد البشرية",
+  shortName: "الموارد البشرية",
+  icon: "🏛️",
+  theme: "orange",
+  description: "تختص بمتابعة الانضباط الإداري، المحاضرات، الأجندة، الحضور، وتوثيق المحاضر.",
+  isCore: true,
+  enabled: true,
+  allowedTaskTypes: ["lecture_quiz", "meeting", "agenda_minutes", "practical"],
+  maxTotalTasks: 6,
+  maxPerTypePerCadre: 2
+}, {
+  id: "dept_tarbawi",
+  name: "الإدارة التربوية",
+  shortName: "الإدارة التربوية",
+  icon: "🌱",
+  theme: "emerald",
+  description: "تختص بمتابعة البناء الذاتي والتزكية، الورد اليومي، القراءة المنهجية، واللقاء التربوي.",
+  isCore: true,
+  enabled: true,
+  allowedTaskTypes: ["daily_habit", "reading", "meeting", "practical"],
+  maxTotalTasks: 6,
+  maxPerTypePerCadre: 2
+}];
+const DEFAULT_UNITS = [{
+  id: "unit_strategy",
+  name: "وحدة التخطيط الاستراتيجي",
+  inviteCode: "MAYDAN-STRAT",
+  defaultDepartments: ["dept_hr", "dept_tarbawi"]
+}, {
+  id: "unit_ops",
+  name: "وحدة المتابعة والتنسيق",
+  inviteCode: "MAYDAN-OPS",
+  defaultDepartments: ["dept_hr", "dept_tarbawi"]
+}, {
+  id: "unit_field",
+  name: "وحدة العمل الميداني",
+  inviteCode: "MAYDAN-FIELD",
+  defaultDepartments: ["dept_hr", "dept_tarbawi"]
+}];
+const DEFAULT_TEAMS = [{
+  id: "team_media",
+  name: "فريق التواصل والإعلام العابر للوحدات",
+  purpose: "تنسيق الحملات الإعلامية المشتركة بين الوحدات"
+}, {
+  id: "team_conf",
+  name: "لجنة التخطيط للملتقى السنوي",
+  purpose: "الإعداد التنظيمي واللوجستي للملتقى العام"
+}];
+const DEFAULT_GOVERNANCE_RULES = {
+  allowCadreScheduleChange: true,
+  allowWeekSpecificOverride: true,
+  maxScheduleChangesPerMonth: 2,
+  allowLateSubmissions: true,
+  maxPastWeeksEditable: 4,
+  allowCadreNameEdit: true,
+  allowCadrePasswordChange: true,
+  allowCadreJobTitleEdit: false,
+  allowCadreUnitEdit: false,
+  latePointsPct: 50,
+  quizPassThresholdPct: 60,
+  dailyTaskTargetDays: 5,
+  forcePasswordChangeOnFirstLogin: true,
+  requirePrivateBrowser: true,
+  autoLockMinutes: 10,
+  lockOnTabHide: false,
+  hideDemoOnLogin: false,
+  disableResetButton: false
+};
+const DEFAULT_TARBAWI_TASKS = [{
+  id: "tarbawi_wird",
+  title: "الورد القرآني والذكر اليومي",
+  subtitle: "المحافظة اليومية على ورد التلاوة وأذكار الصباح والمساء",
+  instructions: "اضغط على أيام الأسبوع التي أتممت فيها وردك اليومي (يكتمل الهدف الأسبوعي بإنجاز 5 أيام فأكثر أو إتمام النصاب).",
+  durationMinutes: 20,
+  badge: "زاد روحي يومي",
+  icon: "📖",
+  trackType: "daily_days",
+  targetDays: 5,
+  targetScope: "all",
+  targetUnit: "",
+  targetUserIds: [],
+  enabled: true
+}, {
+  id: "tarbawi_reading",
+  title: "القراءة المنهجية والكتاب المقرر",
+  subtitle: "قراءة القدر الأسبوعي المقرر وتدوين أهم الفوائد العملية",
+  instructions: "اقرأ الصفحات المقررة لهذا الأسبوع، وسجّل خلاصة الفكرة أو الفائدة في مسودتك التربوية.",
+  durationMinutes: 40,
+  badge: "بناء فكري",
+  icon: "📚",
+  trackType: "check",
+  targetDays: 1,
+  targetScope: "all",
+  targetUnit: "",
+  targetUserIds: [],
+  enabled: true
+}, {
+  id: "tarbawi_majlis",
+  title: "اللقاء التربوي الأسبوعي",
+  subtitle: "حضور الجلسة التربوية الأسبوعية والمشاركة الفاعلة فيها",
+  instructions: "احضر اللقاء التربوي في موعده وساهم في النقاش العملي حول قيمة الأسبوع.",
+  durationMinutes: 60,
+  badge: "تزكية وصحبة",
+  icon: "🌿",
+  trackType: "check",
+  targetDays: 1,
+  targetScope: "all",
+  targetUnit: "",
+  targetUserIds: [],
+  enabled: true
+}, {
+  id: "tarbawi_amal",
+  title: "التطبيق السلوكي والمبادرة العملية",
+  subtitle: "تحويل قيمة الأسبوع التربوية إلى سلوك عملي ملموس",
+  instructions: "طبّق السلوك المستهدف لهذا الأسبوع في بيئة عملك أو محيطك ثم أكّد الإنجاز.",
+  durationMinutes: 25,
+  badge: "أثر سلوكي",
+  icon: "✨",
+  trackType: "check",
+  targetDays: 1,
+  targetScope: "all",
+  targetUnit: "",
+  targetUserIds: [],
+  enabled: true
+}];
+const INITIAL_STATE = {
+  systemConfig: {
+    departments: DEFAULT_DEPARTMENTS,
+    organizationalUnits: DEFAULT_UNITS,
+    governanceRules: DEFAULT_GOVERNANCE_RULES,
+    availableCurriculumWeeks: [1, 2, 3, 4, 5, 6, 7, 8],
+    tarbawiWeeklyFocus: {
+      title: "الإتقان والأمانة في العمل المؤسسي",
+      bookTitle: "المقرر القرائي: فصل فقه الأولويات (ص 15 - 35)",
+      hint: "تذكّر أن توازن الكادر يجمع بين انضباطه الإداري وزاده التربوي."
+    },
+    quotes: [{
+      id: 1,
+      text: "الانضباط المؤسسي ليس قيداً، بل هو الجسر الذي يحول الأهداف الاستراتيجية إلى واقع يومي ملموس.",
+      author: "منهجية ميدان"
+    }, {
+      id: 2,
+      text: "التحضير الجيد قبل الاجتماع بـ 24 ساعة يختصر نصف وقت النقاش ويضاعف جودة القرار.",
+      author: "إدارة العمليات"
+    }, {
+      id: 3,
+      text: "قليلٌ دائمٌ خيرٌ من كثيرٍ منقطع؛ العادة التربوية تُبنى بالمداومة اليومية الهادئة.",
+      author: "المحور التربوي"
+    }],
+    taskDefinitions: {
+      lecture: {
+        title: "المحاضرة الأسبوعية (تعلم واختبر)",
+        subtitle: "مشاهدة المادة المعرفية المقررة وحل الاختبار القصير",
+        instructions: "شاهد الفيديو المسجل بالكامل بتركيز، ثم أجب عن الأسئلة بالأسفل. بمجرد اعتماد إجاباتك تُقفل المحاولة وتُرصد الدرجة.",
+        durationMinutes: 25,
+        badge: "تعلم مستمر"
+      },
+      agenda: {
+        title: "إرسال أجندة اللقاء",
+        subtitle: "تأطير وإرسال بنود الاجتماع قبل الموعد بـ 24 ساعة",
+        instructions: "جهّز النقاط الأربع الأساسية (التحديثات الإدارية، متابعة التوصيات، تسليم المهمات، البند الاستراتيجي) وأرسلها قبل الموعد بـ 24 ساعة.",
+        durationMinutes: 15,
+        badge: "قبل اللقاء بـ 24 ساعة"
+      },
+      attendance: {
+        title: "حضور اللقاء الأسبوعي",
+        subtitle: "الانضباط في الموعد المحدد والمشاركة الفعالة",
+        instructions: "التواجد في تمام الساعة المحددة لاجتماعك الأسبوعي وتأكيد البصمة الزمنية للحضور.",
+        durationMinutes: 90,
+        badge: "اللقاء الأسبوعي"
+      },
+      minutes: {
+        title: "توثيق محضر اللقاء",
+        subtitle: "اعتماد المخرجات والإسنادات خلال 24 ساعة من انتهاء الاجتماع",
+        instructions: "دوّن أهم القرارات المعتمدة والمهام المسندة مع مواعيد تسليمها خلال 24 ساعة كحد أقصى من انتهاء اللقاء.",
+        durationMinutes: 20,
+        badge: "خلال 24 ساعة بعد اللقاء"
+      }
+    },
+    tarbawiTaskDefinitions: DEFAULT_TARBAWI_TASKS
+  },
+  bulletins: [{
+    id: "bul_1",
+    title: "اعتماد سياسة تأطير أجندة الاجتماعات الأسبوعية",
+    content: "يرجى من كافة الكوادر الالتزام بإرسال أجندة اللقاء قبل 24 ساعة من الموعد المحدد لضمان كفاءة النقاش وجودة القرارات.",
+    category: "سياسة جديدة",
+    senderName: "د. طارق المنصور",
+    senderRole: "عضو المكتب التنفيذي",
+    createdAt: "منذ يومين • 10:30 صباحاً",
+    targetType: "all",
+    recipientIds: [],
+    acknowledgedBy: {
+      "u_2": "أمس 04:15 مساءً"
+    }
+  }, {
+    id: "bul_2",
+    title: "إطلاق المرحلة الثانية من مشروع التحول المؤسسي",
+    content: "تم اعتماد الخطة التنفيذية للربع القادم لوحدة التخطيط الاستراتيجي، ويرجى مراجعة مؤشرات الأداء المحدثة قبل اجتماع الثلاثاء.",
+    category: "تعميم مشروع",
+    senderName: "د. طارق المنصور",
+    senderRole: "عضو المكتب التنفيذي",
+    createdAt: "اليوم • 09:00 صباحاً",
+    targetType: "custom",
+    recipientIds: ["u_1"],
+    acknowledgedBy: {}
+  }],
+  weeklyCurriculums: {
+    default: {
+      lectureTitle: "منهجية التخطيط الأسبوعي وإدارة الأولويات",
+      lectureDesc: "كيف تبني إيقاع عمل مؤسسي مستدام يمنع تراكم المهام ويرفع كفاءة الاجتماعات.",
+      videoType: "mp4",
+      videoUrl: "builtin://demo-lecture",
+      questions: [{
+        id: "q1",
+        text: "ما هو التوقيت المعياري لإرسال أجندة اللقاء الأسبوعي قبل موعد الاجتماع؟",
+        options: ["قبل الاجتماع بساعة واحدة", "قبل الاجتماع بـ 24 ساعة على الأقل", "أثناء انعقاد الاجتماع", "بعد انتهاء الاجتماع"],
+        correctIndex: 1
+      }, {
+        id: "q2",
+        text: "ما الهدف الأساسي من توثيق محضر الاجتماع خلال 24 ساعة؟",
+        options: ["حفظ الأرشيف فقط", "تثبيت المخرجات المعتمدة والإسنادات الزمنية بوضوح", "زيادة عدد التقارير الورقية", "إلغاء الاجتماع القادم"],
+        correctIndex: 1
+      }, {
+        id: "q3",
+        text: "عند إنجاز محاضرة أسبوع سابق بعد انتهاء أسبوعها، كيف يتعامل النظام معها؟",
+        options: ["يرفض النظام فتحها نهائياً", "تُحتسب مكتملة في الموعد بـ 100%", "تُوسم كمكتملة متأخراً وتأخذ نسبة نقاط التأخير المقررة", "تحذف جميع نقاط الكادر"],
+        correctIndex: 2
+      }]
+    }
+  },
+  users: [{
+    id: "u_platform",
+    username: "sysadmin",
+    password: "1234",
+    roleType: "platform_admin",
+    name: "م. سليم (مدير المنصة التقني)",
+    jobTitle: "مدير المنصة والنظم التقنية",
+    unit: "إدارة المنصة التقنية"
+  }, {
+    id: "u_exec",
+    username: "exec",
+    password: "1234",
+    roleType: "executive",
+    isExecHead: true,
+    name: "د. طارق المنصور (قائد المكتب التنفيذي)",
+    jobTitle: "المدير التنفيذي (قائد المكتب التنفيذي)",
+    unit: "القيادة التنفيذية"
+  }, {
+    id: "u_office",
+    username: "office",
+    password: "1234",
+    roleType: "executive",
+    isExecHead: false,
+    joinedAt: SYSTEM_ANCHOR_DATE - 3 * MS_PER_WEEK,
+    name: "أ. منصور العلي (المكتب التنفيذي)",
+    jobTitle: "عضو المكتب التنفيذي",
+    unit: "المكتب التنفيذي",
+    assignedDepartments: [],
+    tasksRecord: {}
+  }, {
+    id: "u_admin",
+    username: "admin",
+    password: "admin123",
+    roleType: "operational_admin",
+    departmentId: "dept_hr",
+    name: "أ. خالد الراشد (الموارد البشرية)",
+    jobTitle: "مدير إدارة الموارد البشرية",
+    unit: "إدارة الموارد البشرية"
+  }, {
+    id: "u_tarbawi",
+    username: "tarbawi",
+    password: "1234",
+    roleType: "operational_admin",
+    departmentId: "dept_tarbawi",
+    name: "د. عبدالله السالم (الإدارة التربوية)",
+    jobTitle: "مدير الإدارة التربوية",
+    unit: "الإدارة التربوية"
+  }, {
+    id: "u_1",
+    username: "maydan",
+    password: "1234",
+    roleType: "cadre",
+    onboarded: true,
+    joinedAt: SYSTEM_ANCHOR_DATE - 4 * MS_PER_WEEK - 2 * 24 * 3600 * 1000,
+    name: "أحمد المنصور",
+    jobTitle: "منسق وحدة التطوير",
+    unit: "وحدة التخطيط الاستراتيجي",
+    assignedDepartments: ["dept_hr", "dept_tarbawi"],
+    defaultSchedule: {
+      meetDay: 2,
+      meetTime: "19:00",
+      meetDuration: 90
+    },
+    weekOverrides: {},
+    tasksRecord: {
+      1: {
+        lecture: {
+          status: "on_time",
+          completedAt: "الأحد 08:30 مساءً",
+          quizSubmission: {
+            score: 3,
+            total: 3,
+            answers: [1, 1, 2]
+          }
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "الاثنين 06:15 مساءً",
+          note: "تم إرسال الأجندة للمجموعة"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الثلاثاء 07:05 مساءً"
+        },
+        minutes: {
+          status: "on_time",
+          completedAt: "الأربعاء 03:20 مساءً"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 3, 4, 5],
+          completedAt: "الجمعة 09:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الخميس 08:00 مساءً",
+          note: "تمت قراءة الفصل الأول وتلخيص 3 نقاط"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الأربعاء 08:30 مساءً"
+        },
+        tarbawi_amal: {
+          status: "on_time",
+          completedAt: "الخميس 05:00 مساءً"
+        }
+      },
+      2: {
+        lecture: {
+          status: "on_time",
+          completedAt: "الاثنين 09:00 مساءً",
+          quizSubmission: {
+            score: 3,
+            total: 3,
+            answers: [1, 1, 2]
+          }
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "الاثنين 05:40 مساءً"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الثلاثاء 07:00 مساءً"
+        },
+        minutes: {
+          status: "pending"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 3, 4],
+          completedAt: "الخميس 10:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الأربعاء 09:15 مساءً"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الأربعاء 08:00 مساءً"
+        },
+        tarbawi_amal: {
+          status: "pending"
+        }
+      },
+      3: {
+        lecture: {
+          status: "late",
+          completedAt: "الأسبوع 4 (متأخر)",
+          quizSubmission: {
+            score: 2,
+            total: 3,
+            answers: [1, 1, 1]
+          }
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "الاثنين 06:00 مساءً"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الثلاثاء 07:02 مساءً"
+        },
+        minutes: {
+          status: "on_time",
+          completedAt: "الأربعاء 04:10 مساءً"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 4, 5],
+          completedAt: "الجمعة 07:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الخميس 06:00 مساءً"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الأربعاء 08:00 مساءً"
+        },
+        tarbawi_amal: {
+          status: "on_time",
+          completedAt: "الجمعة 04:00 مساءً"
+        }
+      },
+      4: {
+        lecture: {
+          status: "pending"
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "الاثنين 06:30 مساءً"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الثلاثاء 07:00 مساءً"
+        },
+        minutes: {
+          status: "pending"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 3, 4],
+          completedAt: "الخميس 11:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "pending"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الأربعاء 08:00 مساءً"
+        },
+        tarbawi_amal: {
+          status: "on_time",
+          completedAt: "الخميس 03:00 مساءً"
+        }
+      },
+      5: {
+        lecture: {
+          status: "pending"
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "الاثنين 06:45 مساءً"
+        },
+        attendance: {
+          status: "pending"
+        },
+        minutes: {
+          status: "pending"
+        },
+        tarbawi_wird: {
+          status: "pending",
+          daysCompleted: [0, 1, 2]
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الاثنين 09:30 مساءً",
+          note: "أهم فائدة: التوازن بين الأهم فالمهم"
+        },
+        tarbawi_majlis: {
+          status: "pending"
+        },
+        tarbawi_amal: {
+          status: "pending"
+        }
+      }
+    }
+  }, {
+    id: "u_2",
+    username: "sara",
+    password: "1234",
+    roleType: "cadre",
+    onboarded: false,
+    joinedAt: SYSTEM_ANCHOR_DATE - 2 * MS_PER_WEEK - 1 * 24 * 3600 * 1000,
+    name: "سارة العتيبي",
+    jobTitle: "مسؤولة العمليات والجودة",
+    unit: "وحدة المتابعة والتنسيق",
+    defaultSchedule: {
+      meetDay: 0,
+      meetTime: "16:00",
+      meetDuration: 60
+    },
+    weekOverrides: {},
+    tasksRecord: {
+      1: {
+        lecture: {
+          status: "on_time",
+          completedAt: "الأحد 02:00 مساءً",
+          quizSubmission: {
+            score: 3,
+            total: 3,
+            answers: [1, 1, 2]
+          }
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "السبت 03:30 مساءً"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الأحد 04:00 مساءً"
+        },
+        minutes: {
+          status: "on_time",
+          completedAt: "الاثنين 01:15 مساءً"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 3, 4, 5, 6],
+          completedAt: "السبت 08:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الجمعة 05:00 مساءً"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الخميس 07:00 مساءً"
+        },
+        tarbawi_amal: {
+          status: "on_time",
+          completedAt: "الجمعة 09:00 مساءً"
+        }
+      },
+      2: {
+        lecture: {
+          status: "on_time",
+          completedAt: "الاثنين 07:00 مساءً",
+          quizSubmission: {
+            score: 2,
+            total: 3,
+            answers: [1, 0, 2]
+          }
+        },
+        agenda: {
+          status: "on_time",
+          completedAt: "السبت 03:00 مساءً"
+        },
+        attendance: {
+          status: "on_time",
+          completedAt: "الأحد 04:05 مساءً"
+        },
+        minutes: {
+          status: "on_time",
+          completedAt: "الاثنين 12:30 مساءً"
+        },
+        tarbawi_wird: {
+          status: "on_time",
+          daysCompleted: [0, 1, 2, 3, 4],
+          completedAt: "الخميس 09:00 مساءً"
+        },
+        tarbawi_reading: {
+          status: "on_time",
+          completedAt: "الأربعاء 06:00 مساءً"
+        },
+        tarbawi_majlis: {
+          status: "on_time",
+          completedAt: "الخميس 07:00 مساءً"
+        },
+        tarbawi_amal: {
+          status: "pending"
+        }
+      },
+      3: {
+        lecture: {
+          status: "pending"
+        },
+        agenda: {
+          status: "pending"
+        },
+        attendance: {
+          status: "pending"
+        },
+        minutes: {
+          status: "pending"
+        },
+        tarbawi_wird: {
+          status: "pending",
+          daysCompleted: [0, 1]
+        },
+        tarbawi_reading: {
+          status: "pending"
+        },
+        tarbawi_majlis: {
+          status: "pending"
+        },
+        tarbawi_amal: {
+          status: "pending"
+        }
+      }
+    }
+  }]
+};
+
+// ============================================================================
+// 1.5 DEMO SEED V3 — ٣٠ عضواً تجريبياً موزعين على ٥ وحدات وإدارتين (بيانات حتمية ثابتة)
+// ============================================================================
+(function seedDemoMembersV3() {
+  const HR = ["lecture", "agenda", "attendance", "minutes"];
+  const TB = ["tarbawi_wird", "tarbawi_reading", "tarbawi_majlis", "tarbawi_amal"];
+  const MANAGER_TASKS = ["attendance", "tarbawi_majlis"];
+  const DAY = 24 * 3600 * 1000;
+  const rngFor = seedNum => {
+    let a = seedNum * 9301 + 49297;
+    return () => {
+      a = (a * 1103515245 + 12345) % 2147483648;
+      return a / 2147483648;
+    };
+  };
+  const todayIdx = new Date().getDay();
+  const stamp = (w, cur) => w === cur ? "هذا الأسبوع" : `الأسبوع ${w}`;
+  const genRecords = (deptIds, weeks, profile, rng) => {
+    const rec = {};
+    const keys = [...(deptIds.includes("dept_hr") ? HR : []), ...(deptIds.includes("dept_tarbawi") ? TB : [])];
+    for (let w = 1; w <= weeks; w++) {
+      const isCur = w === weeks;
+      const isPrev = w === weeks - 1;
+      const wk = {};
+      keys.forEach(k => {
+        const p = isCur ? profile.cur : profile.p;
+        if (k === "tarbawi_wird") {
+          const maxDays = isCur ? Math.min(7, todayIdx + 1) : 7;
+          const n = Math.round(maxDays * (isCur ? profile.cur : profile.p) * (0.8 + rng() * 0.3));
+          const days = Array.from({
+            length: Math.max(0, Math.min(maxDays, n))
+          }, (_, i) => i);
+          wk[k] = days.length >= 5 ? {
+            status: "on_time",
+            daysCompleted: days,
+            completedAt: stamp(w, weeks)
+          } : {
+            status: "pending",
+            daysCompleted: days
+          };
+          return;
+        }
+        if (rng() < p) {
+          if (MANAGER_TASKS.includes(k) && (isCur || isPrev && rng() < 0.5)) {
+            wk[k] = {
+              status: "submitted",
+              submittedAt: stamp(w, weeks),
+              note: ""
+            };
+          } else {
+            const late = !isCur && rng() < 0.12;
+            wk[k] = {
+              status: late ? "late" : "on_time",
+              completedAt: stamp(w, weeks)
+            };
+            if (k === "lecture") wk[k].quizSubmission = {
+              score: rng() < 0.8 ? 3 : 2,
+              total: 3,
+              answers: [1, 1, 2]
+            };
+            if (k === "agenda" || k === "minutes" || k === "tarbawi_reading") wk[k].note = "تم التسليم";
+          }
+        } else {
+          wk[k] = {
+            status: "pending"
+          };
+        }
+      });
+      rec[w] = wk;
+    }
+    return rec;
+  };
+  const NEW_UNITS = [{
+    id: "unit_youth",
+    name: "وحدة الشباب والطلاب",
+    inviteCode: "MAYDAN-YOUTH",
+    defaultDepartments: ["dept_hr", "dept_tarbawi"]
+  }, {
+    id: "unit_media",
+    name: "وحدة الإعلام والتواصل",
+    inviteCode: "MAYDAN-MEDIA",
+    defaultDepartments: ["dept_hr", "dept_tarbawi"]
+  }];
+  NEW_UNITS.forEach(nu => {
+    if (!DEFAULT_UNITS.some(u => u.id === nu.id)) DEFAULT_UNITS.push(nu);
+  });
+  const UNIT_NAMES = DEFAULT_UNITS.map(u => u.name);
+  const NAMES = [["عمر الحربي", "منسق مشاريع"], ["نورة القحطاني", "مسؤولة جودة"], ["يوسف الدوسري", "محلل بيانات"], ["ريم الشهري", "منسقة فعاليات"], ["فهد العنزي", "مسؤول ميداني"], ["هند الزهراني", "مسؤولة تواصل"], ["سلمان المطيري", "مشرف فرق"], ["لينا الغامدي", "مصممة محتوى"], ["بدر السبيعي", "منسق لوجستي"], ["مها العمري", "مسؤولة متابعة"], ["تركي الشمري", "مسؤول تطوع"], ["أسماء البقمي", "منسقة برامج"], ["ماجد الرشيدي", "مسؤول تدريب"], ["دانة الحارثي", "مسؤولة إعلام"], ["زياد الجهني", "منسق طلابي"], ["شهد العتيبي", "مسؤولة أنشطة"], ["خالد البلوي", "مسؤول علاقات"], ["جود السهلي", "كاتبة محتوى"], ["راكان الشهراني", "منسق ميداني"], ["لمى القرني", "مسؤولة شباب"], ["سعود المالكي", "محرر أخبار"], ["رغد الأحمدي", "منسقة تطوع"], ["نايف العسيري", "مسؤول تخطيط"], ["غادة الثبيتي", "محللة أداء"], ["مشعل الخالدي", "مصور ميداني"], ["وعد الزهراني", "منسقة تواصل"], ["عبدالرحمن الفيفي", "مسؤول تنسيق"], ["بشرى الحربي", "مسؤولة طلاب"]];
+  const PROFILES = [{
+    p: 0.95,
+    cur: 0.85
+  }, {
+    p: 0.9,
+    cur: 0.7
+  }, {
+    p: 0.7,
+    cur: 0.5
+  }, {
+    p: 0.55,
+    cur: 0.35
+  }, {
+    p: 0.85,
+    cur: 0.75
+  }, {
+    p: 0.35,
+    cur: 0
+  }, {
+    p: 0.75,
+    cur: 0.6
+  }, {
+    p: 0.2,
+    cur: 0.15
+  }];
+  const users = INITIAL_STATE.users;
+  // العضوان الأصليان: وحدة التخطيط والمتابعة
+  NAMES.forEach(([name, title], i) => {
+    const n = i + 3;
+    const id = `u_m${String(n).padStart(2, "0")}`;
+    if (users.some(u => u.id === id)) return;
+    const rng = rngFor(n);
+    const weeks = 3 + n % 6;
+    const deptIds = n % 5 === 3 ? ["dept_hr"] : n % 7 === 5 ? ["dept_tarbawi"] : ["dept_hr", "dept_tarbawi"];
+    const profile = PROFILES[n % PROFILES.length];
+    users.push({
+      id,
+      username: `m${String(n).padStart(2, "0")}`,
+      password: "1234",
+      roleType: "cadre",
+      onboarded: true,
+      joinedAt: SYSTEM_ANCHOR_DATE - (weeks - 1) * MS_PER_WEEK - (todayIdx + 1) * DAY,
+      name,
+      jobTitle: title,
+      unit: UNIT_NAMES[n % UNIT_NAMES.length],
+      assignedDepartments: deptIds,
+      defaultSchedule: {
+        meetDay: n % 5,
+        meetTime: n % 2 ? "19:00" : "20:30",
+        meetDuration: 60
+      },
+      weekOverrides: {},
+      tasksRecord: genRecords(deptIds, weeks, profile, rng)
+    });
+  });
+
+  // مدير الموارد البشرية مُسند له مهام تربوية (لتجربة الواجهة المزدوجة)
+  const hrMgr = users.find(u => u.id === "u_admin");
+  if (hrMgr && !hrMgr.assignedDepartments) {
+    hrMgr.assignedDepartments = ["dept_tarbawi"];
+    hrMgr.joinedAt = SYSTEM_ANCHOR_DATE - 2 * MS_PER_WEEK - (todayIdx + 1) * DAY;
+    hrMgr.tasksRecord = genRecords(["dept_tarbawi"], 3, {
+      p: 0.8,
+      cur: 0.4
+    }, rngFor(99));
+  }
+  const tbMgr = users.find(u => u.id === "u_tarbawi");
+  if (tbMgr) {
+    if (!tbMgr.assignedDepartments) tbMgr.assignedDepartments = [];
+    if (!tbMgr.joinedAt) tbMgr.joinedAt = SYSTEM_ANCHOR_DATE - 2 * MS_PER_WEEK - (todayIdx + 1) * DAY;
+  }
+  users.forEach((u, idx) => {
+    if (u.roleType === "cadre" && !u.deptTeamId) {
+      if (idx % 6 === 0 && (u.assignedDepartments || []).includes("dept_hr")) u.deptTeamId = "dept_hr";else if (idx % 6 === 1 && (u.assignedDepartments || []).includes("dept_tarbawi")) u.deptTeamId = "dept_tarbawi";
+    }
+  });
+
+  // قادة الوحدات
+  const leaders = {
+    unit_strategy: "u_1",
+    unit_ops: "u_2",
+    unit_field: "u_m05",
+    unit_youth: "u_m08",
+    unit_media: "u_m09"
+  };
+  DEFAULT_UNITS.forEach(u => {
+    if (!u.leaderUserId && leaders[u.id]) u.leaderUserId = leaders[u.id];
+  });
+
+  // تعميمات إضافية موجهة مع حالات اطلاع واقعية
+  const cadreIds = users.filter(u => u.roleType === "cadre").map(u => u.id);
+  const ackSome = (ratio, seedNum) => {
+    const r = rngFor(seedNum);
+    const out = {};
+    cadreIds.forEach(id => {
+      if (r() < ratio) out[id] = "منذ يومين";
+    });
+    return out;
+  };
+  INITIAL_STATE.bulletins.forEach(b => {
+    if (!b.createdAtTs) b.createdAtTs = SYSTEM_ANCHOR_DATE - (b.id === "bul_1" ? 3 : 1) * DAY;
+  });
+  if (!INITIAL_STATE.bulletins.some(b => b.id === "bul_3")) {
+    INITIAL_STATE.bulletins.push({
+      id: "bul_3",
+      title: "انطلاق برنامج «زاد الأسبوع» التربوي",
+      content: "يبدأ هذا الأسبوع برنامج الورد المشترك، ونرجو من جميع أعضاء الإدارة التربوية تثبيت خمسة أيام على الأقل.",
+      category: "برنامج",
+      senderId: "u_exec",
+      senderName: "د. طارق المنصور",
+      senderRole: "عضو المكتب التنفيذي",
+      createdAt: "أمس • 08:00 مساءً",
+      createdAtTs: SYSTEM_ANCHOR_DATE - DAY,
+      targetType: "dept",
+      targetDeptId: "dept_tarbawi",
+      recipientIds: [],
+      acknowledgedBy: ackSome(0.55, 7)
+    }, {
+      id: "bul_4",
+      title: "موعد الملتقى العام للوحدات",
+      content: "يُعقد الملتقى العام يوم الخميس القادم الساعة السابعة مساءً، والحضور إلزامي لجميع الأعضاء.",
+      category: "تعميم عام",
+      senderId: "u_exec",
+      senderName: "د. طارق المنصور",
+      senderRole: "عضو المكتب التنفيذي",
+      createdAt: "اليوم • 10:00 صباحاً",
+      createdAtTs: SYSTEM_ANCHOR_DATE - 2 * 3600 * 1000,
+      targetType: "all",
+      recipientIds: [],
+      acknowledgedBy: ackSome(0.3, 11)
+    });
+  }
+})();
+
+// ============================================================================
+// 2. HELPER & DUAL-PILLAR SCORING ENGINE FUNCTIONS
+// ============================================================================
+function mxSha256(ascii) {
+  const rightRotate = (v, a) => v >>> a | v << 32 - a;
+  const mathPow = Math.pow,
+    maxWord = mathPow(2, 32);
+  let result = "",
+    words = [],
+    asciiBitLength = ascii.length * 8;
+  let hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const k = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+  const utf8 = unescape(encodeURIComponent(String(ascii)));
+  asciiBitLength = utf8.length * 8;
+  let str = utf8 + "\x80";
+  while (str.length % 64 - 56) str += "\x00";
+  for (let i = 0; i < str.length; i++) {
+    const j = str.charCodeAt(i);
+    words[i >> 2] |= j << (3 - i % 4) * 8;
+  }
+  words[words.length] = asciiBitLength / maxWord | 0;
+  words[words.length] = asciiBitLength;
+  for (let j = 0; j < words.length;) {
+    const w = words.slice(j, j += 16);
+    const oldHash = hash.slice(0);
+    for (let i = 0; i < 64; i++) {
+      if (i >= 16) {
+        const w15 = w[i - 15],
+          w2 = w[i - 2];
+        w[i] = w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ w15 >>> 3) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ w2 >>> 10) | 0;
+      }
+      const a = hash[0],
+        e = hash[4];
+      const temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + (e & hash[5] ^ ~e & hash[6]) + k[i] + w[i] | 0;
+      const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + (a & hash[1] ^ a & hash[2] ^ hash[1] & hash[2]) | 0;
+      hash = [temp1 + temp2 | 0, a, hash[1], hash[2], hash[3] + temp1 | 0, e, hash[5], hash[6]];
+    }
+    for (let i = 0; i < 8; i++) hash[i] = hash[i] + oldHash[i] | 0;
+  }
+  for (let i = 0; i < 8; i++) {
+    for (let j = 3; j + 1; j--) {
+      const b = hash[i] >> j * 8 & 255;
+      result += (b < 16 ? "0" : "") + b.toString(16);
+    }
+  }
+  return result;
+}
+function mxTimingSafeEq(a, b) {
+  const sa = String(a || "");
+  const sb = String(b || "");
+  const len = Math.max(sa.length, sb.length);
+  let diff = sa.length ^ sb.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (sa.charCodeAt(i) || 0) ^ (sb.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
+function mxStretchPwSync(cleanPw, saltHex) {
+  let acc = mxSha256("mx_pw_v2:" + saltHex + ":" + cleanPw);
+  for (let i = 0; i < 256; i++) {
+    acc = mxSha256(acc + ":" + saltHex + ":" + i);
+  }
+  return acc;
+}
+
+// جسر ذاكرة مؤقتة خاص ومغلق لتوليد مغلفات التشفير الطرفي تلقائياً عند إنشاء أو تغيير كلمات المرور دون كشفها
+const {
+  mxHashPw,
+  mxVerifyPw,
+  mxPeekBridgedPw,
+  mxClearBridgedPws
+} = (() => {
+  const bridge = new Map();
+  function hashFn(raw) {
+    const s = String(raw || "").trim();
+    if (!s || s.startsWith("ms2:") || s.startsWith("sha256:")) return s;
+    const saltHex = mxRandomHex(8);
+    const stretched = mxStretchPwSync(s, saltHex);
+    const out = `ms2:${saltHex}:${stretched}`;
+    if (bridge.size > 250) bridge.clear();
+    bridge.set(out, s);
+    return out;
+  }
+  function verifyFn(inputPw, storedPw) {
+    if (!storedPw) return false;
+    const clean = String(inputPw || "").trim();
+    const stored = String(storedPw);
+    if (stored.startsWith("ms2:")) {
+      const parts = stored.split(":");
+      if (parts.length !== 3) return false;
+      const computed = mxStretchPwSync(clean, parts[1]);
+      const ok = mxTimingSafeEq(computed, parts[2]);
+      if (ok) bridge.set(stored, clean);
+      return ok;
+    }
+    if (stored.startsWith("sha256:")) {
+      const legacy = "sha256:" + mxSha256("maydan_salt_v1:" + clean);
+      const ok = mxTimingSafeEq(legacy, stored);
+      if (ok) bridge.set(stored, clean);
+      return ok;
+    }
+    return mxTimingSafeEq(clean, stored);
+  }
+  function peekFn(hashedPw, consume = false) {
+    if (!hashedPw || !bridge.has(hashedPw)) return null;
+    const val = bridge.get(hashedPw);
+    if (consume) bridge.delete(hashedPw);
+    return val;
+  }
+  function clearFn() {
+    bridge.clear();
+  }
+  return {
+    mxHashPw: hashFn,
+    mxVerifyPw: verifyFn,
+    mxPeekBridgedPw: peekFn,
+    mxClearBridgedPws: clearFn
+  };
+})();
+function mxBytesToB64(bytes) {
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+function mxB64ToBytes(b64) {
+  const binary = atob(String(b64 || ""));
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+const MXVaultCrypto = (() => {
+  const KDF_ITERATIONS = 210000;
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  function userSlotId(vaultSaltHex, username) {
+    const cleanU = String(username || "").trim().toLowerCase();
+    return mxSha256("mx_slot_v1:" + vaultSaltHex + ":" + cleanU);
+  }
+  async function deriveWrappingKey(passwordClean, saltBytes, iterations = KDF_ITERATIONS) {
+    const baseKey = await window.crypto.subtle.importKey("raw", enc.encode(String(passwordClean || "").trim()), "PBKDF2", false, ["deriveKey"]);
+    return window.crypto.subtle.deriveKey({
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations,
+      hash: "SHA-256"
+    }, baseKey, {
+      name: "AES-GCM",
+      length: 256
+    }, false, ["encrypt", "decrypt"]);
+  }
+  async function wrapMasterKeyForUser(rawVaultKeyBytes, passwordClean) {
+    const salt = mxRandomBytes(16);
+    const iv = mxRandomBytes(12);
+    const wrapKey = await deriveWrappingKey(passwordClean, salt, KDF_ITERATIONS);
+    const ctBuf = await window.crypto.subtle.encrypt({
+      name: "AES-GCM",
+      iv
+    }, wrapKey, rawVaultKeyBytes);
+    return {
+      s: mxBytesToB64(salt),
+      iv: mxBytesToB64(iv),
+      w: mxBytesToB64(new Uint8Array(ctBuf))
+    };
+  }
+  function makeDummyEnvelope() {
+    return {
+      s: mxBytesToB64(mxRandomBytes(16)),
+      iv: mxBytesToB64(mxRandomBytes(12)),
+      w: mxBytesToB64(mxRandomBytes(48))
+    };
+  }
+  function padEnvelopes(realEkMap, prevDummyMap = {}) {
+    const realKeys = Object.keys(realEkMap);
+    const targetTotal = Math.max(16, Math.ceil(Math.max(1, realKeys.length) / 16) * 16);
+    const neededDummies = Math.max(0, targetTotal - realKeys.length);
+    const nextDummies = {};
+    const prevDummyKeys = Object.keys(prevDummyMap || {}).filter(k => !realEkMap[k]);
+    for (let i = 0; i < neededDummies; i++) {
+      if (i < prevDummyKeys.length) {
+        const dk = prevDummyKeys[i];
+        nextDummies[dk] = prevDummyMap[dk];
+      } else {
+        let dk = mxRandomHex(32);
+        while (realEkMap[dk] || nextDummies[dk]) dk = mxRandomHex(32);
+        nextDummies[dk] = makeDummyEnvelope();
+      }
+    }
+    const combined = {};
+    const allKeys = [...realKeys, ...Object.keys(nextDummies)].sort();
+    allKeys.forEach(k => {
+      combined[k] = realEkMap[k] || nextDummies[k];
+    });
+    return {
+      paddedEk: combined,
+      nextDummies
+    };
+  }
+  async function encryptPlainObject(rawVaultKeyBytes, obj) {
+    const aesKey = await window.crypto.subtle.importKey("raw", rawVaultKeyBytes, {
+      name: "AES-GCM"
+    }, false, ["encrypt"]);
+    const iv = mxRandomBytes(12);
+    const plainBytes = enc.encode(JSON.stringify(obj));
+    const ctBuf = await window.crypto.subtle.encrypt({
+      name: "AES-GCM",
+      iv
+    }, aesKey, plainBytes);
+    return {
+      iv: mxBytesToB64(iv),
+      ct: mxBytesToB64(new Uint8Array(ctBuf))
+    };
+  }
+  async function decryptPlainObject(rawVaultKeyBytes, ivB64, ctB64) {
+    const aesKey = await window.crypto.subtle.importKey("raw", rawVaultKeyBytes, {
+      name: "AES-GCM"
+    }, false, ["decrypt"]);
+    const iv = mxB64ToBytes(ivB64);
+    const ct = mxB64ToBytes(ctB64);
+    const plainBuf = await window.crypto.subtle.decrypt({
+      name: "AES-GCM",
+      iv
+    }, aesKey, ct);
+    return safeJsonParse(dec.decode(plainBuf));
+  }
+  async function createNewEncryptedVault(initialLiveDb, founderUsername, founderPlainPassword) {
+    const rawVaultKeyBytes = mxRandomBytes(32);
+    const vaultSaltHex = mxRandomHex(16);
+    const founderWrap = await wrapMasterKeyForUser(rawVaultKeyBytes, founderPlainPassword);
+    const slot = userSlotId(vaultSaltHex, founderUsername);
+    const {
+      paddedEk,
+      nextDummies
+    } = padEnvelopes({
+      [slot]: founderWrap
+    }, {});
+    const enrichedDb = {
+      ...initialLiveDb,
+      isLiveVault: true,
+      _dummySlots: nextDummies,
+      users: (initialLiveDb.users || []).map(u => u.username.trim().toLowerCase() === founderUsername.trim().toLowerCase() ? {
+        ...u,
+        _ekWrap: founderWrap,
+        _ekPwRef: u.password
+      } : u)
+    };
+    mxClearBridgedPws();
+    const {
+      iv,
+      ct
+    } = await encryptPlainObject(rawVaultKeyBytes, enrichedDb);
+    const envelope = {
+      __e2ee: "maydan_v1",
+      v: 1,
+      kdfIter: KDF_ITERATIONS,
+      vs: vaultSaltHex,
+      hideDemo: Boolean(enrichedDb.systemConfig?.governanceRules?.hideDemoOnLogin),
+      iv,
+      ct,
+      ek: paddedEk
+    };
+    return {
+      rawVaultKeyBytes,
+      envelope,
+      db: enrichedDb
+    };
+  }
+  async function encryptVaultUpdate(rawVaultKeyBytes, prevEnvelope, currentDb) {
+    const vaultSaltHex = prevEnvelope && prevEnvelope.vs || mxRandomHex(16);
+    const prevEk = prevEnvelope && prevEnvelope.ek || {};
+    const realEkMap = {};
+    const updatedUsers = [];
+    for (const u of currentDb.users || []) {
+      const cleanU = String(u.username || "").trim().toLowerCase();
+      if (!cleanU) {
+        updatedUsers.push(u);
+        continue;
+      }
+      const slot = userSlotId(vaultSaltHex, cleanU);
+      let wrap = u._ekWrap && u._ekPwRef === u.password ? u._ekWrap : null;
+      const bridgedPlain = mxPeekBridgedPw(u.password, true);
+      if (bridgedPlain) {
+        wrap = await wrapMasterKeyForUser(rawVaultKeyBytes, bridgedPlain);
+      } else if (!wrap && prevEk[slot]) {
+        wrap = prevEk[slot];
+      }
+      if (wrap) {
+        realEkMap[slot] = wrap;
+        updatedUsers.push({
+          ...u,
+          _ekWrap: wrap,
+          _ekPwRef: u.password
+        });
+      } else {
+        updatedUsers.push(u);
+      }
+    }
+    const {
+      paddedEk,
+      nextDummies
+    } = padEnvelopes(realEkMap, currentDb._dummySlots || {});
+    const dbToEncrypt = {
+      ...currentDb,
+      isLiveVault: true,
+      _dummySlots: nextDummies,
+      users: updatedUsers
+    };
+    const {
+      iv,
+      ct
+    } = await encryptPlainObject(rawVaultKeyBytes, dbToEncrypt);
+    const envelope = {
+      __e2ee: "maydan_v1",
+      v: 1,
+      kdfIter: KDF_ITERATIONS,
+      vs: vaultSaltHex,
+      hideDemo: Boolean(dbToEncrypt.systemConfig?.governanceRules?.hideDemoOnLogin),
+      iv,
+      ct,
+      ek: paddedEk
+    };
+    return {
+      envelope,
+      db: dbToEncrypt
+    };
+  }
+  async function unlockEncryptedVault(envelope, usernameInput, passwordInput) {
+    if (!envelope || envelope.__e2ee !== "maydan_v1" || !envelope.vs || !envelope.ek || !envelope.ct) {
+      return {
+        ok: false,
+        error: "بيانات الخزنة المشفرة غير صالحة"
+      };
+    }
+    const cleanU = String(usernameInput || "").trim().toLowerCase();
+    const cleanP = String(passwordInput || "").trim();
+    const slot = userSlotId(envelope.vs, cleanU);
+    const entry = envelope.ek[slot];
+    const iter = Number(envelope.kdfIter) || KDF_ITERATIONS;
+    if (!entry || !entry.s || !entry.iv || !entry.w) {
+      // توحيد زمن الاستجابة لمنع معرفة ما إذا كان اسم المستخدم مسجلاً أم لا
+      const dummySaltHex = mxSha256("dummy_salt:" + envelope.vs + ":" + cleanU).slice(0, 32);
+      const dummySalt = new Uint8Array(16);
+      for (let i = 0; i < 16; i++) dummySalt[i] = parseInt(dummySaltHex.slice(i * 2, i * 2 + 2), 16);
+      try {
+        await deriveWrappingKey(cleanP, dummySalt, iter);
+      } catch (e) {}
+      return {
+        ok: false
+      };
+    }
+    try {
+      const wrapKey = await deriveWrappingKey(cleanP, mxB64ToBytes(entry.s), iter);
+      const rawKeyBuf = await window.crypto.subtle.decrypt({
+        name: "AES-GCM",
+        iv: mxB64ToBytes(entry.iv)
+      }, wrapKey, mxB64ToBytes(entry.w));
+      const rawVaultKeyBytes = new Uint8Array(rawKeyBuf);
+      const plainObj = await decryptPlainObject(rawVaultKeyBytes, envelope.iv, envelope.ct);
+      const normalized = normalizeDb({
+        ...plainObj,
+        isLiveVault: true
+      });
+      const matchedUser = normalized.users.find(u => String(u.username || "").trim().toLowerCase() === cleanU && mxVerifyPw(cleanP, u.password));
+      if (!matchedUser) {
+        rawVaultKeyBytes.fill(0);
+        return {
+          ok: false
+        };
+      }
+      return {
+        ok: true,
+        user: matchedUser,
+        db: normalized,
+        rawVaultKeyBytes
+      };
+    } catch (err) {
+      return {
+        ok: false
+      };
+    }
+  }
+  async function decryptRemoteVaultRealtime(rawVaultKeyBytes, envelope) {
+    if (!rawVaultKeyBytes || !envelope || envelope.__e2ee !== "maydan_v1") return null;
+    try {
+      const plainObj = await decryptPlainObject(rawVaultKeyBytes, envelope.iv, envelope.ct);
+      return normalizeDb({
+        ...plainObj,
+        isLiveVault: true
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+  async function encryptBackupFile(dbObj, passphrase) {
+    const salt = mxRandomBytes(16);
+    const iv = mxRandomBytes(12);
+    const key = await deriveWrappingKey(passphrase, salt, KDF_ITERATIONS);
+    const plainBytes = enc.encode(JSON.stringify(dbObj));
+    const ctBuf = await window.crypto.subtle.encrypt({
+      name: "AES-GCM",
+      iv
+    }, key, plainBytes);
+    return {
+      __maydan_encrypted_backup: "v1",
+      kdfIter: KDF_ITERATIONS,
+      s: mxBytesToB64(salt),
+      iv: mxBytesToB64(iv),
+      ct: mxBytesToB64(new Uint8Array(ctBuf))
+    };
+  }
+  async function decryptBackupFile(encBackupObj, passphrase) {
+    const iter = Number(encBackupObj.kdfIter) || KDF_ITERATIONS;
+    const key = await deriveWrappingKey(passphrase, mxB64ToBytes(encBackupObj.s), iter);
+    const plainBuf = await window.crypto.subtle.decrypt({
+      name: "AES-GCM",
+      iv: mxB64ToBytes(encBackupObj.iv)
+    }, key, mxB64ToBytes(encBackupObj.ct));
+    return safeJsonParse(dec.decode(plainBuf));
+  }
+  return {
+    createNewEncryptedVault,
+    encryptVaultUpdate,
+    unlockEncryptedVault,
+    decryptRemoteVaultRealtime,
+    encryptBackupFile,
+    decryptBackupFile
+  };
+})();
+function calculateWeeksSinceJoin(joinedAtTimestamp) {
+  if (!joinedAtTimestamp) return 1;
+  const diffMs = Math.max(0, mxCoarseNow() - joinedAtTimestamp);
+  return Math.max(1, Math.ceil(diffMs / MS_PER_WEEK));
+}
+function formatDateAr(timestamp) {
+  const d = new Date(timestamp);
+  return `${d.getDate()} ${MONTHS_AR[d.getMonth()]} ${d.getFullYear()}`;
+}
+function getWeekDateRangeLabel(weekIndex, totalWeeks) {
+  const today = new Date();
+  const weeksAgo = totalWeeks - weekIndex;
+  const endOfWeek = new Date(today);
+  endOfWeek.setDate(today.getDate() - weeksAgo * 7);
+  const startOfWeek = new Date(endOfWeek);
+  startOfWeek.setDate(endOfWeek.getDate() - 6);
+  const sDay = startOfWeek.getDate();
+  const eDay = endOfWeek.getDate();
+  const sMonth = MONTHS_AR[startOfWeek.getMonth()];
+  const eMonth = MONTHS_AR[endOfWeek.getMonth()];
+  return sMonth === eMonth ? `${sDay} - ${eDay} ${sMonth}` : `${sDay} ${sMonth} - ${eDay} ${eMonth}`;
+}
+function formatTimeAr(timeStr = "19:00") {
+  const [hStr, mStr] = timeStr.split(':');
+  let h = parseInt(hStr, 10);
+  const period = h >= 12 ? 'مساءً' : 'صباحاً';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(h12).padStart(2, '0')}:${mStr} ${period}`;
+}
+function computeWeekSchedule(sched, taskDefs) {
+  const meetDay = parseInt(sched.meetDay, 10);
+  const duration = parseInt(sched.meetDuration, 10);
+  const [h, m] = (sched.meetTime || "19:00").split(':').map(Number);
+  const agendaDay = (meetDay + 6) % 7;
+  const totalMinutes = h * 60 + m + duration;
+  const endDayOffset = Math.floor(totalMinutes / (24 * 60));
+  const endH = Math.floor(totalMinutes % (24 * 60) / 60);
+  const endM = totalMinutes % 60;
+  const endTimeStr = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+  const minutesDay = (meetDay + endDayOffset + 1) % 7;
+  return {
+    lecture: {
+      dayName: 'طوال الأسبوع',
+      timeLabel: 'مرن حسب وقتك',
+      durationMinutes: taskDefs.lecture.durationMinutes,
+      badge: taskDefs.lecture.badge
+    },
+    agenda: {
+      dayName: DAYS_AR[agendaDay],
+      timeLabel: `قبل ${formatTimeAr(sched.meetTime)}`,
+      durationMinutes: taskDefs.agenda.durationMinutes,
+      badge: taskDefs.agenda.badge
+    },
+    attendance: {
+      dayName: DAYS_AR[meetDay],
+      timeLabel: `${formatTimeAr(sched.meetTime)} - ${formatTimeAr(endTimeStr)}`,
+      durationMinutes: duration || taskDefs.attendance.durationMinutes,
+      badge: taskDefs.attendance.badge
+    },
+    minutes: {
+      dayName: DAYS_AR[minutesDay],
+      timeLabel: `حتى ${formatTimeAr(endTimeStr)}`,
+      durationMinutes: taskDefs.minutes.durationMinutes,
+      badge: taskDefs.minutes.badge
+    }
+  };
+}
+function isCadreDepartmentEnabled(user, deptId) {
+  if (!user || user.roleType !== "cadre") return true;
+  const assigned = Array.isArray(user.assignedDepartments) && user.assignedDepartments.length > 0 ? user.assignedDepartments : ["dept_hr", "dept_tarbawi"];
+  return assigned.includes(deptId);
+}
+
+// جلب المهمات التربوية المفعلة والموجهة لهذا الكادر تحديداً (عامة أو لوحدته أو مخصصة له)
+function getApplicableTarbawiTasks(user, systemConfig) {
+  if (user && user.roleType === "cadre" && !isCadreDepartmentEnabled(user, "dept_tarbawi")) {
+    return [];
+  }
+  const list = Array.isArray(systemConfig?.tarbawiTaskDefinitions) ? systemConfig.tarbawiTaskDefinitions : DEFAULT_TARBAWI_TASKS;
+  return list.filter(t => {
+    if (t.enabled === false) return false;
+    if (!user || user.roleType !== "cadre") return true;
+    if (!t.targetScope || t.targetScope === "all") return true;
+    if (t.targetScope === "unit") return t.targetUnit === user.unit;
+    if (t.targetScope === "custom") return Array.isArray(t.targetUserIds) && t.targetUserIds.includes(user.id);
+    return true;
+  });
+}
+function getTaskScorePoints(taskObj, governanceRules = DEFAULT_GOVERNANCE_RULES) {
+  const targetDays = Math.max(1, parseInt(governanceRules?.dailyTaskTargetDays, 10) || 5);
+  const latePct = Math.max(0, Math.min(100, parseInt(governanceRules?.latePointsPct, 10) ?? 50));
+  if (!taskObj || taskObj.status === 'pending') {
+    // لو مهمة تتبع يومي وفيها أيام منجزة جزئياً نعطي نقاطاً تناسبية
+    if (Array.isArray(taskObj?.daysCompleted) && taskObj.daysCompleted.length > 0) {
+      return Math.min(90, Math.round(taskObj.daysCompleted.length / targetDays * 100));
+    }
+    return 0;
+  }
+  if (taskObj.status === 'on_time') return 100;
+  if (taskObj.status === 'late') return latePct;
+  return 0;
+}
+function computeCadreMetrics(user, systemConfig = INITIAL_STATE.systemConfig) {
+  const rules = systemConfig?.governanceRules || DEFAULT_GOVERNANCE_RULES;
+  const totalWeeks = calculateWeeksSinceJoin(user.joinedAt);
+  const hrEnabled = isCadreDepartmentEnabled(user, "dept_hr");
+  const tarbawiDefs = getApplicableTarbawiTasks(user, systemConfig);
+  const adminKeys = hrEnabled ? ['lecture', 'agenda', 'attendance', 'minutes'] : [];
+  let adminPossible = totalWeeks * adminKeys.length * 100;
+  let adminEarned = 0;
+  let tarbawiPossible = totalWeeks * tarbawiDefs.length * 100;
+  let tarbawiEarned = 0;
+  let onTimeCount = 0;
+  let lateCount = 0;
+  let pendingCount = 0;
+  let quizScores = [];
+  const byTaskKey = {
+    lecture: {
+      onTime: 0,
+      late: 0,
+      pending: 0
+    },
+    agenda: {
+      onTime: 0,
+      late: 0,
+      pending: 0
+    },
+    attendance: {
+      onTime: 0,
+      late: 0,
+      pending: 0
+    },
+    minutes: {
+      onTime: 0,
+      late: 0,
+      pending: 0
+    }
+  };
+  const byTarbawiKey = {};
+  tarbawiDefs.forEach(td => {
+    byTarbawiKey[td.id] = {
+      onTime: 0,
+      late: 0,
+      pending: 0
+    };
+  });
+  for (let w = 1; w <= totalWeeks; w++) {
+    const wRec = user.tasksRecord && user.tasksRecord[w] || {};
+    adminKeys.forEach(k => {
+      const t = wRec[k] || {
+        status: 'pending'
+      };
+      adminEarned += getTaskScorePoints(t, rules);
+      if (t.status === 'on_time') {
+        onTimeCount++;
+        byTaskKey[k].onTime++;
+      } else if (t.status === 'late') {
+        lateCount++;
+        byTaskKey[k].late++;
+      } else {
+        pendingCount++;
+        byTaskKey[k].pending++;
+      }
+      if (k === 'lecture' && t.quizSubmission) {
+        const qPct = Math.round(t.quizSubmission.score / t.quizSubmission.total * 100);
+        quizScores.push(qPct);
+      }
+    });
+    tarbawiDefs.forEach(td => {
+      const t = wRec[td.id] || {
+        status: 'pending'
+      };
+      tarbawiEarned += getTaskScorePoints(t, rules);
+      if (t.status === 'on_time') {
+        onTimeCount++;
+        byTarbawiKey[td.id].onTime++;
+      } else if (t.status === 'late') {
+        lateCount++;
+        byTarbawiKey[td.id].late++;
+      } else {
+        pendingCount++;
+        byTarbawiKey[td.id].pending++;
+      }
+    });
+  }
+  const adminScorePct = adminPossible > 0 ? Math.round(adminEarned / adminPossible * 100) : 0;
+  const tarbawiScorePct = tarbawiDefs.length > 0 && tarbawiPossible > 0 ? Math.round(tarbawiEarned / tarbawiPossible * 100) : 0;
+  const totalPossible = adminPossible + tarbawiPossible;
+  const totalEarned = adminEarned + tarbawiEarned;
+  const overallScorePct = totalPossible > 0 ? Math.round(totalEarned / totalPossible * 100) : 0;
+  const avgQuizPct = quizScores.length > 0 ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null;
+  return {
+    totalWeeks,
+    overallScorePct,
+    adminScorePct,
+    tarbawiScorePct,
+    onTimeCount,
+    lateCount,
+    pendingCount,
+    totalTasksCount: totalWeeks * (adminKeys.length + tarbawiDefs.length),
+    avgQuizPct,
+    byTaskKey,
+    byTarbawiKey
+  };
+}
+function safeJsonParse(str) {
+  return JSON.parse(str, (k, v) => k === "__proto__" || k === "constructor" || k === "prototype" ? undefined : v);
+}
+function isValidHttpsUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || "").trim());
+    return u.protocol === "https:";
+  } catch (e) {
+    return false;
+  }
+}
+function sanitizeMediaUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  if (trimmed === "builtin://demo-lecture") return "builtin://demo-lecture";
+  try {
+    const u = new URL(trimmed, window.location.origin);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : "";
+  } catch (e) {
+    return "";
+  }
+}
+function getYoutubeEmbedUrl(url) {
+  const safeUrl = sanitizeMediaUrl(url);
+  if (!safeUrl || safeUrl === "builtin://demo-lecture") return "";
+  const driveMatch = safeUrl.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (driveMatch && driveMatch[1]) {
+    return `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
+  }
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = safeUrl.match(regExp);
+  return match && match[2].length === 11 ? `https://www.youtube-nocookie.com/embed/${match[2]}?rel=0&modestbranding=1&playsinline=1` : safeUrl;
+}
+function isIframeVideo(videoType, url) {
+  if (!url || url === "builtin://demo-lecture") return false;
+  if (videoType === "youtube" || videoType === "gdrive") return true;
+  return url.includes("youtube.com") || url.includes("youtube-nocookie.com") || url.includes("youtu.be") || url.includes("drive.google.com");
+}
+function MXSafeMediaPlayer({
+  videoUrl,
+  videoType = "mp4",
+  title = "المادة المرئية"
+}) {
+  const safeUrl = sanitizeMediaUrl(videoUrl);
+  const [playingBuiltin, setPlayingBuiltin] = useState(false);
+  const [consentedHost, setConsentedHost] = useState(false);
+  useEffect(() => {
+    setPlayingBuiltin(false);
+    setConsentedHost(false);
+  }, [safeUrl]);
+  if (!safeUrl) return null;
+  if (safeUrl === "builtin://demo-lecture") {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl overflow-hidden bg-[#1C1917] text-white aspect-video p-6 flex flex-col justify-between border border-stone-800 select-none"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+    }, "معاينة محلية معزولة · بلا اتصال خارجي"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] text-stone-400"
+    }, "١٢:٠٠ د")), /*#__PURE__*/React.createElement("div", {
+      className: "my-auto text-center px-3 space-y-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[16px] sm:text-[18px] font-bold text-white"
+    }, title || "محاضرة نموذجية تجريبية"), /*#__PURE__*/React.createElement("p", {
+      className: "text-[13px] text-stone-400 max-w-md mx-auto leading-relaxed"
+    }, playingBuiltin ? "المحاور الأساسية: إرسال الأجندة قبل ٢٤ ساعة من اللقاء، توثيق المحضر خلال ٢٤ ساعة بعده، ومتابعة الإسنادات المتتابعة بهدوء." : "مادة تدريبية مدمجة محلياً داخل بيئة التجربة لضمان عدم إجراء أي اتصال بأي خادم خارجي.")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-center"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setPlayingBuiltin(v => !v),
+      className: "h-9 px-5 rounded-full bg-white text-stone-900 text-[13px] font-semibold hover:bg-stone-100 transition"
+    }, playingBuiltin ? "إيقاف العرض التلخيصي" : "تشغيل ملخص المحاضرة المحلي")));
+  }
+  let hostName = "";
+  try {
+    hostName = new URL(safeUrl).hostname;
+  } catch (e) {}
+  const isSameOrigin = (() => {
+    try {
+      return new URL(safeUrl).origin === window.location.origin;
+    } catch (e) {
+      return false;
+    }
+  })();
+  if (!isSameOrigin && !consentedHost) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl overflow-hidden bg-[#1C1917] text-white aspect-video p-6 flex flex-col items-center justify-center text-center gap-3 border border-stone-800"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] px-3 py-1 rounded-full bg-orange-500/15 text-orange-300"
+    }, "درع حماية الهوية وعنوان الاتصال"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[15px] font-semibold text-white"
+    }, "مادة مرئية مستضافة خارجياً"), /*#__PURE__*/React.createElement("p", {
+      className: "text-[12px] text-stone-400 max-w-sm leading-relaxed"
+    }, "حفاظاً على خصوصيتك، تم حجب التحميل التلقائي للملف الخارجي", hostName ? ` (${hostName})` : "", " حتى لا يُكشف عنوان اتصالك دون إذنك."), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setConsentedHost(true),
+      className: "h-10 px-5 rounded-full bg-white text-stone-900 text-[13px] font-semibold hover:bg-stone-100 transition mt-1"
+    }, "السماح بتشغيل المادة الآن"));
+  }
+  const embed = getYoutubeEmbedUrl(safeUrl);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl overflow-hidden bg-stone-900 aspect-video"
+  }, isIframeVideo(videoType, safeUrl) ? /*#__PURE__*/React.createElement("iframe", {
+    src: embed,
+    className: "w-full h-full",
+    sandbox: "allow-scripts allow-same-origin allow-presentation",
+    referrerPolicy: "no-referrer",
+    allow: "autoplay; encrypted-media",
+    allowFullScreen: true,
+    title: title
+  }) : /*#__PURE__*/React.createElement("video", {
+    src: safeUrl,
+    controls: true,
+    controlsList: "nodownload",
+    referrerPolicy: "no-referrer",
+    onContextMenu: e => e.preventDefault(),
+    className: "w-full h-full object-contain"
+  }));
+}
+
+// ============================================================================
+// 3. SHARED UI COMPONENTS, NORMALIZER & CLOUD SYNC ENGINE
+// ============================================================================
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      hasError: false,
+      errorMsg: ""
+    };
+  }
+  static getDerivedStateFromError(error) {
+    return {
+      hasError: true,
+      errorMsg: error ? String(error.message || error) : "خطأ غير متوقع"
+    };
+  }
+  render() {
+    if (this.state.hasError) {
+      return /*#__PURE__*/React.createElement("div", {
+        className: "min-h-screen flex items-center justify-center p-4 bg-[#F6F5F2]",
+        dir: "rtl"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "bg-white rounded-3xl max-w-md w-full p-7 shadow-xl border border-stone-200 text-center space-y-4"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-3xl"
+      }, "🛠️"), /*#__PURE__*/React.createElement("h2", {
+        className: "text-lg font-black text-stone-900"
+      }, "حدث خطأ عارض أثناء عرض الواجهة"), /*#__PURE__*/React.createElement("p", {
+        className: "text-xs text-stone-500 leading-relaxed"
+      }, "لم يتم حفظ أي بيانات على جهازك. اضغط الزر بالأسفل لإعادة تشغيل الجلسة المعزولة فوراً:"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => {
+          mxPurgeAllBrowserTraces();
+          window.location.reload();
+        },
+        className: "w-full py-3 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+      }, "إعادة تشغيل الجلسة المعزولة فوراً ↻")));
+    }
+    return this.props.children;
+  }
+}
+function mxBuildLiveInitialState({
+  adminName,
+  adminUsername,
+  adminPasswordPlain,
+  platformName = "ميدان"
+}) {
+  const liveUnit = {
+    id: "unit_1",
+    name: "الوحدة التنظيمية الأولى",
+    inviteCode: "UNIT-01",
+    leaderUserId: null,
+    defaultDepartments: ["dept_hr", "dept_tarbawi"]
+  };
+  const founder = {
+    id: mxRandomId("u_pa"),
+    username: String(adminUsername || "").trim(),
+    password: mxHashPw(adminPasswordPlain),
+    mustChangePassword: false,
+    roleType: "platform_admin",
+    name: String(adminName || "مدير المنصة").trim(),
+    jobTitle: "مدير المنصة",
+    unit: "إدارة المنصة",
+    joinedAt: mxCoarseNow(),
+    tasksRecord: {}
+  };
+  return {
+    isLiveVault: true,
+    seedVersion: 5,
+    _dummySlots: {},
+    directives: [],
+    bulletins: [],
+    weeklyCurriculums: {
+      default: {
+        lectureTitle: "",
+        lectureDesc: "",
+        videoType: "mp4",
+        videoUrl: "",
+        questions: []
+      }
+    },
+    systemConfig: {
+      departments: DEFAULT_DEPARTMENTS.map(d => ({
+        ...d
+      })),
+      organizationalUnits: [liveUnit],
+      crossFunctionalTeams: [],
+      governanceRules: {
+        ...DEFAULT_GOVERNANCE_RULES,
+        requirePrivateBrowser: true,
+        autoLockMinutes: 10,
+        lockOnTabHide: false,
+        hideDemoOnLogin: false,
+        disableResetButton: true
+      },
+      availableCurriculumWeeks: [1, 2, 3, 4, 5, 6, 7, 8],
+      tarbawiWeeklyFocus: {
+        title: "الإتقان والأمانة في العمل المؤسسي",
+        bookTitle: "",
+        hint: "توازن العضو يجمع بين انضباطه الإداري وزاده التربوي."
+      },
+      quotes: INITIAL_STATE.systemConfig.quotes,
+      taskDefinitions: INITIAL_STATE.systemConfig.taskDefinitions,
+      tarbawiTaskDefinitions: [],
+      deptTasks: {
+        dept_hr: [],
+        dept_tarbawi: []
+      },
+      execTasks: [],
+      unitTasks: {
+        unit_1: []
+      },
+      deptWeights: {},
+      branding: {
+        platformName: String(platformName || "ميدان").trim() || "ميدان",
+        logoUrl: "",
+        themeId: "default",
+        sidebarId: "theme",
+        colorMode: "light"
+      }
+    },
+    users: [founder]
+  };
+}
+function normalizeDb(raw) {
+  if (!raw || typeof raw !== "object") return INITIAL_STATE;
+  const isLive = Boolean(raw.isLiveVault);
+  const rawTarbawiDefs = Array.isArray(raw.systemConfig?.tarbawiTaskDefinitions) ? raw.systemConfig.tarbawiTaskDefinitions.length > 0 || isLive ? raw.systemConfig.tarbawiTaskDefinitions : DEFAULT_TARBAWI_TASKS : isLive ? [] : DEFAULT_TARBAWI_TASKS;
+  const rawDepartments = (Array.isArray(raw.systemConfig?.departments) && raw.systemConfig.departments.length > 0 ? raw.systemConfig.departments : DEFAULT_DEPARTMENTS).map(d => {
+    const seedDept = DEFAULT_DEPARTMENTS.find(sd => sd.id === d.id);
+    return {
+      ...(seedDept || {}),
+      ...d,
+      allowedTaskTypes: Array.isArray(d.allowedTaskTypes) && d.allowedTaskTypes.length > 0 ? d.allowedTaskTypes : seedDept?.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"],
+      maxTotalTasks: d.maxTotalTasks ?? (seedDept?.maxTotalTasks || 6),
+      maxPerTypePerCadre: d.maxPerTypePerCadre ?? (seedDept?.maxPerTypePerCadre || 2)
+    };
+  });
+  const rawUnits = (Array.isArray(raw.systemConfig?.organizationalUnits) && raw.systemConfig.organizationalUnits.length > 0 ? raw.systemConfig.organizationalUnits : isLive ? [{
+    id: "unit_1",
+    name: "الوحدة التنظيمية الأولى",
+    inviteCode: "UNIT-01",
+    defaultDepartments: ["dept_hr", "dept_tarbawi"]
+  }] : DEFAULT_UNITS).map(u => {
+    const seedU = !isLive ? DEFAULT_UNITS.find(su => su.id === u.id) : null;
+    return {
+      ...(seedU || {}),
+      ...u,
+      inviteCode: u.inviteCode || seedU?.inviteCode || "UNIT-" + String(u.id || "01").slice(-4).toUpperCase()
+    };
+  });
+  const rawTeams = Array.isArray(raw.systemConfig?.crossFunctionalTeams) ? raw.systemConfig.crossFunctionalTeams.length > 0 || isLive ? raw.systemConfig.crossFunctionalTeams : DEFAULT_TEAMS : isLive ? [] : DEFAULT_TEAMS;
+  const safeGovernanceRules = {
+    ...DEFAULT_GOVERNANCE_RULES,
+    ...(isLive ? {
+      disableResetButton: true
+    } : {}),
+    ...(raw.systemConfig?.governanceRules || {})
+  };
+  const safeSystemConfig = {
+    ...INITIAL_STATE.systemConfig,
+    ...(raw.systemConfig || {}),
+    departments: rawDepartments,
+    organizationalUnits: rawUnits,
+    crossFunctionalTeams: rawTeams,
+    governanceRules: safeGovernanceRules,
+    availableCurriculumWeeks: Array.isArray(raw.systemConfig?.availableCurriculumWeeks) ? raw.systemConfig.availableCurriculumWeeks : INITIAL_STATE.systemConfig.availableCurriculumWeeks,
+    tarbawiWeeklyFocus: {
+      ...INITIAL_STATE.systemConfig.tarbawiWeeklyFocus,
+      ...(raw.systemConfig?.tarbawiWeeklyFocus || {})
+    },
+    quotes: Array.isArray(raw.systemConfig?.quotes) && raw.systemConfig.quotes.length > 0 ? raw.systemConfig.quotes : INITIAL_STATE.systemConfig.quotes,
+    taskDefinitions: {
+      ...INITIAL_STATE.systemConfig.taskDefinitions,
+      ...(raw.systemConfig?.taskDefinitions || {})
+    },
+    tarbawiTaskDefinitions: rawTarbawiDefs,
+    deptTasks: (() => {
+      if (isLive) {
+        const base = raw.systemConfig?.deptTasks && typeof raw.systemConfig.deptTasks === "object" ? {
+          ...raw.systemConfig.deptTasks
+        } : {};
+        rawDepartments.forEach(d => {
+          if (!Array.isArray(base[d.id])) base[d.id] = [];
+        });
+        return base;
+      }
+      const defaults = mxBuildDefaultDeptTasks(raw.systemConfig || {});
+      const isOldSeed = (raw.seedVersion || 0) < 4;
+      const base = raw.systemConfig?.deptTasks && typeof raw.systemConfig.deptTasks === "object" ? {
+        ...raw.systemConfig.deptTasks
+      } : defaults;
+      rawDepartments.forEach(d => {
+        if (!Array.isArray(base[d.id])) base[d.id] = defaults[d.id] || [];else if (isOldSeed && defaults[d.id]) {
+          base[d.id] = base[d.id].map(t => {
+            const defT = defaults[d.id].find(dt => dt.id === t.id);
+            return defT ? {
+              ...defT,
+              ...t,
+              questionPool: t.questionPool || defT.questionPool,
+              seriesItems: t.seriesItems || defT.seriesItems,
+              deliveryMode: t.deliveryMode || defT.deliveryMode,
+              lectureMode: t.lectureMode || defT.lectureMode,
+              useStructuredAgenda: t.useStructuredAgenda ?? defT.useStructuredAgenda,
+              approval: t.id === "tarbawi_amal" && (!t.approval || t.approval === "self") ? defT.approval : t.approval || defT.approval,
+              approverUserId: t.approverUserId || defT.approverUserId
+            } : t;
+          });
+        }
+      });
+      return base;
+    })(),
+    execTasks: isLive ? Array.isArray(raw.systemConfig?.execTasks) ? raw.systemConfig.execTasks : [] : Array.isArray(raw.systemConfig?.execTasks) && raw.systemConfig.execTasks.length > 0 ? raw.systemConfig.execTasks : mxBuildDefaultExecTasks(),
+    unitTasks: (() => {
+      if (isLive) {
+        const base = raw.systemConfig?.unitTasks && typeof raw.systemConfig.unitTasks === "object" ? {
+          ...raw.systemConfig.unitTasks
+        } : {};
+        rawUnits.forEach(un => {
+          if (!Array.isArray(base[un.id])) base[un.id] = [];
+        });
+        return base;
+      }
+      const defaults = mxBuildDefaultUnitTasks(rawUnits);
+      const base = raw.systemConfig?.unitTasks && typeof raw.systemConfig.unitTasks === "object" ? {
+        ...raw.systemConfig.unitTasks
+      } : defaults;
+      rawUnits.forEach(un => {
+        if (!Array.isArray(base[un.id])) base[un.id] = defaults[un.id] || [];
+      });
+      return base;
+    })(),
+    deptWeights: raw.systemConfig?.deptWeights || {},
+    branding: {
+      platformName: typeof raw.systemConfig?.branding?.platformName === "string" && raw.systemConfig.branding.platformName.trim() ? raw.systemConfig.branding.platformName.trim() : "ميدان",
+      logoUrl: typeof raw.systemConfig?.branding?.logoUrl === "string" ? raw.systemConfig.branding.logoUrl.trim() : "",
+      themeId: typeof raw.systemConfig?.branding?.themeId === "string" ? raw.systemConfig.branding.themeId : "default",
+      sidebarId: typeof raw.systemConfig?.branding?.sidebarId === "string" ? raw.systemConfig.branding.sidebarId : "theme",
+      colorMode: raw.systemConfig?.branding?.colorMode === "dark" ? "dark" : "light"
+    }
+  };
+  const safeBulletins = Array.isArray(raw.bulletins) ? [...raw.bulletins] : isLive ? [] : [...INITIAL_STATE.bulletins];
+  const safeCurriculums = isLive ? raw.weeklyCurriculums || {
+    default: {
+      lectureTitle: "",
+      lectureDesc: "",
+      videoType: "mp4",
+      videoUrl: "",
+      questions: []
+    }
+  } : {
+    ...INITIAL_STATE.weeklyCurriculums,
+    ...(raw.weeklyCurriculums || {})
+  };
+  const rawUsers = Array.isArray(raw.users) ? raw.users.length > 0 || isLive ? raw.users : INITIAL_STATE.users : isLive ? [] : INITIAL_STATE.users;
+  let mergedUsers = [...rawUsers];
+  const needsSeedV3 = !isLive && (raw.seedVersion || 0) < 3;
+  const needsSeedV4 = !isLive && (raw.seedVersion || 0) < 4;
+  if (!isLive && (needsSeedV3 || needsSeedV4)) {
+    mergedUsers = mergedUsers.map(u => {
+      const seedUser = INITIAL_STATE.users.find(su => su.id === u.id);
+      return seedUser ? {
+        ...seedUser,
+        ...u,
+        isExecHead: u.id === "u_exec" ? true : u.isExecHead ?? seedUser.isExecHead,
+        deptTeamId: u.deptTeamId !== undefined ? u.deptTeamId : seedUser.deptTeamId,
+        assignedDepartments: u.assignedDepartments || seedUser.assignedDepartments,
+        joinedAt: u.joinedAt || seedUser.joinedAt,
+        tasksRecord: u.tasksRecord && Object.keys(u.tasksRecord).length ? u.tasksRecord : seedUser.tasksRecord
+      } : u;
+    });
+    INITIAL_STATE.users.forEach(su => {
+      if (!mergedUsers.some(u => u.id === su.id)) mergedUsers.push(su);
+    });
+  }
+  if (!isLive) {
+    ["u_platform", "u_exec", "u_office", "u_admin", "u_tarbawi"].forEach(seedId => {
+      if (!mergedUsers.some(u => u.id === seedId)) {
+        const seedUser = INITIAL_STATE.users.find(su => su.id === seedId);
+        if (seedUser) mergedUsers.unshift(seedUser);
+      }
+    });
+  }
+  const ALLOWED_ROLES = ["platform_admin", "executive", "operational_admin", "admin", "cadre"];
+  const safeUsers = mergedUsers.filter(u => u && typeof u === "object").map(u => {
+    const cleanRole = ALLOWED_ROLES.includes(u.roleType) ? u.roleType : "cadre";
+    const baseU = {
+      ...u,
+      id: String(u.id || mxRandomId("u")),
+      username: String(u.username || ""),
+      password: mxHashPw(u.password || "1234"),
+      name: String(u.name || ""),
+      roleType: cleanRole,
+      isExecHead: !isLive && u.id === "u_exec" ? true : Boolean(u.isExecHead),
+      joinedAt: u.joinedAt || mxCoarseNow()
+    };
+    if (cleanRole === "admin") {
+      return {
+        ...baseU,
+        roleType: "operational_admin",
+        departmentId: baseU.departmentId || "dept_hr"
+      };
+    }
+    if (cleanRole === "operational_admin") {
+      return {
+        ...baseU,
+        departmentId: baseU.departmentId || "dept_hr"
+      };
+    }
+    if (cleanRole !== "cadre") return baseU;
+    const seedMatch = !isLive ? INITIAL_STATE.users.find(su => su.id === u.id) : null;
+    const rawRec = u.tasksRecord || {};
+    const mergedRec = {
+      ...rawRec
+    };
+    if (seedMatch && seedMatch.tasksRecord) {
+      Object.keys(seedMatch.tasksRecord).forEach(wKey => {
+        mergedRec[wKey] = {
+          ...(seedMatch.tasksRecord[wKey] || {}),
+          ...(rawRec[wKey] || {})
+        };
+      });
+    }
+    return {
+      ...baseU,
+      joinedAt: baseU.joinedAt,
+      assignedDepartments: Array.isArray(u.assignedDepartments) ? u.assignedDepartments : ["dept_hr", "dept_tarbawi"],
+      crossTeams: Array.isArray(u.crossTeams) ? u.crossTeams : [],
+      defaultSchedule: {
+        meetDay: u.defaultSchedule?.meetDay ?? 2,
+        meetTime: u.defaultSchedule?.meetTime || "19:00",
+        meetDuration: u.defaultSchedule?.meetDuration || 90
+      },
+      weekOverrides: u.weekOverrides || {},
+      tasksRecord: mergedRec
+    };
+  });
+  if (needsSeedV3) {
+    const unitsNow = [...safeSystemConfig.organizationalUnits];
+    DEFAULT_UNITS.forEach(du => {
+      const idx = unitsNow.findIndex(x => x.id === du.id);
+      if (idx === -1) unitsNow.push(du);else if (!unitsNow[idx].leaderUserId && du.leaderUserId) unitsNow[idx] = {
+        ...unitsNow[idx],
+        leaderUserId: du.leaderUserId
+      };
+    });
+    safeSystemConfig.organizationalUnits = unitsNow;
+    INITIAL_STATE.bulletins.forEach(sb => {
+      if (!safeBulletins.some(b => b.id === sb.id)) safeBulletins.push(sb);
+    });
+  }
+  return {
+    ...(isLive ? {
+      isLiveVault: true,
+      _dummySlots: raw._dummySlots || {}
+    } : {}),
+    seedVersion: isLive ? 5 : 4,
+    directives: Array.isArray(raw.directives) ? raw.directives : [],
+    systemConfig: safeSystemConfig,
+    bulletins: safeBulletins,
+    weeklyCurriculums: safeCurriculums,
+    users: safeUsers
+  };
+}
+function MadyanWordmark({
+  size = "text-3xl"
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 select-none",
+    dir: "ltr"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `madyan-logo ${size} tracking-tight`
+  }, "Maydan"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black px-2 py-0.5 rounded-lg bg-orange-100 text-orange-800 border border-orange-200/80",
+    dir: "rtl"
+  }, "ميدان"));
+}
+function ModalContainer({
+  isOpen,
+  onClose,
+  badge,
+  title,
+  children,
+  maxWidth = "max-w-lg"
+}) {
+  if (!isOpen) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `bg-white rounded-[32px] ${maxWidth} w-full p-6 sm:p-7 shadow-2xl border border-stone-100 max-h-[92vh] overflow-y-auto relative`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between pb-4 mb-4 border-b border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", null, badge && /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600 block"
+  }, badge), /*#__PURE__*/React.createElement("h3", {
+    className: "text-lg font-black text-stone-900"
+  }, title)), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    title: "إغلاق",
+    className: "w-9 h-9 rounded-full bg-stone-100 text-stone-600 flex items-center justify-center font-bold hover:bg-stone-200 transition"
+  }, "✕")), children));
+}
+function SlideOverDrawer({
+  isOpen,
+  onClose,
+  badge,
+  title,
+  children
+}) {
+  if (!isOpen) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-sm flex justify-end"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white w-full max-w-md h-full shadow-2xl border-r border-stone-200 flex flex-col justify-between overflow-y-auto p-6 sm:p-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between pb-4 border-b border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", null, badge && /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600 block mb-0.5"
+  }, badge), /*#__PURE__*/React.createElement("h3", {
+    className: "text-lg font-black text-stone-900"
+  }, title)), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    title: "إغلاق اللوحة",
+    className: "w-9 h-9 rounded-full bg-stone-100 text-stone-600 flex items-center justify-center font-bold hover:bg-stone-200 transition"
+  }, "✕")), /*#__PURE__*/React.createElement("div", null, children))));
+}
+
+// ============================================================================
+// 3.5 ZERO-TRACE E2EE CLOUD VAULT CONFIG (RAM-ONLY, NO LOCALSTORAGE)
+// ============================================================================
+const LIVE_VAULT_ROW_ID = "live_vault";
+const SQL_SCHEMA_SNIPPET = `-- شغّل هذا الكود في محرر قاعدة البيانات السحابية لإنشاء جدول الخزنة المشفرة فقط (صفر جداول مكشوفة)
+DROP TABLE IF EXISTS public.madyan_users CASCADE;
+DROP TABLE IF EXISTS public.madyan_bulletins CASCADE;
+DROP TABLE IF EXISTS public.madyan_curriculums CASCADE;
+
+CREATE TABLE IF NOT EXISTS public.madyan_app_state (
+  id TEXT PRIMARY KEY DEFAULT 'live_vault',
+  state_data JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_DATE,
+  updated_by TEXT DEFAULT 'vault'
+);
+
+ALTER TABLE public.madyan_app_state ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read/write on madyan_app_state" ON public.madyan_app_state;
+CREATE POLICY "Allow public read/write on madyan_app_state"
+  ON public.madyan_app_state FOR ALL USING (true) WITH CHECK (true);`;
+const DEFAULT_SUPABASE_URL = "https://qvmfaaudskpxiacaxbpn.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF2bWZhYXVkc2tweGlhY2F4YnBuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM4NDMwNjUsImV4cCI6MjEwOTQxOTA2NX0.Gl8NYt66eBjG_OQlaerjelBObC3QYBoCPmm0f5x_wNk";
+function loadCloudConfig() {
+  if (mxGetBootParam("offline", "") === "1") {
+    return {
+      supabaseUrl: "",
+      supabaseAnonKey: ""
+    };
+  }
+  return {
+    supabaseUrl: DEFAULT_SUPABASE_URL,
+    supabaseAnonKey: DEFAULT_SUPABASE_ANON_KEY
+  };
+}
+function sanitizeCloudConfigInRam(url, key) {
+  const cleanUrl = (url || "").trim().replace(/\/$/, "");
+  return {
+    supabaseUrl: isValidHttpsUrl(cleanUrl) ? cleanUrl : "",
+    supabaseAnonKey: (key || "").trim()
+  };
+}
+
+// ============================================================================
+// 4. MAIN APPLICATION COMPONENT (DUAL ENVIRONMENT + E2EE VAULT + AUTO-LOCK)
+// ============================================================================
+function App() {
+  const [demoDb, setDemoDb] = useState(() => normalizeDb(INITIAL_STATE));
+  const [liveDb, setLiveDb] = useState(null);
+  const [hideDemoFromVault, setHideDemoFromVault] = useState(false);
+  const [requireIsoFromVault, setRequireIsoFromVault] = useState(true);
+  const [envMode, setEnvMode] = useState(() => {
+    if (mxIsAboutBlankIsolated()) return "live";
+    const bootEnv = mxGetBootParam("env", "");
+    if (bootEnv === "live") return "live";
+    return "demo";
+  });
+  const [currentUserId, setCurrentUserId] = useState(() => {
+    if (mxIsAboutBlankIsolated() || mxGetBootParam("env", "") === "live") return null;
+    const p = mxGetBootParam("user", null);
+    if (p) {
+      const match = INITIAL_STATE.users.find(u => u.id === p || u.username === p);
+      if (match) return match.id;
+    }
+    return null;
+  });
+  const [supervisoryAdminId, setSupervisoryAdminId] = useState(null);
+  const [platformVariant, setPlatformVariant] = useState(() => {
+    const v = mxGetBootParam("variant", "v2");
+    return v === "v1" || v === "v2" ? v : "v2";
+  });
+  const [toastMsg, setToastMsg] = useState(null);
+  const [cloudConfig, setCloudConfig] = useState(() => loadCloudConfig());
+  const [cloudStatus, setCloudStatus] = useState("checking");
+  const [cloudError, setCloudError] = useState("");
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [cloudModalOpen, setCloudModalOpen] = useState(false);
+  const [liveVaultStatus, setLiveVaultStatus] = useState("checking"); // checking | uninitialized | locked | unlocked | offline
+
+  const isRemoteUpdateRef = useRef(false);
+  const supabaseClientRef = useRef(null);
+  const vaultKeyRef = useRef(null);
+  const liveEnvelopeRef = useRef(null);
+  const lastSavedIvRef = useRef("");
+  const userWrapCacheRef = useRef({});
+  const dummySlotsCacheRef = useRef({});
+  const lastEscTimeRef = useRef(0);
+  const db = envMode === "live" ? liveDb || demoDb : demoDb;
+  const setDb = envMode === "live" ? setLiveDb : setDemoDb;
+  const showToast = msg => {
+    setToastMsg(msg);
+    clearTimeout(window.__mxToastTimer);
+    window.__mxToastTimer = setTimeout(() => setToastMsg(null), 3200);
+  };
+  const lockAndWipeSession = (reasonMsg = "") => {
+    if (vaultKeyRef.current) {
+      try {
+        vaultKeyRef.current.fill(0);
+      } catch (e) {}
+      vaultKeyRef.current = null;
+    }
+    userWrapCacheRef.current = {};
+    dummySlotsCacheRef.current = {};
+    mxClearBridgedPws();
+    mxPurgeAllBrowserTraces();
+    setSupervisoryAdminId(null);
+    setCurrentUserId(null);
+    setLiveDb(null);
+    if (liveEnvelopeRef.current) {
+      setLiveVaultStatus("locked");
+    } else if (cloudStatus === "connected") {
+      setLiveVaultStatus("uninitialized");
+    }
+    if (reasonMsg) showToast(reasonMsg);
+  };
+
+  // اكتشاف إعدادات Netlify إن وُجدت فقط عند الاستضافة على Netlify
+  useEffect(() => {
+    let cancelled = false;
+    async function discoverServerlessConfig() {
+      try {
+        if (!window.location.hostname.endsWith(".netlify.app")) return;
+        const res = await fetch("/api/config", {
+          method: "GET",
+          cache: "no-store"
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data && data.configured && data.supabaseUrl && data.supabaseAnonKey) {
+            setCloudConfig(sanitizeCloudConfigInRam(data.supabaseUrl, data.supabaseAnonKey));
+          }
+        }
+      } catch (e) {}
+    }
+    discoverServerlessConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // قراءة حالة الخزنة المشفرة (live_vault) دون كتابة أي بيانات تلقائية إطلاقاً
+  useEffect(() => {
+    if (!cloudConfig.supabaseUrl || !cloudConfig.supabaseAnonKey || !window.supabase) {
+      setCloudStatus("local_only");
+      if (!liveEnvelopeRef.current) setLiveVaultStatus("offline");
+      return;
+    }
+    let channel = null;
+    let active = true;
+    setCloudStatus("checking");
+    setCloudError("");
+    const checkTimeout = setTimeout(() => {
+      if (active && !liveEnvelopeRef.current && !vaultKeyRef.current) {
+        setLiveVaultStatus(prev => prev === "checking" ? "offline" : prev);
+      }
+    }, 2500);
+    try {
+      const client = window.supabase.createClient(cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+          storage: MX_NULL_STORAGE
+        }
+      });
+      supabaseClientRef.current = client;
+      async function checkLiveVault() {
+        try {
+          const {
+            data,
+            error
+          } = await client.from("madyan_app_state").select("id, state_data, updated_at").eq("id", LIVE_VAULT_ROW_ID).maybeSingle();
+          if (!active) return;
+          clearTimeout(checkTimeout);
+          if (error) {
+            setCloudStatus("error");
+            setCloudError(error.message || "تعذر الاتصال بجدول الخزنة السحابية.");
+            if (!liveEnvelopeRef.current) setLiveVaultStatus("offline");
+            return;
+          }
+          setCloudStatus("connected");
+          if (data && data.state_data && data.state_data.__e2ee === "maydan_v1") {
+            liveEnvelopeRef.current = data.state_data;
+            const hideDemo = Boolean(data.state_data.hideDemo);
+            const reqIso = data.state_data.reqIso !== false;
+            setHideDemoFromVault(hideDemo);
+            setRequireIsoFromVault(reqIso);
+            if (hideDemo) setEnvMode("live");
+            setLastSyncAt("مشفر ومؤمّن");
+            if (!vaultKeyRef.current) {
+              setLiveVaultStatus("locked");
+            }
+          } else {
+            liveEnvelopeRef.current = null;
+            if (!vaultKeyRef.current) {
+              setLiveVaultStatus("uninitialized");
+            }
+          }
+        } catch (err) {
+          if (!active) return;
+          clearTimeout(checkTimeout);
+          setCloudStatus("error");
+          setCloudError(String(err.message || err));
+          if (!liveEnvelopeRef.current) setLiveVaultStatus("offline");
+        }
+      }
+      checkLiveVault();
+      channel = client.channel("madyan_vault_sync").on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "madyan_app_state",
+        filter: `id=eq.${LIVE_VAULT_ROW_ID}`
+      }, async payload => {
+        const envObj = payload.new && payload.new.state_data;
+        if (!envObj || envObj.__e2ee !== "maydan_v1") return;
+        if (envObj.iv && envObj.iv === lastSavedIvRef.current) return;
+        liveEnvelopeRef.current = envObj;
+        setHideDemoFromVault(Boolean(envObj.hideDemo));
+        setRequireIsoFromVault(envObj.reqIso !== false);
+        if (vaultKeyRef.current) {
+          const decrypted = await MXVaultCrypto.decryptRemoteVaultRealtime(vaultKeyRef.current, envObj);
+          if (decrypted && active) {
+            isRemoteUpdateRef.current = true;
+            dummySlotsCacheRef.current = decrypted._dummySlots || {};
+            (decrypted.users || []).forEach(u => {
+              if (u._ekWrap) userWrapCacheRef.current[u.id] = {
+                pw: u.password,
+                wrap: u._ekWrap
+              };
+            });
+            setLiveDb(decrypted);
+            setLastSyncAt("مشفر ومحدّث");
+          }
+        } else {
+          setLiveVaultStatus("locked");
+        }
+      }).subscribe();
+    } catch (err) {
+      setCloudStatus("error");
+      setCloudError(String(err.message || err));
+      if (!liveEnvelopeRef.current) setLiveVaultStatus("offline");
+    }
+    return () => {
+      active = false;
+      clearTimeout(checkTimeout);
+      if (channel && supabaseClientRef.current) {
+        try {
+          supabaseClientRef.current.removeChannel(channel);
+        } catch (e) {}
+      }
+    };
+  }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey]);
+
+  // حفظ التعديلات في البيئة الفعلية حصراً بعد تشفيرها محلياً بـ AES-256-GCM وتجريد البيانات الوصفية
+  useEffect(() => {
+    mxPurgeAllBrowserTraces();
+    if (envMode !== "live" || !liveDb || !vaultKeyRef.current) return;
+    if (isRemoteUpdateRef.current) {
+      isRemoteUpdateRef.current = false;
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        if (!vaultKeyRef.current) return;
+        const hydratedForCrypto = {
+          ...liveDb,
+          isLiveVault: true,
+          _dummySlots: dummySlotsCacheRef.current || liveDb._dummySlots || {},
+          users: (liveDb.users || []).map(u => {
+            const cached = userWrapCacheRef.current[u.id];
+            if (cached && cached.pw === u.password && !u._ekWrap) {
+              return {
+                ...u,
+                _ekWrap: cached.wrap,
+                _ekPwRef: cached.pw
+              };
+            }
+            return u;
+          })
+        };
+        const {
+          envelope,
+          db: encryptedReadyDb
+        } = await MXVaultCrypto.encryptVaultUpdate(vaultKeyRef.current, liveEnvelopeRef.current, hydratedForCrypto);
+        envelope.reqIso = encryptedReadyDb.systemConfig?.governanceRules?.requirePrivateBrowser !== false;
+        liveEnvelopeRef.current = envelope;
+        lastSavedIvRef.current = envelope.iv;
+        dummySlotsCacheRef.current = encryptedReadyDb._dummySlots || {};
+        (encryptedReadyDb.users || []).forEach(u => {
+          if (u._ekWrap) userWrapCacheRef.current[u.id] = {
+            pw: u.password,
+            wrap: u._ekWrap
+          };
+        });
+        setHideDemoFromVault(Boolean(envelope.hideDemo));
+        setRequireIsoFromVault(envelope.reqIso !== false);
+        if (cloudStatus === "connected" && supabaseClientRef.current) {
+          const {
+            error
+          } = await supabaseClientRef.current.from("madyan_app_state").upsert({
+            id: LIVE_VAULT_ROW_ID,
+            state_data: envelope,
+            updated_at: mxCoarseUtcIso(),
+            updated_by: "vault"
+          });
+          if (!error) {
+            setLastSyncAt("مشفر ومؤمّن");
+          }
+        }
+      } catch (e) {}
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [liveDb, envMode, cloudStatus]);
+  const currentUser = useMemo(() => {
+    if (envMode === "live" && !liveDb) return null;
+    return db.users.find(u => u.id === currentUserId) || null;
+  }, [db.users, currentUserId, envMode, liveDb]);
+
+  // القفل التلقائي عند الخمول + القفل عند إخفاء التبويب + اختصار الطوارئ (ضغط مفتاح الهروب Esc مرتين)
+  useEffect(() => {
+    if (!currentUser) return;
+    const rules = {
+      ...DEFAULT_GOVERNANCE_RULES,
+      ...(db.systemConfig?.governanceRules || {})
+    };
+    const autoMin = envMode === "live" ? Number(rules.autoLockMinutes) ?? 10 : 0;
+    const lockOnHide = envMode === "live" && Boolean(rules.lockOnTabHide);
+    let idleTimer = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (autoMin > 0) {
+        idleTimer = setTimeout(() => {
+          lockAndWipeSession("تم قفل الجلسة تلقائياً ومسح الذاكرة لعدم النشاط");
+        }, autoMin * 60 * 1000);
+      }
+    };
+    const onKeyDown = e => {
+      if (e.key === "Escape") {
+        const now = performance.now();
+        if (now - lastEscTimeRef.current < 550) {
+          lastEscTimeRef.current = 0;
+          lockAndWipeSession("تم القفل الفوري وتطهير الذاكرة العشوائية");
+          return;
+        }
+        lastEscTimeRef.current = now;
+      }
+      resetIdle();
+    };
+    const onVisChange = () => {
+      if (lockOnHide && document.visibilityState === "hidden") {
+        lockAndWipeSession("تم قفل الجلسة تلقائياً عند إخفاء التبويب");
+      }
+    };
+    resetIdle();
+    window.addEventListener("pointerdown", resetIdle, {
+      passive: true
+    });
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("touchstart", resetIdle, {
+      passive: true
+    });
+    document.addEventListener("visibilitychange", onVisChange);
+    return () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      window.removeEventListener("pointerdown", resetIdle);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("touchstart", resetIdle);
+      document.removeEventListener("visibilitychange", onVisChange);
+    };
+  }, [currentUser, envMode, db.systemConfig?.governanceRules]);
+  const handleInitLiveVault = async ({
+    adminName,
+    adminUsername,
+    adminPasswordPlain,
+    platformName
+  }) => {
+    const freshLiveDb = normalizeDb(mxBuildLiveInitialState({
+      adminName,
+      adminUsername,
+      adminPasswordPlain,
+      platformName
+    }));
+    const {
+      rawVaultKeyBytes,
+      envelope,
+      db: encryptedReadyDb
+    } = await MXVaultCrypto.createNewEncryptedVault(freshLiveDb, adminUsername, adminPasswordPlain);
+    envelope.reqIso = true;
+    vaultKeyRef.current = rawVaultKeyBytes;
+    liveEnvelopeRef.current = envelope;
+    lastSavedIvRef.current = envelope.iv;
+    dummySlotsCacheRef.current = encryptedReadyDb._dummySlots || {};
+    (encryptedReadyDb.users || []).forEach(u => {
+      if (u._ekWrap) userWrapCacheRef.current[u.id] = {
+        pw: u.password,
+        wrap: u._ekWrap
+      };
+    });
+    if (cloudStatus === "connected" && supabaseClientRef.current) {
+      const {
+        error
+      } = await supabaseClientRef.current.from("madyan_app_state").upsert({
+        id: LIVE_VAULT_ROW_ID,
+        state_data: envelope,
+        updated_at: mxCoarseUtcIso(),
+        updated_by: "vault"
+      });
+      if (error) {
+        rawVaultKeyBytes.fill(0);
+        vaultKeyRef.current = null;
+        return {
+          ok: false,
+          error: "تعذر حفظ الخزنة المشفرة على السحابة. تحقق من إعدادات الجدول."
+        };
+      }
+      // حذف أي صف قديم غير مشفر (global) إن وُجد لضمان خلو قاعدة البيانات من أي بيانات مكشوفة
+      try {
+        await supabaseClientRef.current.from("madyan_app_state").delete().eq("id", "global");
+      } catch (e) {}
+      setLastSyncAt("مشفر ومؤمّن");
+    }
+    isRemoteUpdateRef.current = true;
+    setLiveDb(encryptedReadyDb);
+    setLiveVaultStatus("unlocked");
+    setSupervisoryAdminId(null);
+    setPlatformVariant("v2");
+    setCurrentUserId(encryptedReadyDb.users[0].id);
+    showToast("تم تأسيس البيئة الفعلية المشفرة بحساب مدير المنصة الوحيد");
+    return {
+      ok: true
+    };
+  };
+  const handleUnlockLiveVault = async (usernameInput, passwordInput) => {
+    if (!liveEnvelopeRef.current) {
+      return {
+        ok: false,
+        error: "لم يتم تأسيس البيئة الفعلية بعد."
+      };
+    }
+    const res = await MXVaultCrypto.unlockEncryptedVault(liveEnvelopeRef.current, usernameInput, passwordInput);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: "اسم المستخدم أو كلمة المرور غير صحيحة"
+      };
+    }
+    vaultKeyRef.current = res.rawVaultKeyBytes;
+    dummySlotsCacheRef.current = res.db._dummySlots || {};
+    userWrapCacheRef.current = {};
+    (res.db.users || []).forEach(u => {
+      if (u._ekWrap) userWrapCacheRef.current[u.id] = {
+        pw: u.password,
+        wrap: u._ekWrap
+      };
+    });
+    isRemoteUpdateRef.current = true;
+    setLiveDb(res.db);
+    setLiveVaultStatus("unlocked");
+    setSupervisoryAdminId(null);
+    setPlatformVariant("v2");
+    setCurrentUserId(res.user.id);
+    return {
+      ok: true,
+      user: res.user
+    };
+  };
+  const handlePurgeLegacyPlaintext = async () => {
+    mxPurgeAllBrowserTraces();
+    if (supabaseClientRef.current) {
+      try {
+        await supabaseClientRef.current.from("madyan_app_state").delete().eq("id", "global");
+        showToast("تم تطهير السحابة والجهاز من أي نسخ قديمة غير مشفرة");
+        return;
+      } catch (e) {}
+    }
+    showToast("تم تطهير ذاكرة المتصفح بالكامل");
+  };
+  const updateUserRecord = (userId, updaterFn) => {
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => u.id === userId ? updaterFn(u) : u)
+    }));
+  };
+  const isUsernameTaken = (newUsername, ignoreUserId) => {
+    const clean = newUsername.trim().toLowerCase();
+    return db.users.some(u => u.id !== ignoreUserId && (u.username || "").toLowerCase() === clean);
+  };
+  const acknowledgeBulletin = (bulletinId, userId) => {
+    const stamp = mxNowStamp();
+    setDb(prev => ({
+      ...prev,
+      bulletins: (prev.bulletins || []).map(b => {
+        if (b.id !== bulletinId) return b;
+        return {
+          ...b,
+          acknowledgedBy: {
+            ...(b.acknowledgedBy || {}),
+            [userId]: stamp
+          }
+        };
+      })
+    }));
+    showToast("سُجّل اطلاعك على التعميم");
+  };
+  const resetDemoData = () => {
+    mxPurgeAllBrowserTraces();
+    if (envMode === "demo") {
+      setDemoDb(normalizeDb(INITIAL_STATE));
+      setCurrentUserId(null);
+      showToast("تمت استعادة بيانات بيئة التجربة في الذاكرة المؤقتة");
+    } else {
+      showToast("الاستعادة التجريبية معطّلة في البيئة الفعلية لحماية حسابات الأعضاء");
+    }
+  };
+  const activeBranding = mxBranding(envMode === "live" && liveDb ? liveDb : demoDb);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "min-h-screen pb-20"
+  }, /*#__PURE__*/React.createElement(MXThemeStyle, {
+    branding: activeBranding
+  }), toastMsg && /*#__PURE__*/React.createElement("div", {
+    className: "fixed top-6 left-1/2 -translate-x-1/2 z-[60] bg-stone-900 text-white text-[14px] px-5 py-3 rounded-full shadow-lg"
+  }, toastMsg), supervisoryAdminId && currentUser && currentUser.id !== supervisoryAdminId && (() => {
+    const supUser = db.users.find(u => u.id === supervisoryAdminId);
+    const backLabel = supUser?.roleType === "executive" ? "العودة إلى بوابة القيادة التنفيذية ←" : "العودة إلى بوابة إدارة المنصة ←";
+    return /*#__PURE__*/React.createElement("div", {
+      className: "sticky top-0 z-50 bg-stone-900 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-black shadow-lg border-b border-orange-500/40"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-[11px]"
+    }, "👁️ وضع الإشراف والمعاينة"), /*#__PURE__*/React.createElement("span", null, "تستعرض الآن شاشة المستوى ببيانات: ", currentUser.name, " (", currentUser.unit, ")")), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        setCurrentUserId(supervisoryAdminId);
+        setSupervisoryAdminId(null);
+      },
+      className: "px-4 py-1.5 rounded-xl bg-white text-stone-900 hover:bg-orange-50 font-black transition"
+    }, backLabel));
+  })(), !currentUser ? /*#__PURE__*/React.createElement(LoginView, {
+    demoDb: demoDb,
+    envMode: hideDemoFromVault ? "live" : envMode,
+    onChangeEnvMode: nextMode => {
+      if (hideDemoFromVault && nextMode === "demo") return;
+      setEnvMode(nextMode);
+    },
+    hideDemo: hideDemoFromVault,
+    requireIsolation: requireIsoFromVault,
+    liveVaultStatus: liveVaultStatus,
+    cloudStatus: cloudStatus,
+    onDemoLogin: (user, variant) => {
+      setSupervisoryAdminId(null);
+      if (variant) setPlatformVariant(variant);
+      setEnvMode("demo");
+      setCurrentUserId(user.id);
+    },
+    onInitLiveVault: handleInitLiveVault,
+    onUnlockLiveVault: handleUnlockLiveVault,
+    showToast: showToast
+  }) : currentUser.roleType === "platform_admin" && platformVariant === "v2" ? /*#__PURE__*/React.createElement(PlatformAdminPortalV2, {
+    db: db,
+    setDb: setDb,
+    envMode: envMode,
+    currentUser: currentUser,
+    cloudStatus: envMode === "demo" ? "demo_ram" : cloudStatus,
+    lastSyncAt: envMode === "demo" ? "ذاكرة مؤقتة معزولة" : lastSyncAt,
+    onOpenCloudSetup: () => setCloudModalOpen(true),
+    onPurgeLegacyPlaintext: handlePurgeLegacyPlaintext,
+    onQuickLock: () => lockAndWipeSession("تم القفل الفوري وتطهير الذاكرة"),
+    onPreviewUser: targetUserId => {
+      setSupervisoryAdminId(currentUser.id);
+      setCurrentUserId(targetUserId);
+    },
+    onResetDemo: resetDemoData,
+    onLogout: () => lockAndWipeSession(),
+    onSwitchVariant: envMode === "demo" ? () => setPlatformVariant("v1") : null,
+    showToast: showToast
+  }) : currentUser.roleType === "platform_admin" ? /*#__PURE__*/React.createElement(PlatformAdminPortal, {
+    db: db,
+    setDb: setDb,
+    currentUser: currentUser,
+    cloudStatus: cloudStatus,
+    lastSyncAt: lastSyncAt,
+    onOpenCloudSetup: () => setCloudModalOpen(true),
+    onPreviewUser: targetUserId => {
+      setSupervisoryAdminId(currentUser.id);
+      setCurrentUserId(targetUserId);
+    },
+    onResetDemo: resetDemoData,
+    onLogout: () => lockAndWipeSession(),
+    showToast: showToast
+  }) : mxIsExecHead(currentUser) ? /*#__PURE__*/React.createElement(ExecutivePortalV3, {
+    db: db,
+    setDb: setDb,
+    currentUser: currentUser,
+    isHead: true,
+    modeSwitch: null,
+    onPreviewUser: targetUserId => {
+      setSupervisoryAdminId(currentUser.id);
+      setCurrentUserId(targetUserId);
+    },
+    onLogout: () => lockAndWipeSession(),
+    showToast: showToast
+  }) : /*#__PURE__*/React.createElement(MXWorkspace, {
+    db: db,
+    setDb: setDb,
+    currentUser: currentUser,
+    isUsernameTaken: isUsernameTaken,
+    onAcknowledgeBulletin: acknowledgeBulletin,
+    onPreviewUser: targetUserId => {
+      setSupervisoryAdminId(currentUser.id);
+      setCurrentUserId(targetUserId);
+    },
+    onLogout: () => lockAndWipeSession(),
+    showToast: showToast
+  }), /*#__PURE__*/React.createElement(CloudSetupModal, {
+    isOpen: cloudModalOpen,
+    onClose: () => setCloudModalOpen(false),
+    cloudConfig: cloudConfig,
+    cloudStatus: cloudStatus,
+    cloudError: cloudError,
+    lastSyncAt: lastSyncAt,
+    onSaveConfig: (url, key) => {
+      const saved = sanitizeCloudConfigInRam(url, key);
+      setCloudConfig(saved);
+      showToast("تم تحديث إعدادات الخزنة السحابية في الذاكرة المؤقتة");
+    },
+    onDisconnect: () => {
+      mxPurgeAllBrowserTraces();
+      supabaseClientRef.current = null;
+      setCloudConfig({
+        supabaseUrl: "",
+        supabaseAnonKey: ""
+      });
+      setCloudStatus("local_only");
+      showToast("تم فصل الاتصال السحابي للعمل في الذاكرة المؤقتة فقط");
+    },
+    showToast: showToast
+  }));
+}
+
+// ============================================================================
+// 5. DUAL-ENVIRONMENT ZERO-TRACE LOGIN & ISOLATION GATE
+// ============================================================================
+function DemoAccountsPanel({
+  db,
+  users,
+  onPick
+}) {
+  const [open, setOpen] = useState(false);
+  const cadres = users.filter(u => u.roleType === "cadre");
+  let ranked = [];
+  try {
+    ranked = cadres.map(u => ({
+      u,
+      pct: mxWeekSummary(db, u, mxCurrentWeek(u)).pct
+    })).sort((a, b) => b.pct - a.pct);
+  } catch (e) {
+    ranked = cadres.map(u => ({
+      u,
+      pct: null
+    }));
+  }
+  const samples = ranked.length > 4 ? [...ranked.slice(0, 2), ...ranked.slice(-2)] : ranked;
+  const byUser = name => users.find(u => (u.username || "").toLowerCase() === name);
+  const Row = ({
+    title,
+    sub,
+    onClick,
+    tag
+  }) => /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClick,
+    className: "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl hover:bg-[#F4F2EE] text-right transition"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block text-[14px] text-stone-900 truncate"
+  }, title), sub && /*#__PURE__*/React.createElement("span", {
+    className: "block text-[12px] text-stone-400 truncate"
+  }, sub)), tag ? /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-500 shrink-0"
+  }, tag) : /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "chevron",
+    className: "w-4 h-4 text-stone-300 shrink-0"
+  }));
+  const Group = ({
+    label,
+    children
+  }) => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-400 px-4 pt-3 pb-1"
+  }, label), children);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 w-full max-w-[440px]"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOpen(v => !v),
+    className: "w-full h-12 px-5 rounded-full bg-white/80 hover:bg-white text-[14px] text-stone-700 flex items-center justify-between transition shadow-sm"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "key",
+    className: "w-4 h-4"
+  }), "الدخول السريع لحسابات التجربة (", cadres.length.toLocaleString("ar-EG"), " عضواً + القيادات)"), /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "chevron",
+    className: `w-4 h-4 transition ${open ? "rotate-90" : "-rotate-90"}`
+  })), open && /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 bg-white rounded-[28px] p-2 pb-3 shadow-sm"
+  }, /*#__PURE__*/React.createElement(Group, {
+    label: "إدارة المنصة"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2 px-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onPick("sysadmin", "v2"),
+    className: "h-11 rounded-2xl bg-stone-900 text-white text-[13px] font-semibold"
+  }, "مدير المنصة (الواجهة الحديثة)"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onPick("sysadmin", "v1"),
+    className: "h-11 rounded-2xl bg-[#F4F2EE] text-stone-700 text-[13px]"
+  }, "الواجهة الكلاسيكية"))), /*#__PURE__*/React.createElement(Group, {
+    label: "القيادة والإدارات والوحدات"
+  }, /*#__PURE__*/React.createElement(Row, {
+    title: "قائد المكتب التنفيذي (المدير التنفيذي)",
+    sub: pa2Short(byUser("exec")?.name),
+    onClick: () => onPick("exec")
+  }), /*#__PURE__*/React.createElement(Row, {
+    title: "المكتب التنفيذي",
+    sub: `${pa2Short(byUser("office")?.name)} · واجهة مزدوجة`,
+    onClick: () => onPick("office")
+  }), /*#__PURE__*/React.createElement(Row, {
+    title: "الموارد البشرية",
+    sub: `${pa2Short(byUser("admin")?.name)} · واجهة مزدوجة`,
+    onClick: () => onPick("admin")
+  }), /*#__PURE__*/React.createElement(Row, {
+    title: "الإدارة التربوية",
+    sub: `${pa2Short(byUser("tarbawi")?.name)} · واجهة مزدوجة`,
+    onClick: () => onPick("tarbawi")
+  }), /*#__PURE__*/React.createElement(Row, {
+    title: "مدير وحدة (التخطيط الاستراتيجي)",
+    sub: `${pa2Short(byUser("maydan")?.name)} · واجهة مزدوجة`,
+    onClick: () => onPick("maydan")
+  })), /*#__PURE__*/React.createElement(Group, {
+    label: "نماذج من الأعضاء (الأعلى والأقل التزاماً)"
+  }, samples.map(({
+    u,
+    pct
+  }) => /*#__PURE__*/React.createElement(Row, {
+    key: u.id,
+    title: pa2Short(u.name),
+    sub: u.unit,
+    tag: pct === null ? null : `${pct}%`,
+    onClick: () => onPick(u.username)
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "px-2 pt-2"
+  }, /*#__PURE__*/React.createElement("select", {
+    defaultValue: "",
+    onChange: e => e.target.value && onPick(e.target.value),
+    className: pa2InputCls
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "استعراض كافة الأعضاء (", cadres.length, ")…"), cadres.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.username
+  }, pa2Short(u.name), " — ", u.unit))))));
+}
+function LoginView({
+  demoDb,
+  envMode,
+  onChangeEnvMode,
+  hideDemo,
+  requireIsolation,
+  liveVaultStatus,
+  cloudStatus,
+  onDemoLogin,
+  onInitLiveVault,
+  onUnlockLiveVault,
+  showToast
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // نموذج تأسيس البيئة الفعلية لأول مرة (مستخدم واحد فقط: مدير المنصة)
+  const [founderName, setFounderName] = useState("مدير المنصة");
+  const [founderUsername, setFounderUsername] = useState("");
+  const [founderPassword, setFounderPassword] = useState("");
+  const [founderPasswordConfirm, setFounderPasswordConfirm] = useState("");
+
+  // فحص البيئة المعزولة / المتصفح الخفي
+  const [isoInfo, setIsoInfo] = useState(() => mxIsAboutBlankIsolated() ? {
+    state: "isolated_window",
+    allowed: true,
+    label: "نافذة معزولة بلا سجل تصفح"
+  } : {
+    state: "checking",
+    allowed: false,
+    label: "جاري التحقق من عزل المتصفح..."
+  });
+  const [privateConfirmedInRam, setPrivateConfirmedInRam] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    mxDetectBrowserIsolation().then(info => {
+      if (mounted) setIsoInfo(info);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  useEffect(() => {
+    setError("");
+  }, [envMode]);
+  const demoUsers = demoDb.users || [];
+  const findDemoUser = (uInput, pInput) => {
+    const cleanU = uInput.trim().toLowerCase();
+    const cleanP = pInput.trim();
+    return demoUsers.find(u => {
+      const uname = (u.username || "").toLowerCase();
+      if ((cleanU === "madyan" || cleanU === "maydan") && (uname === "madyan" || uname === "maydan")) return mxVerifyPw(cleanP, u.password);
+      return uname === cleanU && mxVerifyPw(cleanP, u.password);
+    });
+  };
+  const handleDemoSubmit = e => {
+    e.preventDefault();
+    const found = findDemoUser(username, password);
+    if (!found) {
+      setError("اسم المستخدم أو كلمة المرور غير صحيحة في بيئة التجربة");
+      return;
+    }
+    setError("");
+    onDemoLogin(found);
+  };
+  const quickPickDemo = (u, variant) => {
+    const cleanU = u.trim().toLowerCase();
+    const found = demoUsers.find(x => {
+      const uname = (x.username || "").toLowerCase();
+      if (cleanU === "sysadmin") return uname === "sysadmin" || x.roleType === "platform_admin";
+      return uname === cleanU;
+    });
+    if (found) onDemoLogin(found, variant);
+  };
+  const handleLiveLoginSubmit = async e => {
+    e.preventDefault();
+    if (busy) return;
+    setError("");
+    setBusy(true);
+    try {
+      const res = await onUnlockLiveVault(username, password);
+      if (!res.ok) {
+        setError(res.error || "اسم المستخدم أو كلمة المرور غير صحيحة");
+      } else {
+        setPassword("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  const handleFounderInitSubmit = async e => {
+    e.preventDefault();
+    if (busy) return;
+    const cleanName = founderName.trim();
+    const cleanUser = founderUsername.trim().toLowerCase();
+    const cleanPw = founderPassword.trim();
+    if (!cleanName || cleanUser.length < 3) {
+      setError("يرجى إدخال الاسم واسم مستخدم لا يقل عن ٣ أحرف");
+      return;
+    }
+    if (cleanPw.length < 8) {
+      setError("حفاظاً على قوة التشفير، يجب ألا تقل كلمة مرور مدير المنصة عن ٨ خانات");
+      return;
+    }
+    if (cleanPw !== founderPasswordConfirm.trim()) {
+      setError("كلمتا المرور غير متطابقتين");
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      const res = await onInitLiveVault({
+        adminName: cleanName,
+        adminUsername: cleanUser,
+        adminPasswordPlain: cleanPw,
+        platformName: "ميدان"
+      });
+      if (!res.ok) {
+        setError(res.error || "تعذر إنشاء البيئة الفعلية المشفرة");
+      } else {
+        setFounderPassword("");
+        setFounderPasswordConfirm("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copyLinkForIncognito = () => {
+    const urlToCopy = MX_ORIGIN_BASE_HREF || window.location.href;
+    try {
+      navigator.clipboard.writeText(urlToCopy);
+      if (showToast) showToast("تم نسخ الرابط — افتح نافذة متصفح خفي والصقه هناك");
+    } catch (e) {}
+  };
+  const launchIsolatedBlank = () => {
+    const opened = mxOpenIsolatedBlankWindow();
+    if (!opened) {
+      setError("حجب المتصفح النافذة المنبثقة؛ اسمح بالنوافذ المنبثقة أو افتح الرابط في المتصفح الخفي.");
+    }
+  };
+  const brand = mxBranding(demoDb);
+  const isolationPassed = !requireIsolation || isoInfo.allowed || privateConfirmedInRam;
+  return /*#__PURE__*/React.createElement("div", {
+    dir: "rtl",
+    className: "min-h-screen flex flex-col items-center justify-center px-4 py-10 bg-[#F4F2EE]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[32px] w-full max-w-[440px] p-7 sm:p-9 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-orange-700"
+  }, "منصة المتابعة المشفرة"), /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-semibold"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-1.5 h-1.5 rounded-full bg-emerald-500"
+  }), "صفر آثار")), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: false,
+    size: "lg"
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-500 mt-2 leading-relaxed"
+  }, "تعمل بالكامل في الذاكرة المؤقتة دون ملفات ارتباط أو تخزين محلي على جهازك."), !hideDemo && /*#__PURE__*/React.createElement("div", {
+    className: "mt-6 p-1.5 rounded-2xl bg-[#F4F2EE] grid grid-cols-2 gap-1.5",
+    role: "tablist",
+    "aria-label": "اختيار بيئة الدخول"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onChangeEnvMode("demo"),
+    className: `py-2.5 px-3 rounded-xl text-[13px] transition text-center ${envMode === "demo" ? "bg-white text-stone-900 font-bold shadow-sm" : "text-stone-500 hover:text-stone-800"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block"
+  }, "بيئة التجربة"), /*#__PURE__*/React.createElement("span", {
+    className: "block text-[11px] font-normal text-stone-400 mt-0.5"
+  }, "٣٠ مستخدماً جاهزاً")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onChangeEnvMode("live"),
+    className: `py-2.5 px-3 rounded-xl text-[13px] transition text-center ${envMode === "live" ? "bg-stone-900 text-white font-bold shadow-sm" : "text-stone-600 hover:text-stone-900"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block"
+  }, "البيئة الفعلية"), /*#__PURE__*/React.createElement("span", {
+    className: "block text-[11px] font-normal opacity-75 mt-0.5"
+  }, "خزنة مشفرة رسمية"))), envMode === "demo" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 rounded-2xl bg-[#FAF9F6] border border-stone-200/70 px-4 py-2.5 text-[12px] text-stone-600 leading-relaxed"
+  }, "بيئة معاينة معزولة في الذاكرة العشوائية تضم ٣٠ عضواً والقيادات للتجربة الحرة دون أي اتصال بالسحابة."), /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleDemoSubmit,
+    className: "space-y-4 mt-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: username,
+    onChange: e => setUsername(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "off",
+    spellCheck: false,
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "off",
+    required: true
+  })), error && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[13px] text-rose-700"
+  }, error), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full h-12 rounded-full bg-stone-900 text-white text-[15px] font-semibold hover:bg-stone-800 transition"
+  }, "دخول بيئة التجربة"))) : !isolationPassed ?
+  /*#__PURE__*/
+  /* بوابة اشتراط البيئة المعزولة أو المتصفح الخفي قبل فتح البيئة الفعلية */
+  React.createElement("div", {
+    className: "mt-6 space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#FFF3E2] px-4 py-4 space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] font-bold text-stone-900"
+  }, isoInfo.state === "normal_detected" ? "يلزم فتح البيئة الفعلية في نافذة معزولة أو متصفح خفي" : "حماية سجل التصفح للبيئة الفعلية"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-700 leading-relaxed"
+  }, isoInfo.state === "normal_detected" ? "تم رصد فتح الرابط من متصفح عادي يسجّل عناوين المواقع في تاريخ الجهاز. لحمايتك، افتح المنصة بضغطة واحدة في نافذة معزولة بلا سجل أو انتقل للمتصفح الخفي." : "لضمان عدم حفظ عنوان المنصة في تاريخ المتصفح على جهازك، استخدم النافذة المعزولة بلا سجل أو أكّد أنك داخل المتصفح الخفي الآن.")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: launchIsolatedBlank,
+    className: "w-full h-12 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 transition px-4"
+  }, "فتح المنصة في نافذة معزولة بلا سجل"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: copyLinkForIncognito,
+    className: "w-full h-11 rounded-full bg-[#F4F2EE] text-stone-800 text-[13px] font-medium hover:bg-stone-200 transition px-4"
+  }, "نسخ الرابط لفتحه في المتصفح الخفي"), isoInfo.canConfirmPrivate && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setPrivateConfirmedInRam(true),
+    className: "w-full py-2 text-[13px] text-stone-500 hover:text-stone-900 underline underline-offset-4 transition"
+  }, "أتصفح الآن بالفعل من نافذة متصفح خفي — متابعة للدخول"), error && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[13px] text-rose-700"
+  }, error)) : liveVaultStatus === "checking" ? /*#__PURE__*/React.createElement("div", {
+    className: "mt-8 py-8 text-center text-[14px] text-stone-500"
+  }, "جاري فحص حالة الخزنة المشفرة...") : liveVaultStatus === "uninitialized" || liveVaultStatus === "offline" ?
+  /*#__PURE__*/
+  /* التأسيس الأول للبيئة الفعلية: مستخدم واحد فقط (مدير المنصة) */
+  React.createElement("form", {
+    onSubmit: handleFounderInitSubmit,
+    className: "space-y-3.5 mt-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#E3F1E8] px-4 py-3 space-y-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-bold text-emerald-900"
+  }, "تأسيس البيئة الفعلية (مستخدم واحد فقط)"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-emerald-800 leading-relaxed"
+  }, "أنشئ حساب مدير المنصة الأول لتشفير الخزنة؛ ومن داخله ستضيف القيادات والأعضاء تدريجياً.")), liveVaultStatus === "offline" && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-amber-50 px-4 py-2.5 text-[12px] text-amber-800"
+  }, "ملاحظة: تعذّر الوصول للسحابة حالياً؛ ستُنشأ الخزنة المشفرة في الذاكرة المؤقتة لهذه الجلسة."), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم مدير المنصة"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: founderName,
+    onChange: e => setFounderName(e.target.value),
+    className: pa2InputCls,
+    autoComplete: "off",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "للدخول للبيئة الفعلية"
+  }, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: founderUsername,
+    onChange: e => setFounderUsername(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "off",
+    spellCheck: false,
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "٨ خانات فأكثر"
+  }, "كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: founderPassword,
+    onChange: e => setFounderPassword(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "new-password",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "تأكيد كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: founderPasswordConfirm,
+    onChange: e => setFounderPasswordConfirm(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "new-password",
+    required: true
+  })), error && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[13px] text-rose-700"
+  }, error), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    disabled: busy,
+    className: "w-full h-12 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 transition disabled:opacity-60"
+  }, busy ? "جاري التشفير والتأسيس..." : "تأسيس البيئة الفعلية والدخول")) :
+  /*#__PURE__*/
+  /* الدخول المعتاد للبيئة الفعلية باسم المستخدم وكلمة المرور فقط */
+  React.createElement("form", {
+    onSubmit: handleLiveLoginSubmit,
+    className: "space-y-4 mt-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#FAF9F6] border border-stone-200/70 px-4 py-2.5 flex items-center justify-between text-[12px] text-stone-600"
+  }, /*#__PURE__*/React.createElement("span", null, isoInfo.allowed ? isoInfo.label : "جلسة متصفح خفي مؤكدة"), /*#__PURE__*/React.createElement("span", {
+    className: "text-emerald-700 font-semibold"
+  }, "تشفير طرفي نشط")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: username,
+    onChange: e => setUsername(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "off",
+    spellCheck: false,
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    className: pa2InputCls,
+    dir: "ltr",
+    autoComplete: "off",
+    required: true
+  })), error && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[13px] text-rose-700"
+  }, error), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    disabled: busy,
+    className: "w-full h-12 rounded-full bg-stone-900 text-white text-[15px] font-semibold hover:bg-stone-800 transition disabled:opacity-60"
+  }, busy ? "جاري فك التشفير والتحقق..." : "تسجيل الدخول")), /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-stone-400 mt-6 text-center"
+  }, envMode === "live" ? "تُفك شيفرة البيانات محلياً في ذاكرة جهازك فقط وتُمسح تلقائياً فور الخروج." : "يمكنك التبديل في أي وقت بين بيئة التجربة والبيئة الفعلية من الأعلى.")), envMode === "demo" && !hideDemo && /*#__PURE__*/React.createElement(DemoAccountsPanel, {
+    db: demoDb,
+    users: demoUsers,
+    onPick: quickPickDemo
+  }));
+}
+
+// ============================================================================
+// 6. CADRE PORTAL COMPONENT (رحلة عين مرتبة + المحور الإداري والمحور التربوي)
+// ============================================================================
+function CadrePortal({
+  db,
+  currentUser,
+  updateUserRecord,
+  isUsernameTaken,
+  onAcknowledgeBulletin,
+  onLogout,
+  showToast
+}) {
+  const totalWeeks = useMemo(() => calculateWeeksSinceJoin(currentUser.joinedAt), [currentUser.joinedAt]);
+  const [selectedWeek, setSelectedWeek] = useState(totalWeeks);
+  const [activePillar, setActivePillar] = useState("all"); // 'all' | 'admin' | 'tarbawi'
+  const [expandedHelpKey, setExpandedHelpKey] = useState(null);
+  const [showOnboarding, setShowOnboarding] = useState(!currentUser.onboarded);
+  const [settingsModalScope, setSettingsModalScope] = useState(null);
+  const [lectureModalOpen, setLectureModalOpen] = useState(false);
+  const [noteModalTaskKey, setNoteModalTaskKey] = useState(null);
+  const [bulletinArchiveOpen, setBulletinArchiveOpen] = useState(false);
+  const tarbawiTasks = useMemo(() => getApplicableTarbawiTasks(currentUser, db.systemConfig), [currentUser, db.systemConfig]);
+  useEffect(() => {
+    let needsInit = false;
+    const currentRec = currentUser.tasksRecord || {};
+    const updatedRec = {
+      ...currentRec
+    };
+    for (let w = 1; w <= totalWeeks; w++) {
+      if (!updatedRec[w]) {
+        needsInit = true;
+        updatedRec[w] = {
+          lecture: {
+            status: "pending"
+          },
+          agenda: {
+            status: "pending"
+          },
+          attendance: {
+            status: "pending"
+          },
+          minutes: {
+            status: "pending"
+          }
+        };
+      }
+    }
+    if (needsInit) {
+      updateUserRecord(currentUser.id, u => ({
+        ...u,
+        tasksRecord: updatedRec
+      }));
+    }
+  }, [totalWeeks, currentUser.id]);
+  const myBulletins = useMemo(() => {
+    const list = db.bulletins || [];
+    return list.filter(b => b.targetType === "all" || (b.recipientIds || []).includes(currentUser.id));
+  }, [db.bulletins, currentUser.id]);
+  const unreadBulletins = useMemo(() => {
+    return myBulletins.filter(b => !(b.acknowledgedBy && b.acknowledgedBy[currentUser.id]));
+  }, [myBulletins, currentUser.id]);
+  const isPastWeek = selectedWeek < totalWeeks;
+  const activeSched = currentUser.weekOverrides && currentUser.weekOverrides[selectedWeek] || currentUser.defaultSchedule;
+  const computedSched = computeWeekSchedule(activeSched, db.systemConfig.taskDefinitions);
+  const weekRecord = currentUser.tasksRecord && currentUser.tasksRecord[selectedWeek] || {};
+  const metrics = useMemo(() => computeCadreMetrics(currentUser, db.systemConfig), [currentUser, db.systemConfig]);
+  const activeCurriculum = db.weeklyCurriculums[selectedWeek] || db.weeklyCurriculums.default;
+  const randomQuote = db.systemConfig.quotes[selectedWeek % Math.max(1, db.systemConfig.quotes.length)] || db.systemConfig.quotes[0];
+  const tarbawiFocus = db.systemConfig.tarbawiWeeklyFocus || INITIAL_STATE.systemConfig.tarbawiWeeklyFocus;
+
+  // حساب إحصائيات الأسبوع المحدد للمحور الإداري والمحور التربوي
+  const weekStats = useMemo(() => {
+    const adminKeys = ['lecture', 'agenda', 'attendance', 'minutes'];
+    let adminDone = 0;
+    let adminPoints = 0;
+    adminKeys.forEach(k => {
+      const st = weekRecord[k]?.status || 'pending';
+      if (st !== 'pending') adminDone++;
+      adminPoints += getTaskScorePoints(weekRecord[k]);
+    });
+    let tarbawiDone = 0;
+    let tarbawiPoints = 0;
+    tarbawiTasks.forEach(t => {
+      const rec = weekRecord[t.id] || {
+        status: 'pending'
+      };
+      if (rec.status && rec.status !== 'pending') tarbawiDone++;
+      tarbawiPoints += getTaskScorePoints(rec);
+    });
+    const adminPct = Math.round(adminPoints / (adminKeys.length * 100) * 100);
+    const tarbawiPct = tarbawiTasks.length > 0 ? Math.round(tarbawiPoints / (tarbawiTasks.length * 100) * 100) : 0;
+    const totalCount = adminKeys.length + tarbawiTasks.length;
+    const completedCount = adminDone + tarbawiDone;
+    const totalPossible = totalCount * 100;
+    const weekScorePct = totalPossible > 0 ? Math.round((adminPoints + tarbawiPoints) / totalPossible * 100) : 0;
+    return {
+      adminDone,
+      adminTotal: adminKeys.length,
+      adminPct,
+      tarbawiDone,
+      tarbawiTotal: tarbawiTasks.length,
+      tarbawiPct,
+      completedCount,
+      totalCount,
+      weekScorePct
+    };
+  }, [weekRecord, tarbawiTasks]);
+
+  // تحديد «الخطوة التالية الآن» لتوجيه عين الكادر فوراً دون تشتت
+  const nextStepInfo = useMemo(() => {
+    const adminOrder = ['lecture', 'agenda', 'attendance', 'minutes'];
+    for (const k of adminOrder) {
+      const st = weekRecord[k]?.status || 'pending';
+      if (st === 'pending') {
+        if (isPastWeek && k !== 'lecture') continue;
+        const def = db.systemConfig.taskDefinitions[k];
+        const sc = computedSched[k];
+        return {
+          pillar: "admin",
+          key: k,
+          title: def.title,
+          hint: `${sc.dayName} • ${sc.timeLabel}`,
+          actionLabel: k === "lecture" ? "فتح المحاضرة والاختبار ▶" : "تسجيل الإنجاز الآن ✓"
+        };
+      }
+    }
+    if (!isPastWeek) {
+      for (const t of tarbawiTasks) {
+        const st = weekRecord[t.id]?.status || 'pending';
+        if (st === 'pending') {
+          return {
+            pillar: "tarbawi",
+            key: t.id,
+            title: t.title,
+            hint: t.subtitle,
+            actionLabel: t.trackType === "daily_days" ? "تسجيل ورد اليوم 📖" : "تأكيد الإنجاز ✓"
+          };
+        }
+      }
+    }
+    return null;
+  }, [weekRecord, tarbawiTasks, isPastWeek, db.systemConfig.taskDefinitions, computedSched]);
+  const handleAdminTaskAction = taskKey => {
+    if (taskKey === "lecture") {
+      setLectureModalOpen(true);
+      return;
+    }
+    if (isPastWeek) {
+      showToast("🔒 لا يمكن تعديل حالة هذه المهمة لأن الأسبوع قد انتهى بالفعل.");
+      return;
+    }
+    const currentStatus = weekRecord[taskKey]?.status || "pending";
+    const nextStatus = currentStatus === "pending" ? "on_time" : "pending";
+    const now = new Date();
+    const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    updateUserRecord(currentUser.id, u => ({
+      ...u,
+      tasksRecord: {
+        ...u.tasksRecord,
+        [selectedWeek]: {
+          ...(u.tasksRecord?.[selectedWeek] || {}),
+          [taskKey]: {
+            ...(u.tasksRecord?.[selectedWeek]?.[taskKey] || {}),
+            status: nextStatus,
+            completedAt: nextStatus === "on_time" ? `اليوم ${timeFormatted}` : null
+          }
+        }
+      }
+    }));
+  };
+  const handleTarbawiTaskToggle = taskDef => {
+    if (isPastWeek) {
+      showToast("🔒 الأسبوع منتهٍ ولا يمكن تعديل مهام الأسابيع السابقة.");
+      return;
+    }
+    const currentRec = weekRecord[taskDef.id] || {
+      status: "pending",
+      daysCompleted: []
+    };
+    const nextStatus = currentRec.status === "on_time" ? "pending" : "on_time";
+    const now = new Date();
+    const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    updateUserRecord(currentUser.id, u => ({
+      ...u,
+      tasksRecord: {
+        ...u.tasksRecord,
+        [selectedWeek]: {
+          ...(u.tasksRecord?.[selectedWeek] || {}),
+          [taskDef.id]: {
+            ...currentRec,
+            status: nextStatus,
+            completedAt: nextStatus === "on_time" ? `اليوم ${timeFormatted}` : null
+          }
+        }
+      }
+    }));
+    if (nextStatus === "on_time") {
+      showToast(`تم تسجيل إنجاز «${taskDef.title}» في المحور التربوي 🌱`);
+    }
+  };
+  const handleTarbawiDayToggle = (taskDef, dayIdx) => {
+    if (isPastWeek) {
+      showToast("🔒 الأسبوع منتهٍ ولا يمكن تعديل سجل الأيام السابقة.");
+      return;
+    }
+    const currentRec = weekRecord[taskDef.id] || {
+      status: "pending",
+      daysCompleted: []
+    };
+    const prevDays = Array.isArray(currentRec.daysCompleted) ? currentRec.daysCompleted : [];
+    const exists = prevDays.includes(dayIdx);
+    const nextDays = exists ? prevDays.filter(d => d !== dayIdx) : [...prevDays, dayIdx].sort();
+    const targetDays = Number(taskDef.targetDays) || 5;
+    const reachedTarget = nextDays.length >= targetDays;
+    const now = new Date();
+    const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    updateUserRecord(currentUser.id, u => ({
+      ...u,
+      tasksRecord: {
+        ...u.tasksRecord,
+        [selectedWeek]: {
+          ...(u.tasksRecord?.[selectedWeek] || {}),
+          [taskDef.id]: {
+            ...currentRec,
+            daysCompleted: nextDays,
+            status: reachedTarget ? "on_time" : "pending",
+            completedAt: reachedTarget ? `أتمّ ${nextDays.length} أيام (${timeFormatted})` : null
+          }
+        }
+      }
+    }));
+  };
+  const getCategoryBadgeStyle = cat => {
+    switch (cat) {
+      case "توجيه عاجل":
+        return "bg-rose-100 text-rose-800 border-rose-200";
+      case "سياسة جديدة":
+        return "bg-orange-100 text-orange-800 border-orange-200";
+      case "تعميم مشروع":
+        return "bg-amber-100 text-amber-800 border-amber-200";
+      default:
+        return "bg-sky-100 text-sky-800 border-sky-200";
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("header", {
+    className: "bg-white/95 backdrop-blur-md border-b border-stone-200/80 sticky top-0 z-30"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement(MadyanWordmark, {
+    size: "text-2xl sm:text-3xl"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "hidden sm:flex items-center gap-2 pr-3 border-r border-stone-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-8 h-8 rounded-full madyan-gradient text-white font-black flex items-center justify-center text-xs"
+  }, currentUser.name.slice(0, 2)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-800 leading-tight"
+  }, currentUser.name), /*#__PURE__*/React.createElement("div", {
+    className: "text-[10px] text-stone-500"
+  }, currentUser.unit, " • ", currentUser.jobTitle)))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBulletinArchiveOpen(true),
+    className: `relative px-3 py-2 rounded-2xl border transition flex items-center gap-1.5 text-xs font-bold ${unreadBulletins.length > 0 ? "bg-orange-50 text-orange-900 border-orange-300 font-black" : "bg-stone-100 text-stone-700 border-transparent hover:bg-stone-200"}`
+  }, /*#__PURE__*/React.createElement("span", null, "📢"), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "التعميمات"), unreadBulletins.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse"
+  }, unreadBulletins.length)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSettingsModalScope("global"),
+    className: "px-3 py-2 rounded-2xl bg-stone-100 text-stone-700 hover:bg-stone-200 transition flex items-center gap-1.5 text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("span", null, "⚙️"), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "الإعدادات")), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "px-3 py-2 rounded-2xl bg-stone-100 text-stone-500 hover:bg-rose-50 hover:text-rose-600 transition text-xs font-bold"
+  }, "خروج")))), /*#__PURE__*/React.createElement("main", {
+    className: "max-w-5xl mx-auto px-4 pt-5 space-y-5"
+  }, unreadBulletins.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-3xl p-4 sm:p-5 bg-gradient-to-br from-orange-50 via-white to-amber-50 border-2 border-orange-300 shadow-sm space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-[11px] font-black"
+  }, "📢 ", unreadBulletins.length, " تعميم إداري جديد مطلوب استيعابه")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBulletinArchiveOpen(true),
+    className: "text-[11px] font-bold text-stone-600 hover:text-stone-900 underline"
+  }, "عرض الأرشيف (", myBulletins.length, ")")), unreadBulletins.map(bul => /*#__PURE__*/React.createElement("div", {
+    key: bul.id,
+    className: "p-4 rounded-2xl bg-white border border-orange-200 space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `text-[10px] font-black px-2 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`
+  }, bul.category), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-stone-600"
+  }, bul.senderName, " (", bul.senderRole, ")")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-stone-400"
+  }, bul.createdAt)), /*#__PURE__*/React.createElement("h3", {
+    className: "text-sm font-black text-stone-900"
+  }, bul.title), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-600 leading-relaxed"
+  }, bul.content), /*#__PURE__*/React.createElement("div", {
+    className: "pt-2 flex justify-end"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onAcknowledgeBulletin(bul.id, currentUser.id),
+    className: "px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95"
+  }, "تم الاطلاع والاستيعاب ✓"))))) : myBulletins.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "px-4 py-2.5 rounded-2xl bg-white border border-stone-200/80 flex flex-wrap items-center justify-between gap-2 text-xs"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 truncate"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[11px] font-black"
+  }, "✓"), /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-500 font-semibold"
+  }, "النشرة الإدارية:"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-stone-800 truncate"
+  }, myBulletins[0].title)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBulletinArchiveOpen(true),
+    className: "text-orange-600 font-bold hover:underline text-[11px] flex-shrink-0"
+  }, "سجل التعميمات (", myBulletins.length, ") ←")), /*#__PURE__*/React.createElement("section", {
+    className: "bg-white rounded-[28px] p-5 sm:p-6 shadow-sm border border-stone-200/80 space-y-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black px-2.5 py-1 rounded-xl bg-stone-900 text-white"
+  }, selectedWeek === totalWeeks ? `الأسبوع الحالي (${selectedWeek})` : `الأسبوع ${selectedWeek} (سابق)`), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-500"
+  }, "📅 ", getWeekDateRangeLabel(selectedWeek, totalWeeks)), currentUser.weekOverrides?.[selectedWeek] && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800"
+  }, "موعد مخصص")), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-500 mt-1.5"
+  }, "موعد لقاء الأسبوع: ", /*#__PURE__*/React.createElement("strong", {
+    className: "text-stone-800"
+  }, "يوم ", DAYS_AR[activeSched.meetDay], " الساعة ", formatTimeAr(activeSched.meetTime)), " (", activeSched.meetDuration, " د)", !isPastWeek && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSettingsModalScope("week"),
+    className: "mr-2 text-orange-600 font-bold hover:underline"
+  }, "• تغيير الموعد"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 bg-stone-100 p-1 rounded-2xl overflow-x-auto no-scrollbar"
+  }, Array.from({
+    length: totalWeeks
+  }, (_, idx) => {
+    const w = idx + 1;
+    const active = w === selectedWeek;
+    const isCurr = w === totalWeeks;
+    return /*#__PURE__*/React.createElement("button", {
+      key: w,
+      onClick: () => setSelectedWeek(w),
+      className: `px-3 py-1.5 rounded-xl text-xs font-black transition flex-shrink-0 ${active ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"}`
+    }, isCurr ? `الحالي (${w})` : `أسبوع ${w}`);
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-3 gap-3.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] font-bold text-stone-500"
+  }, "إنجاز الأسبوع (", selectedWeek, ")"), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl font-black text-stone-900 mt-0.5"
+  }, weekStats.weekScorePct, "%"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-500 mt-1"
+  }, "اكتمل ", /*#__PURE__*/React.createElement("strong", {
+    className: "text-stone-800"
+  }, weekStats.completedCount), " من ", /*#__PURE__*/React.createElement("strong", {
+    className: "text-stone-800"
+  }, weekStats.totalCount), " مهام")), /*#__PURE__*/React.createElement("div", {
+    className: "text-left"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-block text-[11px] font-black px-2.5 py-1 rounded-xl bg-white border border-stone-200 text-stone-700"
+  }, "العام: ", metrics.overallScorePct, "%"))), /*#__PURE__*/React.createElement("div", {
+    onClick: () => setActivePillar("admin"),
+    className: "p-4 rounded-2xl bg-orange-50/50 border border-orange-200/80 cursor-pointer hover:bg-orange-50 transition space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-orange-950"
+  }, "🏛️ المحور الإداري"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-orange-700"
+  }, weekStats.adminDone, "/", weekStats.adminTotal)), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2 rounded-full bg-orange-200/70 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${weekStats.adminPct}%`
+    },
+    className: "h-full madyan-gradient transition-all duration-300"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-600 flex justify-between"
+  }, /*#__PURE__*/React.createElement("span", null, "اللقاء والمحاضرة"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-orange-800"
+  }, weekStats.adminPct, "%"))), /*#__PURE__*/React.createElement("div", {
+    onClick: () => setActivePillar("tarbawi"),
+    className: "p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200/80 cursor-pointer hover:bg-emerald-50 transition space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-emerald-950"
+  }, "🌱 المحور التربوي"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-emerald-700"
+  }, weekStats.tarbawiDone, "/", weekStats.tarbawiTotal)), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2 rounded-full bg-emerald-200/70 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${weekStats.tarbawiPct}%`
+    },
+    className: "h-full tarbawi-gradient transition-all duration-300"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-600 flex justify-between"
+  }, /*#__PURE__*/React.createElement("span", null, "الورد والبناء الذاتي"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-emerald-800"
+  }, weekStats.tarbawiPct, "%")))), isPastWeek ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "🔒 أرشيف الأسبوع ", selectedWeek, ":"), " هذا الأسبوع انتهى، ويمكنك فقط استدراك ", /*#__PURE__*/React.createElement("strong", null, "المحاضرة الأسبوعية"), " إن لم تكن قد اختبرت فيها بعد."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSelectedWeek(totalWeeks),
+    className: "px-3 py-1.5 rounded-xl bg-amber-900 text-white font-bold text-[11px]"
+  }, "العودة للأسبوع الحالي (", totalWeeks, ") ↩")) : nextStepInfo ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-stone-900 text-white p-4 flex flex-wrap items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center text-base"
+  }, "🎯"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-orange-300"
+  }, "خطوتك التالية الآن:"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white font-bold"
+  }, nextStepInfo.pillar === "admin" ? "🏛️ المحور الإداري" : "🌱 المحور التربوي")), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-black mt-0.5"
+  }, nextStepInfo.title), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-300"
+  }, nextStepInfo.hint))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (nextStepInfo.pillar === "admin") {
+        handleAdminTaskAction(nextStepInfo.key);
+      } else {
+        setActivePillar("tarbawi");
+      }
+    },
+    className: "px-4 py-2 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm hover:opacity-95 transition"
+  }, nextStepInfo.actionLabel)) : /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-xs text-emerald-900 font-bold flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", null, "🎉 بارك الله في جهودك! أتممت جميع مهمات المحور الإداري والمحور التربوي لهذا الأسبوع بالكامل."), /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-black text-emerald-700"
+  }, "100% ✓"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex p-1.5 rounded-2xl bg-white border border-stone-200/90 shadow-sm gap-1"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActivePillar("all"),
+    className: `px-4 py-2 rounded-xl text-xs font-black transition ${activePillar === "all" ? "bg-stone-900 text-white shadow-sm" : "text-stone-600 hover:bg-stone-100"}`
+  }, "⊞ الخريطة الكاملة (", weekStats.completedCount, "/", weekStats.totalCount, ")"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActivePillar("admin"),
+    className: `px-4 py-2 rounded-xl text-xs font-black transition ${activePillar === "admin" ? "madyan-gradient text-white shadow-sm" : "text-stone-600 hover:bg-orange-50"}`
+  }, "🏛️ المحور الإداري (", weekStats.adminDone, "/", weekStats.adminTotal, ")"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActivePillar("tarbawi"),
+    className: `px-4 py-2 rounded-xl text-xs font-black transition ${activePillar === "tarbawi" ? "tarbawi-gradient text-white shadow-sm" : "text-stone-600 hover:bg-emerald-50"}`
+  }, "🌱 المحور التربوي (", weekStats.tarbawiDone, "/", weekStats.tarbawiTotal, ")")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-stone-400 hidden sm:inline"
+  }, "اضغط «إنجاز» أمام أي مهمة لرصدها فوراً")), /*#__PURE__*/React.createElement("div", {
+    className: activePillar === "all" ? "grid grid-cols-1 lg:grid-cols-2 gap-6 items-start" : "space-y-4"
+  }, (activePillar === "all" || activePillar === "admin") && /*#__PURE__*/React.createElement("section", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-xl madyan-gradient text-white flex items-center justify-center text-xs font-black"
+  }, "🏛️"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-base font-black text-stone-900"
+  }, "أولاً: مهمات المحور الإداري"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-stone-500"
+  }, "العادات المؤسسية الأربع المرتبطة باجتماعك الأسبوعي"))), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-orange-700 bg-orange-50 px-3 py-1 rounded-full border border-orange-200"
+  }, weekStats.adminDone, " من ", weekStats.adminTotal, " مكتمل")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 gap-3"
+  }, ['lecture', 'agenda', 'attendance', 'minutes'].map((taskKey, idx) => {
+    const def = db.systemConfig.taskDefinitions[taskKey];
+    const sched = computedSched[taskKey];
+    const rec = weekRecord[taskKey] || {
+      status: "pending"
+    };
+    const status = rec.status;
+    const isLockedByPastWeek = isPastWeek && (taskKey !== 'lecture' || status !== 'pending');
+    const icons = {
+      lecture: "🎓",
+      agenda: "📋",
+      attendance: "🤝",
+      minutes: "📝"
+    };
+    const showHelp = expandedHelpKey === `admin_${taskKey}`;
+    return /*#__PURE__*/React.createElement("div", {
+      key: taskKey,
+      className: `bg-white rounded-3xl p-4 sm:p-5 border transition shadow-sm ${status === "on_time" ? "border-emerald-200 bg-emerald-50/10" : status === "late" ? "border-amber-300 bg-amber-50/15" : "border-stone-200/90 hover:border-orange-300"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start gap-3.5 flex-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 border ${status === "on_time" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : status === "late" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-stone-50 border-stone-200 text-stone-700"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-lg leading-none"
+    }, icons[taskKey]), /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] font-black mt-1 opacity-75"
+    }, "إداري ", idx + 1)), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5 flex-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-orange-50 text-orange-800 border border-orange-200/60"
+    }, "📅 ", sched.dayName, " • ", sched.timeLabel), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-semibold text-stone-400"
+    }, "⏱ ", sched.durationMinutes, " د"), status === "late" && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800"
+    }, "أُنجز متأخراً (50%)")), /*#__PURE__*/React.createElement("h3", {
+      className: `text-sm sm:text-base font-black ${status !== "pending" ? "text-stone-500 line-through" : "text-stone-900"}`
+    }, def.title), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-stone-500"
+    }, def.subtitle), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-2 pt-1"
+    }, taskKey === "lecture" && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setLectureModalOpen(true),
+      className: "text-[11px] font-bold px-3 py-1 rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
+    }, "🎬 ", status === "pending" ? "مشاهدة المحاضرة والاختبار" : "مراجعة الفيديو والنتيجة"), rec.quizSubmission && /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200"
+    }, "الدرجة: ", rec.quizSubmission.score, "/", rec.quizSubmission.total), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setExpandedHelpKey(showHelp ? null : `admin_${taskKey}`),
+      className: "text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+    }, "💡 ", showHelp ? "إخفاء الإرشادات" : "كيف أنجزها؟"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setNoteModalTaskKey(taskKey),
+      className: "text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+    }, "📌 ", rec.note ? "تعديل المسودة" : "إضافة مسودة"), rec.completedAt && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold text-emerald-700"
+    }, "✓ ", rec.completedAt)), showHelp && /*#__PURE__*/React.createElement("div", {
+      className: "text-xs text-stone-600 bg-stone-50 p-3 rounded-2xl border border-stone-200/80 mt-2 leading-relaxed"
+    }, "💡 ", /*#__PURE__*/React.createElement("strong", null, "خطوات التنفيذ:"), " ", def.instructions), rec.note && /*#__PURE__*/React.createElement("div", {
+      className: "text-xs bg-amber-50/70 border border-amber-200/70 text-stone-700 rounded-xl px-3 py-2 mt-1"
+    }, /*#__PURE__*/React.createElement("strong", {
+      className: "text-amber-800"
+    }, "مسودتك:"), " ", rec.note))), /*#__PURE__*/React.createElement("button", {
+      onClick: () => handleAdminTaskAction(taskKey),
+      disabled: isLockedByPastWeek && taskKey !== "lecture",
+      className: `w-16 h-16 rounded-2xl flex-shrink-0 flex flex-col items-center justify-center font-black text-xs shadow-sm transition ${status === "on_time" ? "bg-emerald-600 text-white" : status === "late" ? "bg-amber-500 text-white" : isLockedByPastWeek ? "bg-stone-100 text-stone-400 cursor-not-allowed" : "bg-stone-900 text-white hover:bg-orange-600"}`
+    }, status === "on_time" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-lg leading-none"
+    }, "✓"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "مكتمل")) : status === "late" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-base leading-none"
+    }, "⚠️"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "متأخر")) : isLockedByPastWeek ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-sm leading-none"
+    }, "🔒"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "مغلق")) : taskKey === "lecture" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-sm leading-none"
+    }, "▶"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "الاختبار")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-base leading-none"
+    }, "○"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "إنجاز")))));
+  }))), (activePillar === "all" || activePillar === "tarbawi") && /*#__PURE__*/React.createElement("section", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-2 px-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-xl tarbawi-gradient text-white flex items-center justify-center text-xs font-black"
+  }, "🌱"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-base font-black text-stone-900"
+  }, "ثانياً: مهمات المحور التربوي"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-stone-500"
+  }, "أوراد ومهمات البناء الذاتي والتزكية الأسبوعية"))), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200"
+  }, weekStats.tarbawiDone, " من ", weekStats.tarbawiTotal, " مكتمل")), tarbawiFocus?.title && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-3xl p-4 bg-gradient-to-l from-emerald-900 to-teal-800 text-white shadow-sm flex flex-wrap items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] font-bold text-emerald-200"
+  }, "🌿 بوصلة الأسبوع التربوية"), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-black"
+  }, tarbawiFocus.title), tarbawiFocus.bookTitle && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-emerald-100"
+  }, tarbawiFocus.bookTitle)), tarbawiFocus.hint && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] bg-white/10 px-3 py-1.5 rounded-xl text-emerald-50 font-semibold"
+  }, tarbawiFocus.hint)), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 gap-3"
+  }, tarbawiTasks.map((tDef, idx) => {
+    const rec = weekRecord[tDef.id] || {
+      status: "pending",
+      daysCompleted: []
+    };
+    const status = rec.status || "pending";
+    const daysCompleted = Array.isArray(rec.daysCompleted) ? rec.daysCompleted : [];
+    const targetDays = Number(tDef.targetDays) || 5;
+    const showHelp = expandedHelpKey === `tarbawi_${tDef.id}`;
+    return /*#__PURE__*/React.createElement("div", {
+      key: tDef.id,
+      className: `bg-white rounded-3xl p-4 sm:p-5 border transition shadow-sm ${status === "on_time" ? "border-emerald-300 bg-emerald-50/15" : "border-stone-200/90 hover:border-emerald-300"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start justify-between gap-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start gap-3.5 flex-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 border ${status === "on_time" ? "bg-emerald-100 border-emerald-300 text-emerald-800" : "bg-emerald-50/60 border-emerald-200/70 text-emerald-800"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-lg leading-none"
+    }, tDef.icon || "🌱"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] font-black mt-1"
+    }, "تربوي ", idx + 1)), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5 flex-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70"
+    }, tDef.badge || "عادة تربوية"), tDef.durationMinutes && /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-semibold text-stone-400"
+    }, "⏱ ", tDef.durationMinutes, " د"), tDef.targetScope === "unit" && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200"
+    }, "مخصص لوحدة: ", tDef.targetUnit), tDef.targetScope === "custom" && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200"
+    }, "مهمة مخصصة لك")), /*#__PURE__*/React.createElement("h3", {
+      className: `text-sm sm:text-base font-black ${status === "on_time" ? "text-stone-500 line-through" : "text-stone-900"}`
+    }, tDef.title), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-stone-500"
+    }, tDef.subtitle), tDef.trackType === "daily_days" && /*#__PURE__*/React.createElement("div", {
+      className: "pt-2 space-y-1.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between text-[11px]"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-bold text-stone-600"
+    }, "سجل المداومة اليومية (الهدف: ", targetDays, " أيام في الأسبوع):"), /*#__PURE__*/React.createElement("span", {
+      className: "font-black text-emerald-700"
+    }, daysCompleted.length, " / ", targetDays, " أيام")), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-1.5"
+    }, DAYS_SHORT_AR.map((dLabel, dIdx) => {
+      const doneDay = daysCompleted.includes(dIdx);
+      return /*#__PURE__*/React.createElement("button", {
+        key: dIdx,
+        type: "button",
+        disabled: isPastWeek,
+        onClick: () => handleTarbawiDayToggle(tDef, dIdx),
+        className: `px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition ${doneDay ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" : "bg-stone-50 text-stone-600 border-stone-200 hover:border-emerald-400"}`
+      }, doneDay ? `✓ ${dLabel}` : dLabel);
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-2 pt-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setExpandedHelpKey(showHelp ? null : `tarbawi_${tDef.id}`),
+      className: "text-[11px] font-bold text-stone-500 hover:text-stone-800 px-2 py-1 rounded-lg bg-stone-100"
+    }, "💡 ", showHelp ? "إخفاء الإرشادات" : "إرشادات المهمة"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setNoteModalTaskKey(tDef.id),
+      className: "text-[11px] font-bold text-emerald-700 hover:text-emerald-900 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200/70"
+    }, "✍️ ", rec.note ? "تعديل الخاطرة / الفائدة" : "تدوين فائدة أو أثر"), rec.completedAt && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold text-emerald-700"
+    }, "✓ ", rec.completedAt)), showHelp && /*#__PURE__*/React.createElement("div", {
+      className: "text-xs text-stone-600 bg-stone-50 p-3 rounded-2xl border border-stone-200/80 mt-2 leading-relaxed"
+    }, "💡 ", tDef.instructions), rec.note && /*#__PURE__*/React.createElement("div", {
+      className: "text-xs bg-emerald-50/70 border border-emerald-200/80 text-emerald-950 rounded-xl px-3 py-2 mt-1"
+    }, /*#__PURE__*/React.createElement("strong", null, "ثمرة / فائدة مسجلة:"), " ", rec.note))), /*#__PURE__*/React.createElement("button", {
+      onClick: () => handleTarbawiTaskToggle(tDef),
+      disabled: isPastWeek,
+      className: `w-16 h-16 rounded-2xl flex-shrink-0 flex flex-col items-center justify-center font-black text-xs shadow-sm transition ${status === "on_time" ? "bg-emerald-600 text-white" : isPastWeek ? "bg-stone-100 text-stone-400 cursor-not-allowed" : "bg-stone-900 text-white hover:bg-emerald-600"}`
+    }, status === "on_time" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-lg leading-none"
+    }, "✓"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "مكتمل")) : isPastWeek ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-sm leading-none"
+    }, "🔒"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "مغلق")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "text-base leading-none"
+    }, "🌱"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] mt-1"
+    }, "إنجاز")))));
+  })))), randomQuote && /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-5 shadow-sm border border-stone-200/70 flex items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs sm:text-sm font-bold text-stone-800 leading-relaxed"
+  }, "“", randomQuote.text, "”"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-stone-400 font-semibold"
+  }, "— ", randomQuote.author)), /*#__PURE__*/React.createElement("div", {
+    className: "w-10 h-10 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center text-lg flex-shrink-0"
+  }, "✨"))), /*#__PURE__*/React.createElement(LectureQuizModal, {
+    isOpen: lectureModalOpen,
+    onClose: () => setLectureModalOpen(false),
+    weekNumber: selectedWeek,
+    isPastWeek: isPastWeek,
+    curriculum: activeCurriculum,
+    lectureRecord: weekRecord.lecture,
+    onSubmitQuiz: submission => {
+      const now = new Date();
+      const timeFormatted = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+      const finalStatus = isPastWeek ? "late" : "on_time";
+      updateUserRecord(currentUser.id, u => ({
+        ...u,
+        tasksRecord: {
+          ...u.tasksRecord,
+          [selectedWeek]: {
+            ...(u.tasksRecord?.[selectedWeek] || {}),
+            lecture: {
+              ...(u.tasksRecord?.[selectedWeek]?.lecture || {}),
+              status: finalStatus,
+              completedAt: isPastWeek ? `أُنجز متأخراً (${timeFormatted})` : `اليوم ${timeFormatted}`,
+              quizSubmission: submission
+            }
+          }
+        }
+      }));
+      showToast(isPastWeek ? "تم اعتماد إجاباتك! نظراً لانتهاء الأسبوع، تم رصد المحاضرة كمكتملة متأخراً (50% سكور)." : "تم اعتماد إجابات الاختبار وتسجيل إنجاز المحاضرة بالعلامة الكاملة ✓");
+    }
+  }), /*#__PURE__*/React.createElement(OnboardingModal, {
+    isOpen: showOnboarding,
+    onClose: () => {
+      updateUserRecord(currentUser.id, u => ({
+        ...u,
+        onboarded: true
+      }));
+      setShowOnboarding(false);
+    },
+    currentUser: currentUser,
+    taskDefs: db.systemConfig.taskDefinitions,
+    isUsernameTaken: isUsernameTaken,
+    onSaveOnboarding: updatedFields => {
+      updateUserRecord(currentUser.id, u => ({
+        ...u,
+        ...updatedFields,
+        onboarded: true
+      }));
+      setShowOnboarding(false);
+      showToast("تم حفظ إعداداتك وبيانات دخولك بنجاح ✓");
+    }
+  }), /*#__PURE__*/React.createElement(CadreSettingsModal, {
+    scope: settingsModalScope,
+    onClose: () => setSettingsModalScope(null),
+    currentUser: currentUser,
+    selectedWeek: selectedWeek,
+    isPastWeek: isPastWeek,
+    isUsernameTaken: isUsernameTaken,
+    onSaveSettings: updater => {
+      updateUserRecord(currentUser.id, updater);
+      setSettingsModalScope(null);
+      showToast("تم حفظ الإعدادات بنجاح ✓");
+    }
+  }), /*#__PURE__*/React.createElement(TaskNoteModal, {
+    isOpen: Boolean(noteModalTaskKey),
+    onClose: () => setNoteModalTaskKey(null),
+    initialNote: noteModalTaskKey ? weekRecord[noteModalTaskKey]?.note || "" : "",
+    onSaveNote: val => {
+      updateUserRecord(currentUser.id, u => ({
+        ...u,
+        tasksRecord: {
+          ...u.tasksRecord,
+          [selectedWeek]: {
+            ...(u.tasksRecord?.[selectedWeek] || {}),
+            [noteModalTaskKey]: {
+              ...(u.tasksRecord?.[selectedWeek]?.[noteModalTaskKey] || {
+                status: "pending"
+              }),
+              note: val
+            }
+          }
+        }
+      }));
+      setNoteModalTaskKey(null);
+      showToast("تم حفظ المسودة والفائدة بنجاح ✓");
+    }
+  }), /*#__PURE__*/React.createElement(CadreBulletinArchiveModal, {
+    isOpen: bulletinArchiveOpen,
+    onClose: () => setBulletinArchiveOpen(false),
+    bulletins: myBulletins,
+    currentUserId: currentUser.id,
+    onAcknowledge: onAcknowledgeBulletin
+  }));
+}
+// ============================================================================
+// 6.1 CADRE BULLETIN ARCHIVE MODAL (سجل النشرة الإدارية وجميع الرسائل السابقة)
+// ============================================================================
+function CadreBulletinArchiveModal({
+  isOpen,
+  onClose,
+  bulletins,
+  currentUserId,
+  onAcknowledge
+}) {
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  if (!isOpen) return null;
+  const filtered = bulletins.filter(b => {
+    const matchesCat = filterCategory === "all" || b.category === filterCategory;
+    const matchesSearch = !searchQuery.trim() || b.title.includes(searchQuery.trim()) || b.content.includes(searchQuery.trim());
+    return matchesCat && matchesSearch;
+  });
+  const getCategoryBadgeStyle = cat => {
+    switch (cat) {
+      case "توجيه عاجل":
+        return "bg-rose-100 text-rose-800 border-rose-200";
+      case "سياسة جديدة":
+        return "bg-orange-100 text-orange-800 border-orange-200";
+      case "تعميم مشروع":
+        return "bg-amber-100 text-amber-800 border-amber-200";
+      default:
+        return "bg-sky-100 text-sky-800 border-sky-200";
+    }
+  };
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: isOpen,
+    onClose: onClose,
+    badge: "سجل النشرة الإدارية والتعميمات (One-Way Archive)",
+    title: `جميع الرسائل والتعميمات الواردة (${bulletins.length})`,
+    maxWidth: "max-w-2xl"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-2 bg-stone-50 p-3 rounded-2xl border border-stone-200/80"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: searchQuery,
+    onChange: e => setSearchQuery(e.target.value),
+    placeholder: "ابحث في عنوان أو نص التعميمات السابقة...",
+    className: "flex-1 min-w-[180px] rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold focus:outline-none focus:border-orange-500"
+  }), /*#__PURE__*/React.createElement("select", {
+    value: filterCategory,
+    onChange: e => setFilterCategory(e.target.value),
+    className: "rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "كل التصنيفات (", bulletins.length, ")"), /*#__PURE__*/React.createElement("option", {
+    value: "سياسة جديدة"
+  }, "سياسة جديدة"), /*#__PURE__*/React.createElement("option", {
+    value: "تعميم مشروع"
+  }, "تعميم مشروع"), /*#__PURE__*/React.createElement("option", {
+    value: "توجيه عاجل"
+  }, "توجيه عاجل"), /*#__PURE__*/React.createElement("option", {
+    value: "معلومة إدارية"
+  }, "معلومة إدارية"))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 max-h-[60vh] overflow-y-auto pr-1"
+  }, filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-center py-8 text-xs text-stone-400 font-bold"
+  }, "لا توجد رسائل مطابقة للبحث في سجلك.") : filtered.map(bul => {
+    const ackTime = bul.acknowledgedBy?.[currentUserId];
+    return /*#__PURE__*/React.createElement("div", {
+      key: bul.id,
+      className: `p-4 rounded-2xl border transition space-y-2.5 ${ackTime ? "bg-stone-50/70 border-stone-200/90" : "bg-orange-50/40 border-2 border-orange-300 shadow-sm"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `text-[10px] font-black px-2.5 py-0.5 rounded-full border ${getCategoryBadgeStyle(bul.category)}`
+    }, bul.category), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold text-stone-700"
+    }, "🏛️ ", bul.senderName, " (", bul.senderRole, ")"), bul.targetType === "custom" ? /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200"
+    }, "🎯 تعميم مخصص") : /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-semibold px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-600"
+    }, "🌐 تعميم عام")), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-semibold text-stone-400"
+    }, bul.createdAt)), /*#__PURE__*/React.createElement("h4", {
+      className: "text-sm font-black text-stone-900"
+    }, bul.title), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-stone-600 leading-relaxed whitespace-pre-line"
+    }, bul.content), /*#__PURE__*/React.createElement("div", {
+      className: "pt-2 border-t border-stone-200/60 flex items-center justify-between"
+    }, ackTime ? /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold text-emerald-700 flex items-center gap-1"
+    }, /*#__PURE__*/React.createElement("span", null, "✓ تم الاطلاع والاستيعاب"), /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-400 font-normal"
+    }, "(", ackTime, ")")) : /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold text-rose-600"
+    }, "⏳ لم يتم تأكيد الاستيعاب بعد"), !ackTime && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onAcknowledge(bul.id, currentUserId),
+      className: "px-4 py-1.5 rounded-xl madyan-gradient text-white text-xs font-black shadow-sm"
+    }, "تأكيد الاستيعاب الآن ✓")));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end pt-2 border-t border-stone-100"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "px-6 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold"
+  }, "إغلاق السجل"))));
+}
+
+// ============================================================================
+// 7. LECTURE VIDEO & LOCKED QUIZ MODAL
+// ============================================================================
+function LectureQuizModal({
+  isOpen,
+  onClose,
+  weekNumber,
+  isPastWeek,
+  curriculum,
+  lectureRecord,
+  onSubmitQuiz
+}) {
+  const existingSubmission = lectureRecord?.quizSubmission || null;
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [errorMsg, setErrorMsg] = useState("");
+  useEffect(() => {
+    if (existingSubmission && existingSubmission.answers) {
+      const map = {};
+      existingSubmission.answers.forEach((ans, i) => {
+        map[i] = ans;
+      });
+      setSelectedAnswers(map);
+    } else {
+      setSelectedAnswers({});
+    }
+    setErrorMsg("");
+  }, [isOpen, existingSubmission]);
+  if (!isOpen) return null;
+  const safeCurr = curriculum || INITIAL_STATE.weeklyCurriculums.default;
+  const questions = safeCurr.questions || [];
+  const handleFinalSubmit = () => {
+    if (existingSubmission) return;
+    for (let i = 0; i < questions.length; i++) {
+      if (selectedAnswers[i] === undefined) {
+        setErrorMsg(`يرجى الإجابة على السؤال رقم ${i + 1} قبل الاعتماد النهائي.`);
+        return;
+      }
+    }
+    let correctCount = 0;
+    const answersArray = questions.map((q, idx) => {
+      const ans = selectedAnswers[idx];
+      if (ans === q.correctIndex) correctCount++;
+      return ans;
+    });
+    onSubmitQuiz({
+      score: correctCount,
+      total: questions.length,
+      answers: answersArray,
+      submittedAt: new Date().toLocaleString("ar-EG")
+    });
+  };
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: isOpen,
+    onClose: onClose,
+    badge: `المحاضرة الأسبوعية • الأسبوع ${weekNumber}`,
+    title: safeCurr.lectureTitle,
+    maxWidth: "max-w-2xl"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, isPastWeek && !existingSubmission && /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-bold"
+  }, "⚠️ تنبيه: هذا الأسبوع قد انتهى بالفعل. يمكنك مشاهدة المحاضرة وحل الاختبار الآن، ولكن ستُسجل المهمة «مكتمل متأخر» بنصف النقاط (50%)."), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-500 leading-relaxed"
+  }, safeCurr.lectureDesc), /*#__PURE__*/React.createElement(MXSafeMediaPlayer, {
+    videoUrl: safeCurr.videoUrl,
+    videoType: safeCurr.videoType,
+    title: safeCurr.lectureTitle
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4 pt-2 border-t border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h4", {
+    className: "text-sm font-black text-stone-900"
+  }, "📝 اختبار استيعاب المحاضرة (", questions.length, " أسئلة)"), existingSubmission ? /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black px-3 py-1 rounded-full bg-emerald-100 text-emerald-800"
+  }, "🔒 تم الاعتماد النهائي • النتيجة: ", existingSubmission.score, "/", existingSubmission.total) : /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-stone-400"
+  }, "تنبيه: لا يمكن تعديل الإجابات بعد الضغط على اعتماد")), questions.map((q, qIdx) => {
+    const userChoice = selectedAnswers[qIdx];
+    return /*#__PURE__*/React.createElement("div", {
+      key: q.id || qIdx,
+      className: "p-4 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-2.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-black text-stone-800"
+    }, qIdx + 1, ". ", q.text), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-1 sm:grid-cols-2 gap-2"
+    }, (q.options || []).map((opt, optIdx) => {
+      const isSelected = userChoice === optIdx;
+      const isCorrect = q.correctIndex === optIdx;
+      let btnStyle = "bg-white border-stone-200 text-stone-700 hover:border-orange-400";
+      if (existingSubmission) {
+        if (isCorrect) {
+          btnStyle = "bg-emerald-50 border-emerald-500 text-emerald-900 font-black";
+        } else if (isSelected && !isCorrect) {
+          btnStyle = "bg-rose-50 border-rose-400 text-rose-800 line-through";
+        } else {
+          btnStyle = "bg-white border-stone-200 text-stone-400 opacity-70";
+        }
+      } else if (isSelected) {
+        btnStyle = "bg-orange-50 border-orange-500 text-orange-900 font-black ring-2 ring-orange-200";
+      }
+      return /*#__PURE__*/React.createElement("button", {
+        key: optIdx,
+        type: "button",
+        disabled: Boolean(existingSubmission),
+        onClick: () => setSelectedAnswers(prev => ({
+          ...prev,
+          [qIdx]: optIdx
+        })),
+        className: `text-right text-xs p-3 rounded-xl border transition flex items-center justify-between gap-2 ${btnStyle}`
+      }, /*#__PURE__*/React.createElement("span", null, opt), existingSubmission && isCorrect && /*#__PURE__*/React.createElement("span", null, "✅"), existingSubmission && isSelected && !isCorrect && /*#__PURE__*/React.createElement("span", null, "❌"));
+    })));
+  }), errorMsg && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-bold text-rose-600 bg-rose-50 p-3 rounded-xl border border-rose-200"
+  }, errorMsg), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "px-5 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+  }, "إغلاق"), !existingSubmission && /*#__PURE__*/React.createElement("button", {
+    onClick: handleFinalSubmit,
+    className: "px-6 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md hover:opacity-95"
+  }, "اعتماد الإجابات النهائي ورصد الدرجة ✓")))));
+}
+
+// ============================================================================
+// 8. ONBOARDING MODAL
+// ============================================================================
+function OnboardingModal({
+  isOpen,
+  onClose,
+  currentUser,
+  taskDefs,
+  isUsernameTaken,
+  onSaveOnboarding
+}) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState(currentUser.name || "");
+  const [jobTitle, setJobTitle] = useState(currentUser.jobTitle || "");
+  const [unit, setUnit] = useState(currentUser.unit || "");
+  const [username, setUsername] = useState(currentUser.username || "");
+  const [password, setPassword] = useState(currentUser.password || "");
+  const [meetDay, setMeetDay] = useState(currentUser.defaultSchedule?.meetDay ?? 2);
+  const [meetTime, setMeetTime] = useState(currentUser.defaultSchedule?.meetTime || "19:00");
+  const [meetDuration, setMeetDuration] = useState(currentUser.defaultSchedule?.meetDuration || 90);
+  const [err, setErr] = useState("");
+  if (!isOpen) return null;
+  const previewSched = computeWeekSchedule({
+    meetDay,
+    meetTime,
+    meetDuration
+  }, taskDefs);
+  const handleNextStep1 = () => {
+    if (!username.trim() || !password.trim()) {
+      setErr("اسم المستخدم وكلمة المرور مطلوبان.");
+      return;
+    }
+    if (isUsernameTaken(username, currentUser.id)) {
+      setErr("اسم المستخدم هذا مستخدم بالفعل، اختر اسماً آخر.");
+      return;
+    }
+    setErr("");
+    setStep(2);
+  };
+  const handleFinish = () => {
+    onSaveOnboarding({
+      name: name.trim() || currentUser.name,
+      jobTitle: jobTitle.trim() || currentUser.jobTitle,
+      unit: unit.trim() || currentUser.unit,
+      username: username.trim(),
+      password: password.trim(),
+      defaultSchedule: {
+        meetDay: parseInt(meetDay, 10),
+        meetTime,
+        meetDuration: parseInt(meetDuration, 10)
+      }
+    });
+  };
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: isOpen,
+    onClose: onClose,
+    badge: "تهيئة الحساب عند الدخول الأول",
+    title: "ضبط ملفك الإداري ومواعيدك الأسبوعية"
+  }, step === 1 && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-500 leading-relaxed"
+  }, "مرحباً بك في ", /*#__PURE__*/React.createElement("strong", null, "Madyan"), ". يمكنك مراجعة بياناتك الإدارية، كما يمكنك ", /*#__PURE__*/React.createElement("strong", null, "اختيارياً"), " تعديل اسم المستخدم وكلمة المرور الخاصة بك:"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الاسم الكامل"), /*#__PURE__*/React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المسمى الوظيفي"), /*#__PURE__*/React.createElement("input", {
+    value: jobTitle,
+    onChange: e => setJobTitle(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الوحدة الإدارية"), /*#__PURE__*/React.createElement("input", {
+    value: unit,
+    onChange: e => setUnit(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-2xl bg-orange-50/70 border border-orange-200/80 space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-orange-900"
+  }, "🔐 بيانات تسجيل الدخول (اختياري: يمكنك تغييرها الآن)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-700 mb-1"
+  }, "اسم المستخدم (Username)"), /*#__PURE__*/React.createElement("input", {
+    value: username,
+    onChange: e => setUsername(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-700 mb-1"
+  }, "كلمة المرور (Password)"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold"
+  })))), err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-bold text-rose-600"
+  }, err), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: handleNextStep1,
+    className: "px-7 py-3 rounded-2xl bg-stone-900 text-white text-xs font-bold"
+  }, "التالي: تحديد موعد الاجتماع ←"))), step === 2 && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-500"
+  }, "حدّد موعد اجتماعك الأسبوعي وعدد ساعاته ليقوم النظام بحساب موعد الأجندة (قبل 24 ساعة) والمحضر (بعد 24 ساعة):"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "يوم الاجتماع الأسبوعي"), /*#__PURE__*/React.createElement("select", {
+    value: meetDay,
+    onChange: e => setMeetDay(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  }, DAYS_AR.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "ساعة بدء الاجتماع"), /*#__PURE__*/React.createElement("input", {
+    type: "time",
+    value: meetTime,
+    onChange: e => setMeetTime(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "مدة الاجتماع"), /*#__PURE__*/React.createElement("select", {
+    value: meetDuration,
+    onChange: e => setMeetDuration(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "60"
+  }, "ساعة واحدة (60 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "90"
+  }, "ساعة ونصف (90 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "120"
+  }, "ساعتان (120 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "180"
+  }, "3 ساعات (180 دقيقة)"))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-stone-50 p-3.5 rounded-2xl border border-stone-200 text-xs space-y-1.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-black text-stone-800 mb-1"
+  }, "المعاينة الذكية لمواعيدك:"), /*#__PURE__*/React.createElement("div", null, "📋 ", /*#__PURE__*/React.createElement("strong", null, "إرسال الأجندة:"), " يوم ", previewSched.agenda.dayName, " (", previewSched.agenda.timeLabel, ")"), /*#__PURE__*/React.createElement("div", null, "🤝 ", /*#__PURE__*/React.createElement("strong", null, "حضور اللقاء:"), " يوم ", previewSched.attendance.dayName, " (", previewSched.attendance.timeLabel, ")"), /*#__PURE__*/React.createElement("div", null, "📝 ", /*#__PURE__*/React.createElement("strong", null, "توثيق المحضر:"), " يوم ", previewSched.minutes.dayName, " (", previewSched.minutes.timeLabel, ")")), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStep(1),
+    className: "px-5 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+  }, "السابق"), /*#__PURE__*/React.createElement("button", {
+    onClick: handleFinish,
+    className: "px-7 py-3 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+  }, "اعتماد والبدء الآن ✓"))));
+}
+
+// ============================================================================
+// 9. CADRE SETTINGS MODAL & NOTE MODAL
+// ============================================================================
+function CadreSettingsModal({
+  scope,
+  onClose,
+  currentUser,
+  selectedWeek,
+  isPastWeek,
+  governanceRules = DEFAULT_GOVERNANCE_RULES,
+  isUsernameTaken,
+  onSaveSettings
+}) {
+  const rules = {
+    ...DEFAULT_GOVERNANCE_RULES,
+    ...(governanceRules || {})
+  };
+  const [activeTab, setActiveTab] = useState(scope || "global");
+  const [meetDay, setMeetDay] = useState(currentUser.defaultSchedule?.meetDay ?? 2);
+  const [meetTime, setMeetTime] = useState(currentUser.defaultSchedule?.meetTime || "19:00");
+  const [meetDuration, setMeetDuration] = useState(currentUser.defaultSchedule?.meetDuration || 90);
+  const [name, setName] = useState(currentUser.name || "");
+  const [jobTitle, setJobTitle] = useState(currentUser.jobTitle || "");
+  const [unit, setUnit] = useState(currentUser.unit || "");
+  const [username, setUsername] = useState(currentUser.username || "");
+  const [password, setPassword] = useState(currentUser.password || "");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!scope) return;
+    const targetTab = scope === "week" && isPastWeek ? "global" : scope;
+    setActiveTab(targetTab);
+    const sched = targetTab === "week" ? currentUser.weekOverrides?.[selectedWeek] || currentUser.defaultSchedule : currentUser.defaultSchedule;
+    setMeetDay(sched?.meetDay ?? 2);
+    setMeetTime(sched?.meetTime || "19:00");
+    setMeetDuration(sched?.meetDuration || 90);
+    setName(currentUser.name || "");
+    setJobTitle(currentUser.jobTitle || "");
+    setUnit(currentUser.unit || "");
+    setUsername(currentUser.username || "");
+    setPassword(currentUser.password || "");
+    setErr("");
+  }, [scope, currentUser, selectedWeek, isPastWeek]);
+  if (!scope) return null;
+  const switchTab = t => {
+    setActiveTab(t);
+    const sched = t === "week" ? currentUser.weekOverrides?.[selectedWeek] || currentUser.defaultSchedule : currentUser.defaultSchedule;
+    setMeetDay(sched?.meetDay ?? 2);
+    setMeetTime(sched?.meetTime || "19:00");
+    setMeetDuration(sched?.meetDuration || 90);
+    setErr("");
+  };
+  const isScheduleLocked = activeTab === "week" ? !rules.allowCadreScheduleChange || !rules.allowWeekSpecificOverride : !rules.allowCadreScheduleChange;
+  const handleSave = () => {
+    if (activeTab === "account") {
+      if (!username.trim() || !password.trim()) {
+        setErr("اسم المستخدم وكلمة المرور لا يمكن أن يكونا فارغين.");
+        return;
+      }
+      if (isUsernameTaken(username, currentUser.id)) {
+        setErr("اسم المستخدم محجوز لكادر آخر.");
+        return;
+      }
+      onSaveSettings(u => ({
+        ...u,
+        name: rules.allowCadreNameEdit ? name.trim() || u.name : u.name,
+        jobTitle: rules.allowCadreJobTitleEdit ? jobTitle.trim() || u.jobTitle : u.jobTitle,
+        unit: rules.allowCadreUnitEdit ? unit.trim() || u.unit : u.unit,
+        username: rules.allowCadrePasswordChange ? username.trim() : u.username,
+        password: rules.allowCadrePasswordChange ? password.trim() : u.password
+      }));
+    } else if (activeTab === "week") {
+      if (isScheduleLocked) {
+        setErr("تغيير مواعيد اللقاء الأسبوعي مقفل حالياً وفق ضوابط إدارة المنصة.");
+        return;
+      }
+      onSaveSettings(u => ({
+        ...u,
+        weekOverrides: {
+          ...(u.weekOverrides || {}),
+          [selectedWeek]: {
+            meetDay: parseInt(meetDay, 10),
+            meetTime,
+            meetDuration: parseInt(meetDuration, 10)
+          }
+        }
+      }));
+    } else {
+      if (isScheduleLocked) {
+        setErr("تغيير المواعيد العامة مقفل حالياً وفق ضوابط إدارة المنصة.");
+        return;
+      }
+      onSaveSettings(u => ({
+        ...u,
+        defaultSchedule: {
+          meetDay: parseInt(meetDay, 10),
+          meetTime,
+          meetDuration: parseInt(meetDuration, 10)
+        }
+      }));
+    }
+  };
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: Boolean(scope),
+    onClose: onClose,
+    badge: "إعدادات الكادر (مؤطرة بضوابط إدارة المنصة)",
+    title: "تخصيص المواعيد وبيانات الحساب"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-1.5 p-1 bg-stone-100 rounded-2xl text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("button", {
+    disabled: isPastWeek,
+    onClick: () => switchTab("week"),
+    className: `py-2.5 px-2 rounded-xl transition ${activeTab === "week" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 disabled:opacity-40"}`
+  }, "الأسبوع الحالي (", selectedWeek, ")"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => switchTab("global"),
+    className: `py-2.5 px-2 rounded-xl transition ${activeTab === "global" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500"}`
+  }, "المواعيد العامة"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => switchTab("account"),
+    className: `py-2.5 px-2 rounded-xl transition ${activeTab === "account" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500"}`
+  }, "بياناتي والدخول")), activeTab !== "account" ? /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3.5"
+  }, isScheduleLocked && /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900"
+  }, "🔒 تعديل مواعيد اللقاء الأسبوعي مقفل حالياً بقرار من إدارة المنصة التقنية."), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "يوم الاجتماع"), /*#__PURE__*/React.createElement("select", {
+    disabled: isScheduleLocked,
+    value: meetDay,
+    onChange: e => setMeetDay(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  }, DAYS_AR.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "ساعة البدء"), /*#__PURE__*/React.createElement("input", {
+    disabled: isScheduleLocked,
+    type: "time",
+    value: meetTime,
+    onChange: e => setMeetTime(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "مدة الاجتماع"), /*#__PURE__*/React.createElement("select", {
+    disabled: isScheduleLocked,
+    value: meetDuration,
+    onChange: e => setMeetDuration(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "60"
+  }, "ساعة واحدة (60 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "90"
+  }, "ساعة ونصف (90 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "120"
+  }, "ساعتان (120 دقيقة)"), /*#__PURE__*/React.createElement("option", {
+    value: "180"
+  }, "3 ساعات (180 دقيقة)"))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-500 bg-stone-50 px-3 py-2 rounded-xl"
+  }, "ℹ️ الحد الأقصى لتغيير الموعد شهرياً حسب ضوابط المنصة: ", /*#__PURE__*/React.createElement("strong", null, rules.maxScheduleChangesPerMonth, " مرات"), ".")) : /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3.5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الاسم الكامل ", !rules.allowCadreNameEdit && /*#__PURE__*/React.createElement("span", {
+    className: "text-amber-700"
+  }, "(مقفل من إدارة المنصة)")), /*#__PURE__*/React.createElement("input", {
+    disabled: !rules.allowCadreNameEdit,
+    value: name,
+    onChange: e => setName(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المسمى الوظيفي ", !rules.allowCadreJobTitleEdit && /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, "(ثابت تنظيمياً)")), /*#__PURE__*/React.createElement("input", {
+    disabled: !rules.allowCadreJobTitleEdit,
+    value: jobTitle,
+    onChange: e => setJobTitle(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الوحدة التنظيمية ", !rules.allowCadreUnitEdit && /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, "(ثابت تنظيمياً)")), /*#__PURE__*/React.createElement("input", {
+    disabled: !rules.allowCadreUnitEdit,
+    value: unit,
+    onChange: e => setUnit(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-sm font-bold disabled:opacity-50"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-2xl bg-stone-50 border border-stone-200 space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-800"
+  }, "🔐 تعديل اسم المستخدم وكلمة المرور ", !rules.allowCadrePasswordChange && /*#__PURE__*/React.createElement("span", {
+    className: "text-amber-700"
+  }, "(مقفل من إدارة المنصة)")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-600 mb-1"
+  }, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    disabled: !rules.allowCadrePasswordChange,
+    value: username,
+    onChange: e => setUsername(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold disabled:opacity-50",
+    dir: "ltr"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-600 mb-1"
+  }, "كلمة المرور الجديدة"), /*#__PURE__*/React.createElement("input", {
+    disabled: !rules.allowCadrePasswordChange,
+    type: "text",
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold disabled:opacity-50",
+    dir: "ltr"
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-400 bg-stone-50 px-3 py-2 rounded-xl"
+  }, "📅 تاريخ تفعيل حسابك بالنظام مرصود تلقائياً: ", /*#__PURE__*/React.createElement("strong", null, formatDateAr(currentUser.joinedAt)), ".")), err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-bold text-rose-600"
+  }, err), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "px-4 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+  }, "إلغاء"), /*#__PURE__*/React.createElement("button", {
+    onClick: handleSave,
+    className: "px-6 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800"
+  }, "حفظ التعديلات"))));
+}
+function TaskNoteModal({
+  isOpen,
+  onClose,
+  initialNote,
+  onSaveNote
+}) {
+  const [val, setVal] = useState(initialNote);
+  useEffect(() => {
+    setVal(initialNote);
+  }, [initialNote, isOpen]);
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: isOpen,
+    onClose: onClose,
+    badge: "مسودة شخصية",
+    title: "ملاحظاتك على المهمة"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "4",
+    value: val,
+    onChange: e => setVal(e.target.value),
+    placeholder: "اكتب مسودتك أو نقاطك الخاصة هنا...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-sm"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "px-4 py-2 rounded-xl bg-stone-100 text-xs font-bold"
+  }, "إغلاق"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSaveNote(val.trim()),
+    className: "px-6 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold"
+  }, "حفظ"))));
+}
+
+// ============================================================================
+// 9.5 PLATFORM TECHNICAL ADMIN PORTAL (إدارة المنصة - تصميم مينيمال بكشف تدريجي)
+// ============================================================================
+function PlatformAdminPortal({
+  db,
+  setDb,
+  currentUser,
+  cloudStatus,
+  lastSyncAt,
+  onOpenCloudSetup,
+  onPreviewUser,
+  onResetDemo,
+  onLogout,
+  showToast
+}) {
+  // الشاشات الثلاث الأساسية فقط في العمود الجانبي الأيمن
+  const [activeScreen, setActiveScreen] = useState(() => mxGetBootParam("screen", "overview")); // 'overview' | 'structure' | 'leaders_settings'
+  const [structureViewMode, setStructureViewMode] = useState(() => mxGetBootParam("mode", "list")); // 'list' | 'map'
+
+  // التحكم في الأكورديون الهادئ (بسيط على السطح، قوي في العمق)
+  const [expandedDeptId, setExpandedDeptId] = useState(() => mxGetBootParam("expand_dept", null));
+  const [expandedUnitId, setExpandedUnitId] = useState(null);
+  const [expandedLeaderId, setExpandedLeaderId] = useState(null);
+  const [expandedSettingKey, setExpandedSettingKey] = useState(null); // 'scoring' | 'cadre_limits' | 'cloud'
+
+  // نماذج الإضافة العلوية المدمجة بنظام الأكورديون
+  const [createEntityMode, setCreateEntityMode] = useState(null); // null | 'dept' | 'unit'
+  const [showCreateLeaderForm, setShowCreateLeaderForm] = useState(false);
+
+  // بحث وفلترة جدول القادة
+  const [leaderSearch, setLeaderSearch] = useState("");
+  const [leaderRoleFilter, setLeaderRoleFilter] = useState("all"); // 'all' | 'executive' | 'operational_admin'
+
+  const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+  const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+  const rules = {
+    ...DEFAULT_GOVERNANCE_RULES,
+    ...(db.systemConfig?.governanceRules || {})
+  };
+
+  // القادة والمديرون فقط (استبعاد الكوادر تماماً وتركهم للموارد البشرية)
+  const leaderUsers = useMemo(() => db.users.filter(u => u.roleType !== "cadre"), [db.users]);
+  const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+
+  // حقول تأسيس إدارة جديدة
+  const [deptName, setDeptName] = useState("");
+  const [deptDesc, setDeptDesc] = useState("");
+  const [deptMaxTotal, setDeptMaxTotal] = useState(6);
+  const [deptMaxPerType, setDeptMaxPerType] = useState(2);
+  const [deptAllowedTypes, setDeptAllowedTypes] = useState(["lecture_quiz", "meeting", "practical"]);
+  const [deptManagerId, setDeptManagerId] = useState("");
+
+  // حقول تأسيس وحدة تنظيمية جديدة
+  const [unitName, setUnitName] = useState("");
+  const [unitInviteCode, setUnitInviteCode] = useState("");
+  const [unitLeaderId, setUnitLeaderId] = useState("");
+
+  // حقول إضافة حساب قائد جديد
+  const [newLeaderRole, setNewLeaderRole] = useState("operational_admin"); // 'executive' | 'operational_admin'
+  const [newLeaderName, setNewLeaderName] = useState("");
+  const [newLeaderTitle, setNewLeaderTitle] = useState("");
+  const [newLeaderDeptId, setNewLeaderDeptId] = useState("dept_hr");
+  const [newLeaderUnitName, setNewLeaderUnitName] = useState(units[0]?.name || "");
+  const [newLeaderUsername, setNewLeaderUsername] = useState("");
+  const [newLeaderPassword, setNewLeaderPassword] = useState("1234");
+  const findDeptManager = deptId => {
+    return leaderUsers.find(u => (u.roleType === "operational_admin" || u.roleType === "admin") && (u.departmentId || "dept_hr") === deptId) || null;
+  };
+  const findUnitLeader = uObj => {
+    if (uObj.leaderUserId) {
+      const byId = leaderUsers.find(u => u.id === uObj.leaderUserId);
+      if (byId) return byId;
+    }
+    return leaderUsers.find(u => u.unit === uObj.name && u.roleType !== "platform_admin") || null;
+  };
+  const deptsWithManagerCount = useMemo(() => departments.filter(d => Boolean(findDeptManager(d.id))).length, [departments, leaderUsers]);
+  const deptManagerPct = departments.length > 0 ? Math.round(deptsWithManagerCount / departments.length * 100) : 100;
+
+  // دوال التحديث
+  const updateDepartment = (deptId, updater) => {
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).map(d => d.id === deptId ? updater(d) : d)
+      }
+    }));
+  };
+  const assignManagerToDepartment = (deptId, userId) => {
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => {
+        if (u.id === userId) {
+          const deptObj = (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).find(d => d.id === deptId);
+          return {
+            ...u,
+            roleType: "operational_admin",
+            departmentId: deptId,
+            jobTitle: deptObj ? `مدير ${deptObj.name}` : u.jobTitle
+          };
+        }
+        return u;
+      })
+    }));
+    showToast("تم تحديث مدير الإدارة ✓");
+  };
+  const handleCreateDepartment = e => {
+    e.preventDefault();
+    if (!deptName.trim()) return;
+    const newId = "dept_" + Date.now();
+    const newDept = {
+      id: newId,
+      name: deptName.trim(),
+      shortName: deptName.trim(),
+      icon: "🏛️",
+      color: "stone",
+      description: deptDesc.trim() || "إدارة تشغيلية مستقلة بمعايير ومهمات معزولة",
+      enabled: true,
+      isCore: false,
+      allowedTaskTypes: deptAllowedTypes.length > 0 ? deptAllowedTypes : ["practical"],
+      maxTotalTasks: Number(deptMaxTotal) || 6,
+      maxPerTypePerCadre: Number(deptMaxPerType) || 2
+    };
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        departments: [...(prev.systemConfig?.departments || DEFAULT_DEPARTMENTS), newDept]
+      },
+      users: deptManagerId ? prev.users.map(u => u.id === deptManagerId ? {
+        ...u,
+        roleType: "operational_admin",
+        departmentId: newId,
+        jobTitle: `مدير ${newDept.name}`
+      } : u) : prev.users
+    }));
+    setDeptName("");
+    setDeptDesc("");
+    setDeptManagerId("");
+    setCreateEntityMode(null);
+    setExpandedDeptId(newId);
+    showToast("تم تأسيس الإدارة الجديدة بنجاح ✓");
+  };
+  const handleDeleteDepartment = deptId => {
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).filter(d => d.id !== deptId)
+      }
+    }));
+    if (expandedDeptId === deptId) setExpandedDeptId(null);
+    showToast("تم حذف الإدارة من الهيكل التنظيمي");
+  };
+  const handleCreateUnit = e => {
+    e.preventDefault();
+    if (!unitName.trim()) return;
+    const cleanName = unitName.trim();
+    if (units.some(u => u.name === cleanName)) {
+      showToast("هذه الوحدة موجودة بالفعل");
+      return;
+    }
+    const code = unitInviteCode.trim().toUpperCase() || "MAYDAN-U" + (units.length + 1);
+    const newUnitObj = {
+      id: "unit_" + Date.now(),
+      name: cleanName,
+      inviteCode: code,
+      leaderUserId: unitLeaderId || null
+    };
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        organizationalUnits: [...(prev.systemConfig?.organizationalUnits || DEFAULT_UNITS), newUnitObj]
+      }
+    }));
+    setUnitName("");
+    setUnitInviteCode("");
+    setUnitLeaderId("");
+    setCreateEntityMode(null);
+    showToast("تم تأسيس الوحدة التنظيمية بنجاح ✓");
+  };
+  const updateUnit = (unitId, updater) => {
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        organizationalUnits: (prev.systemConfig?.organizationalUnits || DEFAULT_UNITS).map(u => u.id === unitId ? updater(u) : u)
+      }
+    }));
+  };
+  const handleDeleteUnit = unitId => {
+    if (units.length <= 1) {
+      showToast("يجب الإبقاء على وحدة تنظيمية واحدة على الأقل");
+      return;
+    }
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        organizationalUnits: (prev.systemConfig?.organizationalUnits || DEFAULT_UNITS).filter(u => u.id !== unitId)
+      }
+    }));
+    if (expandedUnitId === unitId) setExpandedUnitId(null);
+    showToast("تم حذف الوحدة التنظيمية");
+  };
+  const handleCreateLeader = e => {
+    e.preventDefault();
+    const cleanU = newLeaderUsername.trim().toLowerCase();
+    if (!newLeaderName.trim() || !cleanU || !newLeaderPassword.trim()) {
+      showToast("يرجى استكمال الاسم واسم المستخدم وكلمة المرور");
+      return;
+    }
+    if (db.users.some(u => u.username.toLowerCase() === cleanU)) {
+      showToast("اسم المستخدم مستخدم بالفعل");
+      return;
+    }
+    const selectedDeptObj = departments.find(d => d.id === newLeaderDeptId);
+    const defaultTitle = newLeaderRole === "executive" ? "عضو الإدارة التنفيذية العليا" : `مدير ${selectedDeptObj?.name || "إدارة تشغيلية"}`;
+    const created = {
+      id: "u_leader_" + Date.now(),
+      username: cleanU,
+      password: newLeaderPassword.trim(),
+      mustChangePassword: false,
+      roleType: newLeaderRole,
+      departmentId: newLeaderRole === "operational_admin" ? newLeaderDeptId : undefined,
+      name: newLeaderName.trim(),
+      jobTitle: newLeaderTitle.trim() || defaultTitle,
+      unit: newLeaderUnitName || "المكتب المركزي",
+      joinedAt: new Date().toISOString().slice(0, 10),
+      onboarded: true,
+      tasksRecord: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      users: [...prev.users, created]
+    }));
+    setNewLeaderName("");
+    setNewLeaderTitle("");
+    setNewLeaderUsername("");
+    setNewLeaderPassword("1234");
+    setShowCreateLeaderForm(false);
+    showToast(`تم إنشاء حساب القائد (${created.name}) بنجاح ✓`);
+  };
+  const updateLeaderUser = (userId, updater) => {
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => u.id === userId ? updater(u) : u)
+    }));
+  };
+  const handleDeleteLeader = userId => {
+    if (userId === currentUser.id) {
+      showToast("لا يمكنك حذف حسابك الحالي");
+      return;
+    }
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.filter(u => u.id !== userId)
+    }));
+    if (expandedLeaderId === userId) setExpandedLeaderId(null);
+    showToast("تم حذف الحساب القيادي");
+  };
+  const updateGovernanceRules = patch => {
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        governanceRules: {
+          ...DEFAULT_GOVERNANCE_RULES,
+          ...(prev.systemConfig?.governanceRules || {}),
+          ...patch
+        }
+      }
+    }));
+    showToast("تم حفظ إعدادات النظام ✓");
+  };
+  const filteredLeaders = useMemo(() => {
+    return leaderUsers.filter(u => {
+      if (leaderRoleFilter === "executive" && u.roleType !== "executive") return false;
+      if (leaderRoleFilter === "operational_admin" && u.roleType !== "operational_admin" && u.roleType !== "admin") {
+        return false;
+      }
+      if (leaderSearch.trim()) {
+        const q = leaderSearch.trim().toLowerCase();
+        const matchName = (u.name || "").toLowerCase().includes(q);
+        const matchUser = (u.username || "").toLowerCase().includes(q);
+        const matchTitle = (u.jobTitle || "").toLowerCase().includes(q);
+        if (!matchName && !matchUser && !matchTitle) return false;
+      }
+      return true;
+    });
+  }, [leaderUsers, leaderRoleFilter, leaderSearch]);
+  const navItems = [{
+    id: "overview",
+    label: "لوحة المتابعة",
+    badge: null
+  }, {
+    id: "structure",
+    label: "الهيكل التنظيمي",
+    badge: departments.length + units.length
+  }, {
+    id: "leaders_settings",
+    label: "القادة والإعدادات",
+    badge: leaderUsers.length
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "min-h-screen bg-[#F6F5F2] text-stone-900 flex flex-col lg:flex-row"
+  }, /*#__PURE__*/React.createElement("aside", {
+    className: "w-full lg:w-72 bg-[#1C1917] text-stone-100 shrink-0 lg:min-h-screen lg:sticky lg:top-0 flex flex-col justify-between p-6 select-none"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between pt-1"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-extrabold text-white tracking-tight"
+  }, "ميدان"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-400 mt-0.5"
+  }, "إدارة المنصة والهيكل")), /*#__PURE__*/React.createElement("div", {
+    className: "w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-lg font-bold text-[#F5EFE6]"
+  }, "م")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-400 px-3 mb-2"
+  }, "التنقل"), navItems.map(item => {
+    const isActive = activeScreen === item.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: item.id,
+      type: "button",
+      onClick: () => setActiveScreen(item.id),
+      className: `w-full flex items-center justify-between px-4 py-3.5 rounded-2xl text-base transition ${isActive ? "bg-[#EFECE6] text-stone-900 font-bold shadow-sm" : "text-stone-300 hover:bg-white/5 hover:text-white font-medium"}`
+    }, /*#__PURE__*/React.createElement("span", null, item.label), item.badge !== null && /*#__PURE__*/React.createElement("span", {
+      className: `text-xs px-2.5 py-0.5 rounded-full ${isActive ? "bg-stone-900/10 text-stone-900 font-bold" : "bg-white/10 text-stone-300 font-normal"}`
+    }, item.badge));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 pt-8 border-t border-white/10 mt-8"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onOpenCloudSetup,
+    className: "w-full px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-between text-sm text-stone-200 transition"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-normal"
+  }, cloudStatus === "connected" ? "متصل بالخادم" : "الذاكرة المحلية"), /*#__PURE__*/React.createElement("span", {
+    className: `w-2.5 h-2.5 rounded-full ${cloudStatus === "connected" ? "bg-emerald-400" : "bg-amber-400"}`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-2 pt-1 text-xs text-stone-400"
+  }, /*#__PURE__*/React.createElement("span", null, currentUser.name), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onLogout,
+    className: "text-stone-300 hover:text-white underline font-normal"
+  }, "تسجيل الخروج")))), /*#__PURE__*/React.createElement("main", {
+    className: "flex-1 min-w-0 px-6 py-8 sm:px-10 sm:py-10 max-w-6xl mx-auto w-full"
+  }, activeScreen === "overview" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8 animate-fadeIn"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "flex flex-col sm:flex-row sm:items-end justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-medium text-orange-700"
+  }, "نظرة عامة"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-3xl sm:text-4xl font-extrabold text-stone-900 tracking-tight mt-1"
+  }, "لوحة المتابعة"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm sm:text-base font-normal text-stone-500 mt-2"
+  }, "جاهزية البنية التنظيمية أولاً، ثم الوصول المباشر لمعاينة الإدارات والمستويات")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2.5 self-start sm:self-auto"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setActiveScreen("structure");
+      setCreateEntityMode("dept");
+    },
+    className: "px-5 py-3 rounded-full bg-stone-900 hover:bg-stone-800 text-white text-sm font-bold transition shadow-sm"
+  }, "+ تأسيس إدارة أو وحدة"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setActiveScreen("leaders_settings");
+      setShowCreateLeaderForm(true);
+    },
+    className: "px-5 py-3 rounded-full bg-white hover:bg-stone-50 text-stone-800 border border-stone-200 text-sm font-medium transition"
+  }, "إضافة حساب قائد"))), /*#__PURE__*/React.createElement("section", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "مؤشرات النظام"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-500"
+  }, "كل عنصر يفتح تفاصيله في شاشة الهيكل التنظيمي")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] border border-stone-200/80 p-7 sm:p-9 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-7 border-b border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-normal text-stone-500"
+  }, "حالة المنصة الحالية"), /*#__PURE__*/React.createElement("h3", {
+    className: "text-2xl sm:text-3xl font-extrabold text-stone-900 mt-1"
+  }, "أين يقف النظام اليوم؟"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-normal text-stone-500 mt-1.5"
+  }, "توزيع الإدارات التشغيلية المعزولة والوحدات التنظيمية وحسابات القادة")), /*#__PURE__*/React.createElement("span", {
+    className: "px-4 py-2 rounded-xl bg-[#F5F3EE] text-stone-700 text-xs font-medium self-start"
+  }, departments.filter(d => d.enabled !== false).length, " إدارات عاملة • ", units.length, " وحدات")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 lg:grid-cols-12 gap-8 pt-7 items-start"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-6 space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[24px] bg-[#1C1917] text-white p-7"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-normal text-stone-300"
+  }, "البنية التنظيمية النشطة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl sm:text-4xl font-extrabold mt-2 tracking-tight"
+  }, departments.filter(d => d.enabled !== false).length, " إدارات • ", units.length, " وحدات"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs sm:text-sm font-normal text-stone-400 mt-2"
+  }, "عزل كامل للبيانات والمهمات والتقييم بين كل مسار تشغيلي")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 divide-x divide-x-reverse divide-stone-200 text-right pt-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-3 first:pr-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-500"
+  }, "الإدارات التشغيلية"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-extrabold text-stone-900 mt-1"
+  }, departments.length, " إدارات"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-400 mt-1"
+  }, departments.filter(d => d.enabled !== false).length, " مفعّلة حالياً")), /*#__PURE__*/React.createElement("div", {
+    className: "px-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-500"
+  }, "الوحدات التنظيمية"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-extrabold text-stone-900 mt-1"
+  }, units.length, " وحدات"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-400 mt-1"
+  }, "تضم ", cadres.length, " كادر")), /*#__PURE__*/React.createElement("div", {
+    className: "px-4 last:pl-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-500"
+  }, "حسابات القادة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-extrabold text-stone-900 mt-1"
+  }, leaderUsers.length, " قادة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-400 mt-1"
+  }, "تنفيذي ومديرو إدارات")))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-6 space-y-6 lg:border-r lg:border-stone-100 lg:pr-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-baseline justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-bold text-stone-800"
+  }, "تسكين مديري الإدارات"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-400 mr-2"
+  }, deptsWithManagerCount, " من ", departments.length, " إدارات")), /*#__PURE__*/React.createElement("span", {
+    className: "text-lg font-extrabold text-stone-900"
+  }, deptManagerPct, "%")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2.5 rounded-full bg-stone-100 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full rounded-full bg-stone-900 transition-all duration-500",
+    style: {
+      width: `${deptManagerPct}%`
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-baseline justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-bold text-stone-800"
+  }, "ضبط حصص وسقف المهمات"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-400 mr-2"
+  }, departments.length, " من ", departments.length, " إدارات مضبوطة")), /*#__PURE__*/React.createElement("span", {
+    className: "text-lg font-extrabold text-stone-900"
+  }, "100%")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2.5 rounded-full bg-stone-100 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full rounded-full bg-emerald-700 w-full"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-baseline justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-bold text-stone-800"
+  }, "هل تحتاج لتوسيع الهيكل التنظيمي؟"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-400 mr-2"
+  }, "الوحدات والإدارات قابلة للإضافة الفورية"))), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2.5 rounded-full bg-orange-500/20 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full rounded-full bg-orange-600 w-4/5"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "pt-4 border-t border-stone-100 flex items-center justify-between text-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setActiveScreen("structure"),
+    className: "font-bold text-stone-900 hover:text-orange-700 transition"
+  }, "فتح الهيكل التنظيمي وحصص الإدارات ↗"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setActiveScreen("leaders_settings"),
+    className: "font-normal text-stone-500 hover:text-stone-800"
+  }, "إدارة حسابات القادة")))))), /*#__PURE__*/React.createElement("section", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "معاينة المستويات والواجهات"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-500"
+  }, "انتقل لمعاينة أي مستوى مباشرة مع إمكانية العودة بضغطة زر")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-3 gap-5"
+  }, (() => {
+    const execUser = leaderUsers.find(u => u.roleType === "executive");
+    return /*#__PURE__*/React.createElement("div", {
+      className: "rounded-[26px] bg-[#FCECE6] border border-[#F3D5C9] p-6 flex flex-col justify-between min-h-[210px]"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-medium text-stone-600"
+    }, "المستوى الأول"), /*#__PURE__*/React.createElement("h3", {
+      className: "text-xl font-extrabold text-stone-900 mt-1"
+    }, "الإدارة التنفيذية العليا"), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-normal text-stone-600 mt-2 leading-relaxed"
+    }, "التعميمات السياسية العامة والملخص التراكمي الكلي للحركة")), /*#__PURE__*/React.createElement("div", {
+      className: "pt-5 mt-5 border-t border-stone-900/10 flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-normal text-stone-600"
+    }, execUser ? execUser.name : "بدون حساب معيّن"), execUser && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onPreviewUser(execUser.id),
+      className: "text-sm font-bold text-stone-900 hover:underline"
+    }, "معاينة الواجهة ←")));
+  })(), departments.map((dept, idx) => {
+    const manager = findDeptManager(dept.id);
+    const isSoftGreen = idx % 2 === 1;
+    return /*#__PURE__*/React.createElement("div", {
+      key: dept.id,
+      className: `rounded-[26px] p-6 flex flex-col justify-between min-h-[210px] border ${isSoftGreen ? "bg-[#EAF2EE] border-[#D3E3DB]" : "bg-white border-stone-200/90"}`
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-medium text-stone-500"
+    }, "المستوى الثاني • إدارة تشغيلية"), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-normal text-stone-500"
+    }, "السقف: ", dept.maxTotalTasks || 6, " مهمات")), /*#__PURE__*/React.createElement("h3", {
+      className: "text-xl font-extrabold text-stone-900 mt-1"
+    }, dept.name), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-normal text-stone-600 mt-2 leading-relaxed"
+    }, dept.description)), /*#__PURE__*/React.createElement("div", {
+      className: "pt-5 mt-5 border-t border-stone-900/10 flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-normal text-stone-600"
+    }, "المدير: ", manager ? manager.name : "غير معيّن"), manager ? /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onPreviewUser(manager.id),
+      className: "text-sm font-bold text-stone-900 hover:text-orange-700 hover:underline"
+    }, "معاينة الواجهة ←") : /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => {
+        setActiveScreen("structure");
+        setExpandedDeptId(dept.id);
+      },
+      className: "text-sm font-bold text-orange-700 hover:underline"
+    }, "تعيين مدير ←")));
+  })))), activeScreen === "structure" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8 animate-fadeIn"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "flex flex-col sm:flex-row sm:items-end justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-medium text-orange-700"
+  }, "البنية التنظيمية"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-3xl sm:text-4xl font-extrabold text-stone-900 tracking-tight mt-1"
+  }, "الهيكل التنظيمي"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm sm:text-base font-normal text-stone-500 mt-2"
+  }, "اضغط على أي إدارة لفتح إعداداتها وتعيين مديرها وضبط حصص المهمات المسموحة لها")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2.5 self-start sm:self-auto"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-1 rounded-full bg-white border border-stone-200 flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setStructureViewMode("map"),
+    className: `px-4 py-2 rounded-full text-sm transition ${structureViewMode === "map" ? "bg-stone-900 text-white font-bold" : "text-stone-600 hover:text-stone-900 font-normal"}`
+  }, "خريطة"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setStructureViewMode("list"),
+    className: `px-4 py-2 rounded-full text-sm transition ${structureViewMode === "list" ? "bg-stone-900 text-white font-bold" : "text-stone-600 hover:text-stone-900 font-normal"}`
+  }, "قائمة")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(createEntityMode === "dept" ? null : "dept"),
+    className: "px-5 py-2.5 rounded-full bg-stone-900 hover:bg-stone-800 text-white text-sm font-bold transition"
+  }, "+ تأسيس إدارة"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(createEntityMode === "unit" ? null : "unit"),
+    className: "px-5 py-2.5 rounded-full bg-white hover:bg-stone-50 text-stone-800 border border-stone-200 text-sm font-medium transition"
+  }, "+ إضافة وحدة"))), createEntityMode === "dept" && /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleCreateDepartment,
+    className: "bg-white rounded-[26px] border border-stone-200 p-7 space-y-6 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-stone-100 pb-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-medium text-stone-400"
+  }, "تأسيس مسار تشغيلي جديد"), /*#__PURE__*/React.createElement("h3", {
+    className: "text-xl font-bold text-stone-900 mt-0.5"
+  }, "بيانات الإدارة الجديدة وحصتها")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(null),
+    className: "w-9 h-9 rounded-full bg-stone-100 text-stone-600 hover:bg-stone-200 flex items-center justify-center text-base"
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "اسم الإدارة"), /*#__PURE__*/React.createElement("input", {
+    value: deptName,
+    onChange: e => setDeptName(e.target.value),
+    placeholder: "مثال: الإدارة الإعلامية",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900 focus:outline-none focus:border-stone-400",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "المدير المسؤول (اختياري)"), /*#__PURE__*/React.createElement("select", {
+    value: deptManagerId,
+    onChange: e => setDeptManagerId(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900 focus:outline-none focus:border-stone-400"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "تعيين لاحقاً"), leaderUsers.filter(u => u.roleType !== "platform_admin").map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, u.name, " (", u.jobTitle, ")")))), /*#__PURE__*/React.createElement("div", {
+    className: "md:col-span-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "وصف اختصاص الإدارة"), /*#__PURE__*/React.createElement("input", {
+    value: deptDesc,
+    onChange: e => setDeptDesc(e.target.value),
+    placeholder: "وصف مختصر لمجال عمل الإدارة...",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-sm font-normal text-stone-800 focus:outline-none focus:border-stone-400"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "الحد الأقصى لإجمالي مهمات الإدارة"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "30",
+    value: deptMaxTotal,
+    onChange: e => setDeptMaxTotal(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-bold text-stone-900"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "الحد الأقصى من كل نوع للفرد الواحد"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "10",
+    value: deptMaxPerType,
+    onChange: e => setDeptMaxPerType(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-bold text-stone-900"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-end gap-3 pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(null),
+    className: "px-5 py-2.5 rounded-full bg-stone-100 text-stone-700 text-sm font-medium"
+  }, "إلغاء"), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "px-6 py-2.5 rounded-full bg-stone-900 text-white text-sm font-bold"
+  }, "اعتماد وتأسيس الإدارة"))), createEntityMode === "unit" && /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleCreateUnit,
+    className: "bg-white rounded-[26px] border border-stone-200 p-7 space-y-6 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-stone-100 pb-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-medium text-stone-400"
+  }, "توسيع الهيكل التنظيمي"), /*#__PURE__*/React.createElement("h3", {
+    className: "text-xl font-bold text-stone-900 mt-0.5"
+  }, "إضافة وحدة تنظيمية جديدة")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(null),
+    className: "w-9 h-9 rounded-full bg-stone-100 text-stone-600 hover:bg-stone-200 flex items-center justify-center text-base"
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-3 gap-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "اسم الوحدة التنظيمية"), /*#__PURE__*/React.createElement("input", {
+    value: unitName,
+    onChange: e => setUnitName(e.target.value),
+    placeholder: "مثال: وحدة العمل الطلابي",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "قائد أو مسؤول الوحدة (اختياري)"), /*#__PURE__*/React.createElement("select", {
+    value: unitLeaderId,
+    onChange: e => setUnitLeaderId(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "تعيين لاحقاً"), leaderUsers.filter(u => u.roleType !== "platform_admin").map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, u.name)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "رمز الانضمام المباشر"), /*#__PURE__*/React.createElement("input", {
+    value: unitInviteCode,
+    onChange: e => setUnitInviteCode(e.target.value),
+    placeholder: "يُولّد تلقائياً عند تركه فارغاً",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-sm font-mono text-stone-800",
+    dir: "ltr"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-end gap-3 pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode(null),
+    className: "px-5 py-2.5 rounded-full bg-stone-100 text-stone-700 text-sm font-medium"
+  }, "إلغاء"), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "px-6 py-2.5 rounded-full bg-stone-900 text-white text-sm font-bold"
+  }, "إضافة الوحدة التنظيمية"))), structureViewMode === "map" && /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] border border-stone-200/80 p-7 sm:p-9 shadow-sm space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between text-xs font-normal text-stone-500"
+  }, /*#__PURE__*/React.createElement("span", null, "اضغط على أي بطاقة في الخريطة لفتح تفاصيلها وإعداداتها في الأسفل"), /*#__PURE__*/React.createElement("span", null, departments.length, " إدارات • ", units.length, " وحدات")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 lg:grid-cols-12 gap-6 items-center"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[24px] bg-[#1C1917] text-white p-7 space-y-4 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-normal text-stone-300"
+  }, "الكيان التنظيمي العام"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-extrabold leading-snug"
+  }, "حركة ميدان والمستويات التشغيلية"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-normal text-stone-300 leading-relaxed"
+  }, "ترتبط الإدارات التشغيلية بالوحدات التنظيمية ضمن هيكل شبكي مرن مع عزل كامل للبيانات"), /*#__PURE__*/React.createElement("div", {
+    className: "pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode("dept"),
+    className: "text-sm font-bold text-orange-300 underline"
+  }, "تأسيس إدارة جديدة")))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-4 space-y-3.5 lg:border-r lg:border-stone-200 lg:pr-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-medium text-stone-400 mb-1"
+  }, "الإدارات التشغيلية"), departments.map(dept => {
+    const manager = findDeptManager(dept.id);
+    const isSelected = expandedDeptId === dept.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: dept.id,
+      type: "button",
+      onClick: () => {
+        setExpandedUnitId(null);
+        setExpandedDeptId(isSelected ? null : dept.id);
+      },
+      className: `w-full text-right rounded-2xl p-5 border transition flex items-center justify-between gap-3 ${isSelected ? "bg-[#FAF9F6] border-2 border-stone-900" : "bg-white border-stone-200 hover:border-stone-300"}`
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-normal text-stone-400"
+    }, "إدارة تشغيلية"), /*#__PURE__*/React.createElement("div", {
+      className: "text-lg font-bold text-stone-900 mt-0.5"
+    }, dept.name), /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-normal text-stone-500 mt-1"
+    }, "المدير: ", manager ? manager.name : "غير معيّن", " • السقف: ", dept.maxTotalTasks || 6, " مهمات")), /*#__PURE__*/React.createElement("span", {
+      className: "w-8 h-8 rounded-full bg-stone-100 text-stone-700 flex items-center justify-center text-base font-bold shrink-0"
+    }, isSelected ? "−" : "+"));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-4 space-y-3.5 lg:border-r lg:border-stone-200 lg:pr-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-medium text-stone-400 mb-1"
+  }, "الوحدات التنظيمية"), units.map(u => {
+    const uLeader = findUnitLeader(u);
+    const isSelected = expandedUnitId === u.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: u.id,
+      type: "button",
+      onClick: () => {
+        setExpandedDeptId(null);
+        setExpandedUnitId(isSelected ? null : u.id);
+      },
+      className: `w-full text-right rounded-2xl p-4 border transition flex items-center justify-between gap-3 ${isSelected ? "bg-[#FAF9F6] border-2 border-stone-900" : "bg-white border-stone-200 hover:border-stone-300"}`
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-normal text-stone-400"
+    }, "وحدة أساسية"), /*#__PURE__*/React.createElement("div", {
+      className: "text-base font-bold text-stone-900 mt-0.5"
+    }, u.name), /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-normal text-stone-500 mt-0.5"
+    }, "المسؤول: ", uLeader ? uLeader.name : "غير معيّن")), /*#__PURE__*/React.createElement("span", {
+      className: "w-8 h-8 rounded-full bg-stone-100 text-stone-700 flex items-center justify-center text-base font-bold shrink-0"
+    }, isSelected ? "−" : "+"));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCreateEntityMode("unit"),
+    className: "w-full rounded-2xl p-4 border border-dashed border-stone-300 hover:border-stone-400 text-stone-600 text-sm font-medium text-center transition"
+  }, "+ إضافة وحدة تنظيمية")))), (structureViewMode === "list" || expandedDeptId !== null) && /*#__PURE__*/React.createElement("section", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "الإدارات التشغيلية وحصص المهمات"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-500"
+  }, "اضغط على علامة (+) لفتح إعدادات الإدارة وحصة المهمات المسموحة لها")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3.5"
+  }, departments.filter(d => structureViewMode === "list" || expandedDeptId === d.id).map(dept => {
+    const manager = findDeptManager(dept.id);
+    const isExpanded = expandedDeptId === dept.id;
+    const allowed = dept.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"];
+    return /*#__PURE__*/React.createElement("div", {
+      key: dept.id,
+      className: "bg-white rounded-[24px] border border-stone-200/85 overflow-hidden transition shadow-sm"
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => setExpandedDeptId(isExpanded ? null : dept.id),
+      className: "p-6 sm:px-7 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-stone-50/60 transition"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3"
+    }, /*#__PURE__*/React.createElement("h3", {
+      className: "text-xl font-bold text-stone-900"
+    }, dept.name), /*#__PURE__*/React.createElement("span", {
+      className: `text-xs px-3 py-1 rounded-full font-medium ${dept.enabled !== false ? "bg-[#EAF2EE] text-emerald-900" : "bg-stone-100 text-stone-500"}`
+    }, dept.enabled !== false ? "مفعّلة" : "موقوفة")), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-normal text-stone-500"
+    }, dept.description)), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "px-3.5 py-1.5 rounded-full bg-[#F5F3EE] text-stone-700 text-xs font-medium"
+    }, "المدير: ", manager ? manager.name : "غير معيّن"), /*#__PURE__*/React.createElement("span", {
+      className: "px-3.5 py-1.5 rounded-full bg-[#F5F3EE] text-stone-700 text-xs font-medium"
+    }, "سقف المهمات: ", dept.maxTotalTasks || 6), /*#__PURE__*/React.createElement("span", {
+      className: "w-10 h-10 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-lg font-bold"
+    }, isExpanded ? "−" : "+"))), isExpanded && /*#__PURE__*/React.createElement("div", {
+      className: "bg-[#FAF9F6] border-t border-stone-200/70 p-6 sm:p-8 space-y-7"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-1 md:grid-cols-3 gap-5"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "مدير الإدارة المسؤول"), /*#__PURE__*/React.createElement("select", {
+      value: manager?.id || "",
+      onChange: e => {
+        if (e.target.value) assignManagerToDepartment(dept.id, e.target.value);
+      },
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-stone-900"
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "اختر قائداً لإدارة هذا المسار..."), leaderUsers.filter(u => u.roleType !== "platform_admin").map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.id
+    }, u.name, " (@", u.username, ")")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "الحد الأقصى لإجمالي المهمات النشطة"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "1",
+      max: "30",
+      value: dept.maxTotalTasks ?? 6,
+      onChange: e => updateDepartment(dept.id, d => ({
+        ...d,
+        maxTotalTasks: Math.max(1, Number(e.target.value) || 1)
+      })),
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-base font-bold text-stone-900"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "الحد الأقصى من كل نوع للكادر الواحد"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "1",
+      max: "10",
+      value: dept.maxPerTypePerCadre ?? 2,
+      onChange: e => updateDepartment(dept.id, d => ({
+        ...d,
+        maxPerTypePerCadre: Math.max(1, Number(e.target.value) || 1)
+      })),
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-base font-bold text-stone-900"
+    }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-sm font-medium text-stone-600 mb-3"
+    }, "أنواع المهمات المصرح لهذه الإدارة بإصدارها"), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5"
+    }, TASK_TEMPLATES_LIBRARY.map(tmpl => {
+      const tId = tmpl.id || tmpl.typeId;
+      const tLabel = tmpl.title || tmpl.name;
+      const checked = allowed.includes(tId);
+      return /*#__PURE__*/React.createElement("label", {
+        key: tId,
+        className: `flex items-center justify-between p-3.5 rounded-2xl border cursor-pointer transition ${checked ? "bg-white border-stone-800 text-stone-900" : "bg-stone-100/70 border-stone-200 text-stone-500"}`
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-sm font-medium"
+      }, tLabel), /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: checked,
+        onChange: () => {
+          const next = checked ? allowed.filter(x => x !== tId) : [...allowed, tId];
+          updateDepartment(dept.id, d => ({
+            ...d,
+            allowedTaskTypes: next
+          }));
+        },
+        className: "w-4 h-4 accent-stone-900"
+      }));
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "pt-4 border-t border-stone-200/80 flex flex-wrap items-center justify-between gap-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3"
+    }, manager && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onPreviewUser(manager.id),
+      className: "px-5 py-2.5 rounded-full bg-stone-900 text-white text-sm font-bold"
+    }, "معاينة واجهة ", dept.name, " ←"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => updateDepartment(dept.id, d => ({
+        ...d,
+        enabled: d.enabled === false ? true : false
+      })),
+      className: "px-4 py-2.5 rounded-full bg-white border border-stone-200 text-stone-700 text-sm font-medium"
+    }, dept.enabled === false ? "تفعيل الإدارة" : "إيقاف الإدارة مؤقتاً")), !dept.isCore && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => handleDeleteDepartment(dept.id),
+      className: "px-4 py-2 rounded-full bg-rose-50 text-rose-700 text-sm font-medium"
+    }, "حذف الإدارة"))));
+  }))), (structureViewMode === "list" || expandedUnitId !== null) && /*#__PURE__*/React.createElement("section", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "الوحدات التنظيمية الأساسية"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-normal text-stone-500"
+  }, "الوحدات التي يتبع لها الكوادر وتصدر لها رموز الانضمام")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, units.filter(u => structureViewMode === "list" || expandedUnitId === u.id).map(u => {
+    const uLeader = findUnitLeader(u);
+    const unitCadresCount = cadres.filter(c => c.unit === u.name).length;
+    const isExpanded = expandedUnitId === u.id;
+    return /*#__PURE__*/React.createElement("div", {
+      key: u.id,
+      className: "bg-white rounded-[24px] border border-stone-200/85 overflow-hidden transition shadow-sm"
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => setExpandedUnitId(isExpanded ? null : u.id),
+      className: "p-5 sm:px-7 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-stone-50/60 transition"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+      className: "text-lg font-bold text-stone-900"
+    }, u.name), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-normal text-stone-500 mt-0.5"
+    }, "مسؤول الوحدة: ", uLeader ? uLeader.name : "غير معيّن")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "px-3.5 py-1.5 rounded-full bg-[#F5F3EE] text-stone-700 text-xs font-medium"
+    }, unitCadresCount, " كادر"), /*#__PURE__*/React.createElement("span", {
+      className: "px-3.5 py-1.5 rounded-full bg-[#F5F3EE] text-stone-700 text-xs font-mono",
+      dir: "ltr"
+    }, u.inviteCode), /*#__PURE__*/React.createElement("span", {
+      className: "w-10 h-10 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-lg font-bold"
+    }, isExpanded ? "−" : "+"))), isExpanded && /*#__PURE__*/React.createElement("div", {
+      className: "bg-[#FAF9F6] border-t border-stone-200/70 p-6 sm:p-7 space-y-5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-1 md:grid-cols-3 gap-5"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "اسم الوحدة التنظيمية"), /*#__PURE__*/React.createElement("input", {
+      value: u.name,
+      onChange: e => updateUnit(u.id, item => ({
+        ...item,
+        name: e.target.value
+      })),
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-stone-900"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "قائد أو مسؤول الوحدة"), /*#__PURE__*/React.createElement("select", {
+      value: uLeader?.id || "",
+      onChange: e => updateUnit(u.id, item => ({
+        ...item,
+        leaderUserId: e.target.value || null
+      })),
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-stone-900"
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "بدون مسؤول محدد"), leaderUsers.filter(l => l.roleType !== "platform_admin").map(l => /*#__PURE__*/React.createElement("option", {
+      key: l.id,
+      value: l.id
+    }, l.name, " (", l.jobTitle, ")")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-sm font-medium text-stone-600 mb-2"
+    }, "رمز انضمام الوحدة"), /*#__PURE__*/React.createElement("input", {
+      value: u.inviteCode || "",
+      onChange: e => updateUnit(u.id, item => ({
+        ...item,
+        inviteCode: e.target.value.toUpperCase()
+      })),
+      className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm font-mono text-stone-900",
+      dir: "ltr"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "pt-3 border-t border-stone-200/80 flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => {
+        navigator.clipboard.writeText(`${window.location.origin}/?join=${u.inviteCode}`);
+        showToast(`تم نسخ رابط انضمام (${u.name}) ✓`);
+      },
+      className: "px-4 py-2 rounded-full bg-white border border-stone-200 text-stone-800 text-sm font-medium"
+    }, "نسخ رابط الانضمام المباشر"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => handleDeleteUnit(u.id),
+      className: "px-4 py-2 rounded-full bg-rose-50 text-rose-700 text-sm font-medium"
+    }, "حذف الوحدة"))));
+  })))), activeScreen === "leaders_settings" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8 animate-fadeIn"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "flex flex-col sm:flex-row sm:items-end justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-medium text-orange-700"
+  }, "الصلاحيات والضوابط"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-3xl sm:text-4xl font-extrabold text-stone-900 tracking-tight mt-1"
+  }, "القادة والإعدادات"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm sm:text-base font-normal text-stone-500 mt-2"
+  }, "إدارة حسابات القادة ومديري الإدارات فقط، وضبط القواعد الأساسية للنظام")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowCreateLeaderForm(!showCreateLeaderForm),
+    className: "px-5 py-3 rounded-full bg-stone-900 hover:bg-stone-800 text-white text-sm font-bold transition self-start sm:self-auto"
+  }, "+ إضافة حساب قائد")), showCreateLeaderForm && /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleCreateLeader,
+    className: "bg-white rounded-[26px] border border-stone-200 p-7 space-y-6 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-stone-100 pb-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-medium text-stone-400"
+  }, "حسابات القيادة والإدارة"), /*#__PURE__*/React.createElement("h3", {
+    className: "text-xl font-bold text-stone-900 mt-0.5"
+  }, "إنشاء حساب قائد أو مدير إدارة جديد")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowCreateLeaderForm(false),
+    className: "w-9 h-9 rounded-full bg-stone-100 text-stone-600 hover:bg-stone-200 flex items-center justify-center text-base"
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-3 gap-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "الاسم الكامل"), /*#__PURE__*/React.createElement("input", {
+    value: newLeaderName,
+    onChange: e => setNewLeaderName(e.target.value),
+    placeholder: "الاسم الثلاثي",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "المستوى القيادي"), /*#__PURE__*/React.createElement("select", {
+    value: newLeaderRole,
+    onChange: e => setNewLeaderRole(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "operational_admin"
+  }, "مدير إدارة تشغيلية"), /*#__PURE__*/React.createElement("option", {
+    value: "executive"
+  }, "عضو الإدارة التنفيذية العليا"))), newLeaderRole === "operational_admin" ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "الإدارة التشغيلية"), /*#__PURE__*/React.createElement("select", {
+    value: newLeaderDeptId,
+    onChange: e => setNewLeaderDeptId(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900"
+  }, departments.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name)))) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "المسمى الوظيفي"), /*#__PURE__*/React.createElement("input", {
+    value: newLeaderTitle,
+    onChange: e => setNewLeaderTitle(e.target.value),
+    placeholder: "عضو المكتب التنفيذي",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-base font-medium text-stone-900"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "اسم المستخدم للدخول"), /*#__PURE__*/React.createElement("input", {
+    value: newLeaderUsername,
+    onChange: e => setNewLeaderUsername(e.target.value),
+    placeholder: "username",
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-sm font-mono text-stone-900",
+    dir: "ltr",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+    value: newLeaderPassword,
+    onChange: e => setNewLeaderPassword(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-sm font-mono text-stone-900",
+    dir: "ltr",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "الوحدة المرتبطة"), /*#__PURE__*/React.createElement("select", {
+    value: newLeaderUnitName,
+    onChange: e => setNewLeaderUnitName(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-[#FAF9F6] px-4 py-3 text-sm font-medium text-stone-900"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "المكتب المركزي"
+  }, "المكتب المركزي"), units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name))))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-end gap-3 pt-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowCreateLeaderForm(false),
+    className: "px-5 py-2.5 rounded-full bg-stone-100 text-stone-700 text-sm font-medium"
+  }, "إلغاء"), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "px-6 py-2.5 rounded-full bg-stone-900 text-white text-sm font-bold"
+  }, "إنشاء الحساب القيادي"))), /*#__PURE__*/React.createElement("section", {
+    className: "bg-white rounded-[28px] border border-stone-200/85 p-6 sm:p-8 shadow-sm space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col md:flex-row md:items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "حسابات القادة والمديرين"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-normal text-stone-500 mt-0.5"
+  }, "يقتصر هذا الجدول على الحسابات القيادية والإدارية، بينما يُترك تسكين الكوادر لإدارة الموارد البشرية")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2.5"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: leaderSearch,
+    onChange: e => setLeaderSearch(e.target.value),
+    placeholder: "بحث بالاسم أو المعرّف...",
+    className: "rounded-full border border-stone-200 bg-[#FAF9F6] px-4 py-2 text-sm font-normal text-stone-800 focus:outline-none focus:border-stone-400"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "p-1 rounded-full bg-[#F5F3EE] flex items-center gap-1"
+  }, [{
+    id: "all",
+    label: "الكل"
+  }, {
+    id: "executive",
+    label: "التنفيذي"
+  }, {
+    id: "operational_admin",
+    label: "مديرو الإدارات"
+  }].map(tab => /*#__PURE__*/React.createElement("button", {
+    key: tab.id,
+    type: "button",
+    onClick: () => setLeaderRoleFilter(tab.id),
+    className: `px-3.5 py-1.5 rounded-full text-xs transition ${leaderRoleFilter === tab.id ? "bg-stone-900 text-white font-bold" : "text-stone-600 hover:text-stone-900 font-medium"}`
+  }, tab.label))))), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-[680px] divide-y divide-stone-100"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-12 px-4 py-3 text-xs font-medium text-stone-400 bg-[#FAF9F6] rounded-xl"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "col-span-4"
+  }, "القائد / المسؤول"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-3"
+  }, "المستوى والاختصاص"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, "معرّف الدخول"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, "الحالة"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-1 text-left"
+  }, "التفاصيل")), filteredLeaders.map(leader => {
+    const isExpanded = expandedLeaderId === leader.id;
+    const deptObj = departments.find(d => d.id === (leader.departmentId || "dept_hr"));
+    const roleText = leader.roleType === "platform_admin" ? "إدارة المنصة التقنية" : leader.roleType === "executive" ? "الإدارة التنفيذية العليا" : deptObj ? deptObj.name : "إدارة تشغيلية";
+    return /*#__PURE__*/React.createElement("div", {
+      key: leader.id,
+      className: "transition"
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => setExpandedLeaderId(isExpanded ? null : leader.id),
+      className: "grid grid-cols-12 items-center px-4 py-4 hover:bg-stone-50/80 cursor-pointer text-sm"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "col-span-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-bold text-stone-900 text-base"
+    }, leader.name), /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-normal text-stone-500 mt-0.5"
+    }, leader.jobTitle)), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "px-3 py-1 rounded-full bg-[#F5F3EE] text-stone-700 text-xs font-medium"
+    }, roleText)), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 text-right"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "inline-block font-mono text-xs text-stone-600",
+      dir: "ltr"
+    }, "@", leader.username)), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 flex items-center gap-2 text-xs font-medium text-emerald-700"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-2 h-2 rounded-full bg-emerald-500"
+    }), /*#__PURE__*/React.createElement("span", null, "نشط")), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-1 flex justify-end"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-8 h-8 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-base font-bold"
+    }, isExpanded ? "−" : "+"))), isExpanded && /*#__PURE__*/React.createElement("div", {
+      className: "bg-[#FAF9F6] rounded-2xl p-6 mb-3 border border-stone-200/70 space-y-5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-1 md:grid-cols-4 gap-4"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-xs font-medium text-stone-500 mb-1.5"
+    }, "الاسم"), /*#__PURE__*/React.createElement("input", {
+      value: leader.name,
+      onChange: e => updateLeaderUser(leader.id, u => ({
+        ...u,
+        name: e.target.value
+      })),
+      className: "w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-sm font-medium text-stone-900"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-xs font-medium text-stone-500 mb-1.5"
+    }, "المسمى الوظيفي"), /*#__PURE__*/React.createElement("input", {
+      value: leader.jobTitle || "",
+      onChange: e => updateLeaderUser(leader.id, u => ({
+        ...u,
+        jobTitle: e.target.value
+      })),
+      className: "w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-sm font-medium text-stone-900"
+    })), (leader.roleType === "operational_admin" || leader.roleType === "admin") && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-xs font-medium text-stone-500 mb-1.5"
+    }, "الإدارة المسندة"), /*#__PURE__*/React.createElement("select", {
+      value: leader.departmentId || "dept_hr",
+      onChange: e => updateLeaderUser(leader.id, u => ({
+        ...u,
+        departmentId: e.target.value
+      })),
+      className: "w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-sm font-medium text-stone-900"
+    }, departments.map(d => /*#__PURE__*/React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+      className: "block text-xs font-medium text-stone-500 mb-1.5"
+    }, "كلمة المرور"), /*#__PURE__*/React.createElement("input", {
+      value: leader.password || "",
+      onChange: e => updateLeaderUser(leader.id, u => ({
+        ...u,
+        password: e.target.value
+      })),
+      className: "w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-sm font-mono text-stone-900",
+      dir: "ltr"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between pt-3 border-t border-stone-200/70"
+    }, leader.id !== currentUser.id ? /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onPreviewUser(leader.id),
+      className: "px-4 py-2 rounded-full bg-stone-900 text-white text-xs font-bold"
+    }, "معاينة واجهة هذا القائد ←") : /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-normal text-stone-400"
+    }, "حسابك الحالي"), leader.id !== currentUser.id && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => handleDeleteLeader(leader.id),
+      className: "px-4 py-2 rounded-full bg-rose-50 text-rose-700 text-xs font-medium"
+    }, "حذف الحساب"))));
+  })))), /*#__PURE__*/React.createElement("section", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, "إعدادات النظام الأساسية"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-normal text-stone-500 mt-0.5"
+  }, "الضوابط العامة التي تؤطر حساب النقاط وحدود التعديل الشخصي للكادر")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[24px] border border-stone-200/85 overflow-hidden shadow-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setExpandedSettingKey(expandedSettingKey === "scoring" ? null : "scoring"),
+    className: "w-full p-6 sm:px-7 flex items-center justify-between text-right hover:bg-stone-50/60 transition"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-lg font-bold text-stone-900"
+  }, "أوزان النقاط ومعايير التقييم"), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-normal text-stone-500 mt-0.5"
+  }, "نقاط الإنجاز في الموعد (", rules.onTimePoints ?? 100, "%) • المتأخر (", rules.latePointsPct ?? 50, "%) • اجتياز الاختبار (", rules.quizPassThresholdPct ?? 60, "%)")), /*#__PURE__*/React.createElement("span", {
+    className: "w-10 h-10 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-lg font-bold"
+  }, expandedSettingKey === "scoring" ? "−" : "+")), expandedSettingKey === "scoring" && /*#__PURE__*/React.createElement("div", {
+    className: "bg-[#FAF9F6] border-t border-stone-200/70 p-6 sm:p-7 grid grid-cols-1 md:grid-cols-3 gap-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "نقاط الإنجاز في الموعد (%)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: rules.onTimePoints ?? 100,
+    onChange: e => updateGovernanceRules({
+      onTimePoints: Number(e.target.value)
+    }),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-lg font-bold text-stone-900"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "نسبة نقاط الإنجاز المتأخر (%)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: rules.latePointsPct ?? 50,
+    onChange: e => updateGovernanceRules({
+      latePointsPct: Number(e.target.value)
+    }),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-lg font-bold text-stone-900"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-sm font-medium text-stone-600 mb-2"
+  }, "حد اجتياز الاختبار الأسبوعي (%)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: rules.quizPassThresholdPct ?? 60,
+    onChange: e => updateGovernanceRules({
+      quizPassThresholdPct: Number(e.target.value)
+    }),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-lg font-bold text-stone-900"
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[24px] border border-stone-200/85 overflow-hidden shadow-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setExpandedSettingKey(expandedSettingKey === "cadre_limits" ? null : "cadre_limits"),
+    className: "w-full p-6 sm:px-7 flex items-center justify-between text-right hover:bg-stone-50/60 transition"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-lg font-bold text-stone-900"
+  }, "حدود الإعدادات الشخصية للكادر"), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-normal text-stone-500 mt-0.5"
+  }, "تحديد ما يُسمح للكادر بتعديله بنفسه داخل حسابه الشخصي")), /*#__PURE__*/React.createElement("span", {
+    className: "w-10 h-10 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-lg font-bold"
+  }, expandedSettingKey === "cadre_limits" ? "−" : "+")), expandedSettingKey === "cadre_limits" && /*#__PURE__*/React.createElement("div", {
+    className: "bg-[#FAF9F6] border-t border-stone-200/70 p-6 sm:p-7 grid grid-cols-1 md:grid-cols-3 gap-4"
+  }, [{
+    key: "allowCadreNameEdit",
+    label: "السماح للكادر بتعديل اسمه الشخصي"
+  }, {
+    key: "allowCadreScheduleChange",
+    label: "السماح للكادر بتعديل مواعيد التزامه"
+  }, {
+    key: "allowCadrePasswordChange",
+    label: "السماح للكادر بتغيير كلمة المرور"
+  }].map(item => /*#__PURE__*/React.createElement("label", {
+    key: item.key,
+    className: "flex items-center justify-between p-4 rounded-2xl bg-white border border-stone-200 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-medium text-stone-800"
+  }, item.label), /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: Boolean(rules[item.key]),
+    onChange: e => updateGovernanceRules({
+      [item.key]: e.target.checked
+    }),
+    className: "w-5 h-5 accent-stone-900"
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[24px] border border-stone-200/85 overflow-hidden shadow-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setExpandedSettingKey(expandedSettingKey === "cloud" ? null : "cloud"),
+    className: "w-full p-6 sm:px-7 flex items-center justify-between text-right hover:bg-stone-50/60 transition"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-lg font-bold text-stone-900"
+  }, "الربط السحابي والنسخ الاحتياطي"), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-normal text-stone-500 mt-0.5"
+  }, cloudStatus === "connected" ? `متصل بقاعدة البيانات السحابية • آخر مزامنة: ${lastSyncAt || "الآن"}` : "يعمل حالياً بالذاكرة المحلية للمتصفح")), /*#__PURE__*/React.createElement("span", {
+    className: "w-10 h-10 rounded-full bg-[#F2F0EA] text-stone-800 flex items-center justify-center text-lg font-bold"
+  }, expandedSettingKey === "cloud" ? "−" : "+")), expandedSettingKey === "cloud" && /*#__PURE__*/React.createElement("div", {
+    className: "bg-[#FAF9F6] border-t border-stone-200/70 p-6 sm:p-7 flex flex-wrap items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onOpenCloudSetup,
+    className: "px-5 py-2.5 rounded-full bg-stone-900 text-white text-sm font-bold"
+  }, "إعداد ومزامنة قاعدة البيانات السحابية"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onResetDemo,
+    className: "px-5 py-2.5 rounded-full bg-white border border-stone-200 text-stone-700 text-sm font-medium hover:bg-stone-100"
+  }, "إعادة ضبط البيانات الافتراضية"))))))));
+}
+
+// ============================================================================
+// 9.6 PLATFORM ADMIN PORTAL V2 (نسخة كلاود — مستقلة تماماً عن النسخة السابقة)
+// مبادئ: شاشة واحدة = سؤال واحد = إجراء أساسي واحد • بيانات حقيقية فقط • حفظ صريح
+// ============================================================================
+const PA2_PASTELS = [{
+  bg: "bg-[#FCEBD7]",
+  ink: "text-[#9A4A12]",
+  dot: "bg-[#E8833A]"
+}, {
+  bg: "bg-[#DFF0E4]",
+  ink: "text-[#246343]",
+  dot: "bg-[#3E9B6A]"
+}, {
+  bg: "bg-[#ECE7FA]",
+  ink: "text-[#4F3E8F]",
+  dot: "bg-[#7C68C9]"
+}, {
+  bg: "bg-[#FBE3E0]",
+  ink: "text-[#97382F]",
+  dot: "bg-[#D9645A]"
+}, {
+  bg: "bg-[#E4EEF7]",
+  ink: "text-[#2D5579]",
+  dot: "bg-[#4F86B8]"
+}];
+const pa2DeptTone = (dept, idx) => {
+  if (dept.id === "dept_hr") return PA2_PASTELS[0];
+  if (dept.id === "dept_tarbawi") return PA2_PASTELS[1];
+  return PA2_PASTELS[[3, 4][idx % 2]];
+};
+const pa2TempPassword = () => {
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  const arr = new Uint32Array(6);
+  if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(arr);else for (let i = 0; i < 6; i++) arr[i] = Math.floor(Math.random() * 1e9);
+  let out = "";
+  for (let i = 0; i < 6; i++) out += chars[arr[i] % chars.length];
+  return out;
+};
+const pa2Copy = text => {
+  try {
+    navigator.clipboard && navigator.clipboard.writeText(text);
+  } catch (e) {}
+};
+const pa2Short = name => (name || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
+const pa2RoleLabel = u => {
+  if (!u) return "";
+  if (u.roleType === "platform_admin") return "إدارة المنصة";
+  if (u.roleType === "executive") return "الإدارة التنفيذية";
+  if (u.roleType === "operational_admin" || u.roleType === "admin") return "مدير إدارة";
+  return "كادر";
+};
+
+// ----- أيقونات خطية هادئة (بديل الإيموجي في التنقل) -----
+function PA2Icon({
+  name,
+  className = "w-[18px] h-[18px]"
+}) {
+  const p = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  };
+  const paths = {
+    home: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M3 10.5 12 3l9 7.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M5 9.5V20h14V9.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M10 20v-5h4v5"
+    })),
+    tree: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "9",
+      y: "3",
+      width: "6",
+      height: "5",
+      rx: "1.5"
+    }), /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "3",
+      y: "16",
+      width: "6",
+      height: "5",
+      rx: "1.5"
+    }), /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "15",
+      y: "16",
+      width: "6",
+      height: "5",
+      rx: "1.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 8v4M6 16v-4h12v4"
+    })),
+    users: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "9",
+      cy: "8",
+      r: "3.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M16 4.8a3.3 3.3 0 0 1 0 6.4M18 14.8c1.8.7 3 2.5 3.5 5.2"
+    })),
+    sliders: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"
+    }), /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "16",
+      cy: "6",
+      r: "2"
+    }), /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "10",
+      cy: "12",
+      r: "2"
+    }), /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "18",
+      cy: "18",
+      r: "2"
+    })),
+    logout: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M10 16l-4-4 4-4M6 12h10"
+    })),
+    plus: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 5v14M5 12h14"
+    }),
+    close: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M6 6l12 12M18 6 6 18"
+    }),
+    chevron: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M15 6l-6 6 6 6"
+    }),
+    search: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "11",
+      cy: "11",
+      r: "6.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M20 20l-4-4"
+    })),
+    copy: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "8",
+      y: "8",
+      width: "12",
+      height: "12",
+      rx: "2"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"
+    })),
+    eye: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"
+    }), /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "12",
+      cy: "12",
+      r: "3"
+    })),
+    spark: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"
+    }),
+    check: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M5 12.5l4.5 4.5L19 7.5"
+    }),
+    cloud: /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.75 4.75 0 0 1-.5 9.5H7Z"
+    }),
+    key: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "8",
+      cy: "15",
+      r: "4"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M11 12l9-9M17 6l2.5 2.5M14.5 8.5 16.5 10.5"
+    })),
+    swap: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"
+    })),
+    megaphone: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1Z"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"
+    })),
+    send: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M21 3 10 14"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M21 3l-7 18-4-7-7-4 18-7Z"
+    })),
+    user: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "12",
+      cy: "8",
+      r: "4"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M4 21c1-4 4.5-6 8-6s7 2 8 6"
+    })),
+    chart: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M4 20V10M10 20V4M16 20v-7M22 20H2"
+    })),
+    tasks: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M9 6h11M9 12h11M9 18h11"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M3.5 6l1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17"
+    })),
+    cog: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("circle", {
+      ...p,
+      cx: "12",
+      cy: "12",
+      r: "3"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"
+    })),
+    archive: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "3",
+      y: "4",
+      width: "18",
+      height: "4",
+      rx: "1"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"
+    })),
+    building: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "4",
+      y: "3",
+      width: "16",
+      height: "18",
+      rx: "1.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2M10 21v-3h4v3"
+    })),
+    download: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 4v11M7 10l5 5 5-5M5 20h14"
+    })),
+    upload: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 20V9M7 14l5-5 5 5M5 4h14"
+    })),
+    shield: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6l7-3Z"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M9 12.2l2 2 4-4"
+    })),
+    lock: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("rect", {
+      ...p,
+      x: "5",
+      y: "11",
+      width: "14",
+      height: "10",
+      rx: "2.5"
+    }), /*#__PURE__*/React.createElement("path", {
+      ...p,
+      d: "M8 11V7a4 4 0 0 1 8 0v4"
+    }))
+  };
+  return /*#__PURE__*/React.createElement("svg", {
+    viewBox: "0 0 24 24",
+    className: className,
+    "aria-hidden": "true"
+  }, paths[name]);
+}
+
+// ----- عناصر تحكم أساسية -----
+function PA2Label({
+  children,
+  hint
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mb-2 flex items-baseline justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-stone-500"
+  }, children), hint && /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-400"
+  }, hint));
+}
+const pa2InputCls = "w-full h-11 rounded-2xl bg-[#F4F2EE] border border-transparent px-4 text-[15px] text-stone-900 placeholder:text-stone-400 focus:outline-none focus:bg-white focus:border-stone-300 transition";
+function PA2Stepper({
+  value,
+  onChange,
+  min = 0,
+  max = 99,
+  suffix
+}) {
+  const v = Number(value) || 0;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex items-center h-11 rounded-2xl bg-[#F4F2EE] p-1"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onChange(Math.min(max, v + 1)),
+    className: "w-9 h-9 rounded-xl bg-white text-stone-700 text-lg leading-none hover:bg-stone-50 shadow-sm"
+  }, "+"), /*#__PURE__*/React.createElement("span", {
+    className: "min-w-[56px] text-center text-[15px] font-semibold text-stone-900 tabular-nums"
+  }, v, suffix ? /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400 font-normal text-[13px]"
+  }, " ", suffix) : null), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onChange(Math.max(min, v - 1)),
+    className: "w-9 h-9 rounded-xl bg-white text-stone-700 text-lg leading-none hover:bg-stone-50 shadow-sm"
+  }, "−"));
+}
+function PA2Segmented({
+  options,
+  value,
+  onChange,
+  size = "md"
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex rounded-full bg-[#ECE9E3] p-1"
+  }, options.map(o => /*#__PURE__*/React.createElement("button", {
+    key: o.value,
+    type: "button",
+    onClick: () => onChange(o.value),
+    className: `${size === "sm" ? "h-8 px-3.5 text-[13px]" : "h-9 px-4 text-[14px]"} rounded-full transition ${value === o.value ? "bg-white text-stone-900 font-semibold shadow-sm" : "text-stone-500 hover:text-stone-800"}`
+  }, o.label)));
+}
+function PA2Switch({
+  checked,
+  onChange
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    role: "switch",
+    "aria-checked": checked,
+    onClick: () => onChange(!checked),
+    className: `relative w-12 h-7 rounded-full transition shrink-0 ${checked ? "bg-stone-900" : "bg-stone-300"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${checked ? "left-1" : "left-6"}`
+  }));
+}
+function PA2Avatar({
+  user,
+  size = "w-10 h-10"
+}) {
+  const tone = user?.roleType === "executive" ? PA2_PASTELS[2] : user?.roleType === "platform_admin" ? {
+    bg: "bg-stone-900",
+    ink: "text-white"
+  } : user?.departmentId === "dept_tarbawi" ? PA2_PASTELS[1] : user?.roleType === "cadre" ? PA2_PASTELS[4] : PA2_PASTELS[0];
+  const clean = (user?.name || "؟").replace(/^(د\.|أ\.|م\.)\s*/, "");
+  return /*#__PURE__*/React.createElement("span", {
+    className: `${size} ${tone.bg} ${tone.ink} rounded-full inline-flex items-center justify-center text-[15px] font-semibold shrink-0`
+  }, clean.charAt(0));
+}
+function PA2PanelShell({
+  eyebrow,
+  title,
+  onClose,
+  children,
+  footer
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] shadow-[0_1px_2px_rgba(28,25,23,0.04),0_12px_32px_-12px_rgba(28,25,23,0.12)] flex flex-col lg:max-h-[calc(100vh-48px)]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-6 pt-6 pb-4 flex items-start justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-orange-700 font-medium"
+  }, eyebrow), /*#__PURE__*/React.createElement("h3", {
+    className: "text-[22px] font-bold text-stone-900 mt-1 leading-snug break-words"
+  }, title)), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "w-9 h-9 rounded-full bg-[#F4F2EE] text-stone-500 hover:text-stone-900 inline-flex items-center justify-center shrink-0",
+    "aria-label": "إغلاق"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "close",
+    className: "w-4 h-4"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "px-6 pb-6 space-y-5 overflow-y-auto"
+  }, children), footer && /*#__PURE__*/React.createElement("div", {
+    className: "px-6 py-4 border-t border-stone-100 bg-white rounded-b-[28px]"
+  }, footer));
+}
+function PA2EmptyPanel({
+  title,
+  text
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[28px] border-2 border-dashed border-stone-200 p-8 text-center"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-14 h-14 rounded-full bg-white mx-auto inline-flex items-center justify-center text-stone-400 shadow-sm"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "eye",
+    className: "w-6 h-6"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-[17px] font-semibold text-stone-800 mt-4"
+  }, title), /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-500 mt-1.5 leading-relaxed"
+  }, text));
+}
+function PA2DangerAction({
+  label,
+  confirmLabel,
+  onConfirm
+}) {
+  const [armed, setArmed] = useState(false);
+  if (!armed) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setArmed(true),
+      className: "text-[13px] text-rose-600 hover:text-rose-700"
+    }, label);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onConfirm,
+    className: "h-9 px-4 rounded-full bg-rose-600 text-white text-[13px] font-semibold"
+  }, confirmLabel), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setArmed(false),
+    className: "h-9 px-3 rounded-full text-[13px] text-stone-500 hover:text-stone-800"
+  }, "تراجع"));
+}
+function PA2SaveFooter({
+  dirty,
+  onSave,
+  saveLabel = "حفظ التغييرات",
+  extra,
+  danger
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onSave,
+    disabled: !dirty,
+    className: `h-11 px-6 rounded-full text-[14px] font-semibold transition ${dirty ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+  }, saveLabel), extra, /*#__PURE__*/React.createElement("span", {
+    className: "mr-auto text-[12px] text-stone-400"
+  }, dirty ? "تغييرات غير محفوظة" : "لا توجد تغييرات")), danger && /*#__PURE__*/React.createElement("div", null, danger));
+}
+
+// ----- لوحة تفاصيل الإدارة (إنشاء/تعديل بنفس اللوحة، بمسودة وحفظ صريح) -----
+function PA2DeptPanel({
+  dept,
+  isNew,
+  managerId,
+  managerOptions,
+  cadreCount,
+  onSave,
+  onDelete,
+  onPreview,
+  onClose
+}) {
+  const [draft, setDraft] = useState(() => ({
+    name: dept?.name || "",
+    description: dept?.description || "",
+    managerId: managerId || "",
+    maxTotalTasks: dept?.maxTotalTasks ?? 6,
+    maxPerTypePerCadre: dept?.maxPerTypePerCadre ?? 2,
+    allowedTaskTypes: dept?.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"],
+    enabled: dept ? dept.enabled !== false : true
+  }));
+  const initial = React.useRef(JSON.stringify(draft));
+  const dirty = isNew ? draft.name.trim().length > 0 : JSON.stringify(draft) !== initial.current;
+  const set = (k, v) => setDraft(d => ({
+    ...d,
+    [k]: v
+  }));
+  const toggleType = id => set("allowedTaskTypes", draft.allowedTaskTypes.includes(id) ? draft.allowedTaskTypes.filter(t => t !== id) : [...draft.allowedTaskTypes, id]);
+  const save = () => {
+    if (!draft.name.trim()) return;
+    onSave(draft);
+    initial.current = JSON.stringify(draft);
+  };
+  const selectedMgr = managerOptions.find(m => m.id === draft.managerId);
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: isNew ? "إدارة جديدة" : dept.isCore ? "إدارة تشغيلية أساسية" : "إدارة تشغيلية",
+    title: isNew ? draft.name.trim() || "تأسيس إدارة" : dept.name,
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: dirty,
+      onSave: save,
+      saveLabel: isNew ? "تأسيس الإدارة" : "حفظ التغييرات",
+      extra: !isNew && managerId ? /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => onPreview(managerId),
+        className: "h-11 px-4 rounded-full bg-white border border-stone-200 text-[14px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "eye",
+        className: "w-4 h-4"
+      }), " معاينة") : null,
+      danger: !isNew && !dept.isCore ? /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "حذف هذه الإدارة",
+        confirmLabel: "تأكيد الحذف",
+        onConfirm: onDelete
+      }) : null
+    })
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم الإدارة"), /*#__PURE__*/React.createElement("input", {
+    className: pa2InputCls,
+    value: draft.name,
+    onChange: e => set("name", e.target.value),
+    placeholder: "مثال: إدارة الإعلام",
+    autoFocus: isNew
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الوصف"), /*#__PURE__*/React.createElement("textarea", {
+    rows: 2,
+    className: pa2InputCls + " h-auto py-3 leading-relaxed resize-none",
+    value: draft.description,
+    onChange: e => set("description", e.target.value),
+    placeholder: "ما الذي تتابعه هذه الإدارة؟"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "مدير الإدارة"), /*#__PURE__*/React.createElement("select", {
+    className: pa2InputCls,
+    value: draft.managerId,
+    onChange: e => set("managerId", e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— بدون مدير حالياً —"), managerOptions.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.name, " · ", m.hint))), selectedMgr && selectedMgr.id !== managerId && selectedMgr.willMove && /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-amber-700 mt-2 leading-relaxed"
+  }, "سيُنقل هذا الحساب إلى مستوى مديري الإدارات ويتولى هذه الإدارة.")), /*#__PURE__*/React.createElement("div", {
+    className: "pt-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[15px] font-semibold text-stone-900 mb-3"
+  }, "حدود المهام"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "إجمالي المهام"), /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: draft.maxTotalTasks,
+    min: 1,
+    max: 20,
+    onChange: v => set("maxTotalTasks", v)
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "لكل نوع للكادر"), /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: draft.maxPerTypePerCadre,
+    min: 1,
+    max: 10,
+    onChange: v => set("maxPerTypePerCadre", v)
+  })))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: `${draft.allowedTaskTypes.length} من ${TASK_TEMPLATES_LIBRARY.length}`
+  }, "أنواع المهام المسموحة"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2"
+  }, TASK_TEMPLATES_LIBRARY.map(t => {
+    const on = draft.allowedTaskTypes.includes(t.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      type: "button",
+      onClick: () => toggleType(t.id),
+      className: `h-9 px-3.5 rounded-full text-[13px] border transition inline-flex items-center gap-1.5 ${on ? "bg-stone-900 border-stone-900 text-white" : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"}`
+    }, /*#__PURE__*/React.createElement("span", null, t.icon), t.title);
+  })), draft.allowedTaskTypes.length === 0 && /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-amber-700 mt-2"
+  }, "بدون أنواع مسموحة لن يستطيع المدير إسناد أي مهمة.")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[15px] font-semibold text-stone-900"
+  }, "حالة الإدارة"), !isNew && /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 mt-0.5"
+  }, cadreCount, " كادر مسجّل فيها")), /*#__PURE__*/React.createElement(PA2Segmented, {
+    size: "sm",
+    value: draft.enabled ? "on" : "off",
+    onChange: v => set("enabled", v === "on"),
+    options: [{
+      value: "on",
+      label: "مفعّلة"
+    }, {
+      value: "off",
+      label: "موقوفة"
+    }]
+  })));
+}
+
+// ----- لوحة تفاصيل الوحدة -----
+function PA2UnitPanel({
+  unit,
+  isNew,
+  leaderOptions,
+  cadreCount,
+  canDelete,
+  onSave,
+  onDelete,
+  onClose,
+  showToast
+}) {
+  const [draft, setDraft] = useState(() => ({
+    name: unit?.name || "",
+    leaderUserId: unit?.leaderUserId || "",
+    inviteCode: unit?.inviteCode || ""
+  }));
+  const initial = React.useRef(JSON.stringify(draft));
+  const dirty = isNew ? draft.name.trim().length > 0 : JSON.stringify(draft) !== initial.current;
+  const set = (k, v) => setDraft(d => ({
+    ...d,
+    [k]: v
+  }));
+  const save = () => {
+    if (!draft.name.trim()) return;
+    onSave(draft);
+    initial.current = JSON.stringify(draft);
+  };
+  const joinLink = unit?.inviteCode ? `${window.location.origin}/?join=${unit.inviteCode}` : "";
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: isNew ? "وحدة جديدة" : "وحدة تنظيمية",
+    title: isNew ? draft.name.trim() || "تأسيس وحدة" : unit.name,
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: dirty,
+      onSave: save,
+      saveLabel: isNew ? "تأسيس الوحدة" : "حفظ التغييرات",
+      danger: !isNew && canDelete ? /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "حذف هذه الوحدة",
+        confirmLabel: "تأكيد الحذف",
+        onConfirm: onDelete
+      }) : null
+    })
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم الوحدة"), /*#__PURE__*/React.createElement("input", {
+    className: pa2InputCls,
+    value: draft.name,
+    onChange: e => set("name", e.target.value),
+    placeholder: "مثال: وحدة الشباب",
+    autoFocus: isNew
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "قائد الوحدة"), /*#__PURE__*/React.createElement("select", {
+    className: pa2InputCls,
+    value: draft.leaderUserId,
+    onChange: e => set("leaderUserId", e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— بدون قائد حالياً —"), leaderOptions.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.name, " · ", m.hint)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: isNew ? "يُولَّد تلقائياً إن تُرك فارغاً" : null
+  }, "رمز الانضمام"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    className: pa2InputCls + " font-mono tracking-wider text-left uppercase",
+    value: draft.inviteCode,
+    onChange: e => set("inviteCode", e.target.value.toUpperCase()),
+    placeholder: "MAYDAN-XXXX"
+  }), !isNew && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      pa2Copy(joinLink);
+      showToast("تم نسخ رابط الانضمام ✓");
+    },
+    className: "h-11 px-4 rounded-2xl bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "copy",
+    className: "w-4 h-4"
+  }), " نسخ الرابط")), !isNew && /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-stone-400 mt-2"
+  }, "يرسل هذا الرابط للكوادر الجدد لينضموا للوحدة مباشرة.")), !isNew && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] px-4 py-3.5 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] text-stone-600"
+  }, "الكوادر المنضمّون"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[20px] font-bold text-stone-900 tabular-nums"
+  }, cadreCount)));
+}
+
+// ----- لوحة تفاصيل القائد -----
+function PA2LeaderPanel({
+  user,
+  isNew,
+  isSelf,
+  departments,
+  deptManagers = {},
+  isUsernameTaken,
+  onSave,
+  onDelete,
+  onPreview,
+  onResetPassword,
+  onClose,
+  showToast
+}) {
+  const [draft, setDraft] = useState(() => ({
+    name: user?.name || "",
+    jobTitle: user?.jobTitle || "",
+    roleType: user ? user.roleType === "admin" ? "operational_admin" : user.roleType : "operational_admin",
+    departmentId: user?.departmentId || departments.find(d => !deptManagers[d.id])?.id || "",
+    username: user?.username || "",
+    password: isNew ? pa2TempPassword() : ""
+  }));
+  const [error, setError] = useState("");
+  const [revealedPassword, setRevealedPassword] = useState(null);
+  const initial = React.useRef(JSON.stringify(draft));
+  const dirty = isNew ? draft.name.trim() && draft.username.trim() : JSON.stringify(draft) !== initial.current;
+  const set = (k, v) => {
+    setError("");
+    setDraft(d => ({
+      ...d,
+      [k]: v
+    }));
+  };
+  const isPlatform = draft.roleType === "platform_admin";
+  const save = () => {
+    if (!draft.name.trim() || !draft.username.trim()) {
+      setError("الاسم واسم المستخدم مطلوبان.");
+      return;
+    }
+    if (isUsernameTaken(draft.username, user?.id)) {
+      setError("اسم المستخدم مستخدم لحساب آخر.");
+      return;
+    }
+    if (draft.roleType === "operational_admin" && !draft.departmentId) {
+      setError("اختر الإدارة التي سيديرها.");
+      return;
+    }
+    onSave(draft);
+    initial.current = JSON.stringify(draft);
+  };
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: isNew ? "حساب قيادي جديد" : isSelf ? "حسابك" : pa2RoleLabel(user),
+    title: isNew ? draft.name.trim() || "إضافة قائد" : user.name,
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: !!dirty,
+      onSave: save,
+      saveLabel: isNew ? "إنشاء الحساب" : "حفظ التغييرات",
+      extra: !isNew && !isSelf ? /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => onPreview(user.id),
+        className: "h-11 px-4 rounded-full bg-white border border-stone-200 text-[14px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "eye",
+        className: "w-4 h-4"
+      }), " معاينة") : null,
+      danger: !isNew && !isSelf ? /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "حذف هذا الحساب",
+        confirmLabel: "تأكيد الحذف",
+        onConfirm: onDelete
+      }) : null
+    })
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الاسم"), /*#__PURE__*/React.createElement("input", {
+    className: pa2InputCls,
+    value: draft.name,
+    onChange: e => set("name", e.target.value),
+    placeholder: "الاسم كما يظهر في المنصة",
+    autoFocus: isNew
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "المسمى الوظيفي"), /*#__PURE__*/React.createElement("input", {
+    className: pa2InputCls,
+    value: draft.jobTitle,
+    onChange: e => set("jobTitle", e.target.value),
+    placeholder: "مثال: عضو المكتب التنفيذي"
+  })), !isPlatform && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "مستوى الصلاحية"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: draft.roleType,
+    onChange: v => set("roleType", v),
+    options: [{
+      value: "executive",
+      label: "الإدارة التنفيذية"
+    }, {
+      value: "operational_admin",
+      label: "مدير إدارة"
+    }]
+  })), !isPlatform && draft.roleType === "operational_admin" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الإدارة التي يديرها"), /*#__PURE__*/React.createElement("select", {
+    className: pa2InputCls,
+    value: draft.departmentId || "",
+    onChange: e => set("departmentId", e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— اختر الإدارة —"), departments.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name, deptManagers[d.id] && deptManagers[d.id].id !== user?.id ? " · لها مدير" : ""))), draft.departmentId && deptManagers[draft.departmentId] && deptManagers[draft.departmentId].id !== user?.id && /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-amber-700 mt-2 leading-relaxed"
+  }, "سيحلّ محل ", deptManagers[draft.departmentId].name, " كمدير لهذه الإدارة.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    className: pa2InputCls + " text-left",
+    value: draft.username,
+    onChange: e => set("username", e.target.value.replace(/\s/g, "")),
+    placeholder: "username"
+  })), isNew ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "يُطلب تغييرها عند أول دخول"
+  }, "كلمة مرور مؤقتة"), /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    className: pa2InputCls + " font-mono text-left tracking-wider",
+    value: draft.password,
+    onChange: e => set("password", e.target.value)
+  })) : /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] font-semibold text-stone-800"
+  }, "كلمة المرور"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500 mt-0.5"
+  }, "لا تُعرض كلمات المرور الحالية.")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setRevealedPassword(onResetPassword(user.id)),
+    className: "h-9 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "key",
+    className: "w-4 h-4"
+  }), " إعادة تعيين")), revealedPassword && /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 rounded-xl bg-white p-3 flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500"
+  }, "كلمة المرور المؤقتة (تظهر مرة واحدة)"), /*#__PURE__*/React.createElement("div", {
+    dir: "ltr",
+    className: "font-mono text-[18px] font-semibold text-stone-900 tracking-widest text-right"
+  }, revealedPassword)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      pa2Copy(revealedPassword);
+      showToast("تم النسخ ✓");
+    },
+    className: "w-9 h-9 rounded-full bg-[#F4F2EE] text-stone-600 inline-flex items-center justify-center"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "copy",
+    className: "w-4 h-4"
+  })))), error && /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-rose-700 bg-rose-50 rounded-xl px-3.5 py-2.5"
+  }, error));
+}
+
+// ============================================================================
+// ----- بطاقة حماية البيانات: نسخة احتياطية + استيراد + استعادة بعبارة تأكيد -----
+const PA2_RESET_PHRASE = "إعادة الضبط";
+function PA2DataCard({
+  db,
+  setDb,
+  envMode,
+  disableReset,
+  onResetDemo,
+  showToast
+}) {
+  const [phrase, setPhrase] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [backupPw, setBackupPw] = useState("");
+  const [decryptPw, setDecryptPw] = useState("");
+  const [encFilePending, setEncFilePending] = useState(null);
+  const [pending, setPending] = useState(null);
+  const fileRef = useRef(null);
+  const exportBackup = async () => {
+    try {
+      const d = new Date(mxCoarseNow());
+      const dateTag = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      const cleanPw = backupPw.trim();
+      let payloadStr = "";
+      let name = `vault-backup-${dateTag}.json`;
+      if (cleanPw) {
+        const encObj = await MXVaultCrypto.encryptBackupFile(db, cleanPw);
+        payloadStr = JSON.stringify(encObj);
+        name = `vault-encrypted-${dateTag}.json`;
+      } else {
+        payloadStr = JSON.stringify(db, null, 2);
+      }
+      const blob = new Blob([payloadStr], {
+        type: "application/json"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setBackupPw("");
+      showToast(cleanPw ? "نُزّلت النسخة الاحتياطية المشفرة" : "نُزّلت النسخة الاحتياطية");
+    } catch (e) {
+      showToast("تعذّر إنشاء النسخة");
+    }
+  };
+  const onFile = e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > 8 * 1024 * 1024) {
+      showToast("الملف غير صالح");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const raw = safeJsonParse(String(reader.result || ""));
+        if (raw && raw.__maydan_encrypted_backup === "v1") {
+          setEncFilePending({
+            name: f.name,
+            encObj: raw
+          });
+          setPending(null);
+          return;
+        }
+        if (!raw || !Array.isArray(raw.users)) throw new Error("bad");
+        setEncFilePending(null);
+        setPending({
+          name: f.name,
+          data: normalizeDb(envMode === "live" ? {
+            ...raw,
+            isLiveVault: true
+          } : raw)
+        });
+      } catch (err) {
+        showToast("الملف غير صالح");
+      }
+    };
+    reader.readAsText(f);
+  };
+  const unlockPendingBackup = async () => {
+    if (!encFilePending || !decryptPw.trim()) return;
+    try {
+      const raw = await MXVaultCrypto.decryptBackupFile(encFilePending.encObj, decryptPw.trim());
+      if (!raw || !Array.isArray(raw.users)) throw new Error("bad");
+      setPending({
+        name: encFilePending.name,
+        data: normalizeDb(envMode === "live" ? {
+          ...raw,
+          isLiveVault: true
+        } : raw)
+      });
+      setEncFilePending(null);
+      setDecryptPw("");
+    } catch (e) {
+      showToast("كلمة مرور النسخة الاحتياطية غير صحيحة");
+    }
+  };
+  const ok = phrase.trim() === PA2_RESET_PHRASE;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] px-6 pt-5 pb-5"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-[17px] font-bold text-stone-900"
+  }, "النسخ الاحتياطي المشفر وحماية البيانات"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-500 mt-1"
+  }, "أدخل كلمة مرور لتشفير النسخة الاحتياطية قبل تنزيلها على جهازك."), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    dir: "ltr",
+    value: backupPw,
+    onChange: e => setBackupPw(e.target.value),
+    placeholder: "كلمة مرور تشفير النسخة (موصى به)",
+    className: pa2InputCls,
+    autoComplete: "new-password"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: exportBackup,
+    className: "h-10 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: backupPw.trim() ? "lock" : "download",
+    className: "w-4 h-4"
+  }), backupPw.trim() ? "تنزيل نسخة مشفرة" : "تنزيل نسخة احتياطية"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => fileRef.current && fileRef.current.click(),
+    className: "h-10 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "upload",
+    className: "w-4 h-4"
+  }), "استيراد نسخة"), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "application/json,.json",
+    className: "hidden",
+    onChange: onFile
+  })), encFilePending && /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 rounded-2xl bg-[#FAF9F6] border border-stone-200 px-4 py-3 space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-stone-800"
+  }, "النسخة «", encFilePending.name, "» محمية بالتشفير — أدخل كلمة مرورها:"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    dir: "ltr",
+    value: decryptPw,
+    onChange: e => setDecryptPw(e.target.value),
+    className: pa2InputCls,
+    autoComplete: "off"
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: unlockPendingBackup,
+    className: "h-10 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold shrink-0"
+  }, "فك التشفير"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setEncFilePending(null);
+      setDecryptPw("");
+    },
+    className: "h-10 px-3 text-[13px] text-stone-500 shrink-0"
+  }, "إلغاء"))), pending && /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 rounded-2xl bg-[#FFF3E2] px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-800"
+  }, "استبدال كل البيانات الحالية بالنسخة «", pending.name, "» (", pending.data.users.length, " حساباً)؟"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setDb(pending.data);
+      setPending(null);
+      showToast("استُعيدت النسخة بنجاح");
+    },
+    className: "h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold"
+  }, "تأكيد الاستيراد"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPending(null),
+    className: "h-9 px-3 text-[13px] text-stone-500"
+  }, "إلغاء"))), !disableReset && envMode !== "live" && /*#__PURE__*/React.createElement("div", {
+    className: "mt-5 pt-4 border-t border-stone-100"
+  }, !resetOpen ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => setResetOpen(true),
+    className: "text-[13px] text-rose-600 hover:text-rose-700"
+  }, "استعادة البيانات التجريبية…") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-800"
+  }, "يمسح تعديلات بيئة التجربة ويعيدها لحالتها الأولى. للتأكيد اكتب «", PA2_RESET_PHRASE, "»."), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: phrase,
+    onChange: e => setPhrase(e.target.value),
+    placeholder: PA2_RESET_PHRASE,
+    className: `${pa2InputCls} sm:max-w-[220px]`
+  }), /*#__PURE__*/React.createElement("button", {
+    disabled: !ok,
+    onClick: () => {
+      if (ok) {
+        setPhrase("");
+        setResetOpen(false);
+        onResetDemo();
+      }
+    },
+    className: `h-11 px-5 rounded-full text-[13px] font-semibold ${ok ? "bg-rose-600 text-white" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+  }, "استعادة نهائية"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setResetOpen(false);
+      setPhrase("");
+    },
+    className: "h-11 px-3 text-[13px] text-stone-500"
+  }, "تراجع")))));
+}
+function PlatformAdminPortalV2({
+  db,
+  setDb,
+  envMode = "demo",
+  currentUser,
+  cloudStatus,
+  lastSyncAt,
+  onOpenCloudSetup,
+  onPurgeLegacyPlaintext,
+  onQuickLock,
+  onPreviewUser,
+  onResetDemo,
+  onLogout,
+  onSwitchVariant,
+  showToast
+}) {
+  const qp = (k, d) => mxGetBootParam(k, d);
+  const initialSelect = qp("select", null);
+  const [screen, setScreen] = useState(() => {
+    const s = qp("screen", "overview");
+    return ["overview", "structure", "leaders", "rules"].includes(s) ? s : "overview";
+  });
+  const [mapMode, setMapMode] = useState(() => qp("mode", "map"));
+  // التحديد في الهيكل: { kind: 'dept'|'unit', id } أو { kind: 'new_dept' | 'new_unit' }
+  const [structSel, setStructSel] = useState(() => {
+    if (!initialSelect) return null;
+    if (initialSelect.startsWith("dept_")) return {
+      kind: "dept",
+      id: initialSelect
+    };
+    if (initialSelect.startsWith("unit_")) return {
+      kind: "unit",
+      id: initialSelect
+    };
+    if (initialSelect === "new_dept" || initialSelect === "new_unit") return {
+      kind: initialSelect
+    };
+    return null;
+  });
+  const [leaderSel, setLeaderSel] = useState(() => initialSelect && (initialSelect.startsWith("u_") || initialSelect === "new_leader") ? initialSelect : null);
+  const [leaderFilter, setLeaderFilter] = useState("all");
+  const [leaderSearch, setLeaderSearch] = useState("");
+  const [showAllGaps, setShowAllGaps] = useState(false);
+  const [savedPulse, setSavedPulse] = useState(false);
+  const [resetArmed, setResetArmed] = useState(false);
+  const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+  const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+  const rules = {
+    ...DEFAULT_GOVERNANCE_RULES,
+    ...(db.systemConfig?.governanceRules || {})
+  };
+  const leaders = useMemo(() => db.users.filter(u => u.roleType !== "cadre"), [db.users]);
+  const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+  const executives = leaders.filter(u => u.roleType === "executive");
+  const isOperational = u => u.roleType === "operational_admin" || u.roleType === "admin";
+  const findDeptManager = deptId => leaders.find(u => isOperational(u) && (u.departmentId || (u.roleType === "admin" ? "dept_hr" : null)) === deptId) || null;
+  const findUnitLeader = unit => (unit.leaderUserId ? db.users.find(u => u.id === unit.leaderUserId) : null) || null;
+  const unitCadreCount = unit => cadres.filter(c => c.unit === unit.name).length;
+  const deptCadreCount = dept => cadres.filter(c => Array.isArray(c.assignedDepartments) ? c.assignedDepartments.includes(dept.id) : dept.isCore).length;
+
+  // ---------- فحوصات الجاهزية (حقيقية بالكامل) ----------
+  const gaps = [];
+  if (executives.length === 0) gaps.push({
+    key: "exec",
+    text: "لا يوجد حساب في الإدارة التنفيذية",
+    go: () => {
+      setScreen("leaders");
+      setLeaderSel("new_leader");
+    }
+  });
+  departments.forEach(d => {
+    if (!findDeptManager(d.id)) gaps.push({
+      key: "m_" + d.id,
+      text: `${d.name} بدون مدير`,
+      go: () => {
+        setScreen("structure");
+        setStructSel({
+          kind: "dept",
+          id: d.id
+        });
+      }
+    });
+    if (d.enabled !== false && (!d.allowedTaskTypes || d.allowedTaskTypes.length === 0)) gaps.push({
+      key: "t_" + d.id,
+      text: `${d.name} بلا أنواع مهام مسموحة`,
+      go: () => {
+        setScreen("structure");
+        setStructSel({
+          kind: "dept",
+          id: d.id
+        });
+      }
+    });
+  });
+  units.forEach(u => {
+    if (!findUnitLeader(u)) gaps.push({
+      key: "l_" + u.id,
+      text: `${u.name} بدون قائد`,
+      go: () => {
+        setScreen("structure");
+        setStructSel({
+          kind: "unit",
+          id: u.id
+        });
+      }
+    });
+  });
+  const deptsWithMgr = departments.filter(d => findDeptManager(d.id)).length;
+  const unitsWithLeader = units.filter(u => findUnitLeader(u)).length;
+  const deptsWithTypes = departments.filter(d => (d.allowedTaskTypes || []).length > 0).length;
+  const totalChecks = departments.length * 2 + units.length + 1;
+  const passedChecks = deptsWithMgr + deptsWithTypes + unitsWithLeader + (executives.length > 0 ? 1 : 0);
+  const readiness = totalChecks ? Math.round(passedChecks / totalChecks * 100) : 100;
+
+  // ---------- عمليات التعديل ----------
+  const patchConfig = patch => setDb(prev => ({
+    ...prev,
+    systemConfig: {
+      ...prev.systemConfig,
+      ...patch(prev.systemConfig || {})
+    }
+  }));
+  const pulseSaved = () => {
+    setSavedPulse(true);
+    clearTimeout(window.__pa2SavedT);
+    window.__pa2SavedT = setTimeout(() => setSavedPulse(false), 1600);
+  };
+  const managerOptions = leaders.filter(u => u.roleType !== "platform_admin").map(u => {
+    const d = isOperational(u) ? departments.find(x => x.id === u.departmentId) : null;
+    return {
+      id: u.id,
+      name: pa2Short(u.name),
+      hint: d ? `يدير ${d.shortName || d.name}` : pa2RoleLabel(u),
+      willMove: true
+    };
+  });
+  const unitLeaderOptions = db.users.filter(u => u.roleType !== "platform_admin").map(u => ({
+    id: u.id,
+    name: pa2Short(u.name),
+    hint: u.roleType === "cadre" ? u.unit || "كادر" : pa2RoleLabel(u)
+  }));
+  const applyManager = (users, deptId, deptName, newMgrId) => users.map(u => {
+    if (u.id === newMgrId) return {
+      ...u,
+      roleType: "operational_admin",
+      departmentId: deptId,
+      jobTitle: `مدير ${deptName}`
+    };
+    if (isOperational(u) && u.departmentId === deptId && u.id !== newMgrId) return {
+      ...u,
+      departmentId: null
+    };
+    return u;
+  });
+  const saveDept = (deptId, draft) => {
+    const isNew = !deptId;
+    const id = deptId || mxRandomId("dept");
+    const name = draft.name.trim();
+    setDb(prev => {
+      const list = prev.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+      const fields = {
+        name,
+        shortName: name.replace(/^(إدارة|الإدارة)\s+/, "") || name,
+        description: draft.description.trim(),
+        maxTotalTasks: draft.maxTotalTasks,
+        maxPerTypePerCadre: draft.maxPerTypePerCadre,
+        allowedTaskTypes: draft.allowedTaskTypes,
+        enabled: draft.enabled
+      };
+      const nextList = isNew ? [...list, {
+        id,
+        icon: "🏛️",
+        isCore: false,
+        ...fields
+      }] : list.map(d => d.id === id ? {
+        ...d,
+        ...fields
+      } : d);
+      const currentMgr = prev.users.find(u => isOperational(u) && u.departmentId === id);
+      let users = prev.users;
+      if ((draft.managerId || "") !== (currentMgr?.id || "")) {
+        users = draft.managerId ? applyManager(prev.users, id, name, draft.managerId) : prev.users.map(u => currentMgr && u.id === currentMgr.id ? {
+          ...u,
+          departmentId: null
+        } : u);
+      }
+      return {
+        ...prev,
+        users,
+        systemConfig: {
+          ...prev.systemConfig,
+          departments: nextList
+        }
+      };
+    });
+    if (isNew) setStructSel({
+      kind: "dept",
+      id
+    });
+    showToast(isNew ? "تم تأسيس الإدارة ✓" : "تم حفظ التغييرات ✓");
+  };
+  const deleteDept = deptId => {
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => isOperational(u) && u.departmentId === deptId ? {
+        ...u,
+        departmentId: null
+      } : u),
+      systemConfig: {
+        ...prev.systemConfig,
+        departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).filter(d => d.id !== deptId)
+      }
+    }));
+    setStructSel(null);
+    showToast("تم حذف الإدارة");
+  };
+  const saveUnit = (unitId, draft) => {
+    const isNew = !unitId;
+    const id = unitId || mxRandomId("unit");
+    const name = draft.name.trim();
+    if (units.some(u => u.name === name && u.id !== unitId)) {
+      showToast("يوجد وحدة بنفس الاسم");
+      return;
+    }
+    const code = (draft.inviteCode || "").trim().toUpperCase() || "MAYDAN-U" + (units.length + 1);
+    setDb(prev => {
+      const list = prev.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+      const old = list.find(u => u.id === id);
+      const nextList = isNew ? [...list, {
+        id,
+        name,
+        inviteCode: code,
+        leaderUserId: draft.leaderUserId || null,
+        defaultDepartments: ["dept_hr", "dept_tarbawi"]
+      }] : list.map(u => u.id === id ? {
+        ...u,
+        name,
+        inviteCode: code,
+        leaderUserId: draft.leaderUserId || null
+      } : u);
+      // إعادة تسمية الوحدة تنعكس على كوادرها
+      const users = old && old.name !== name ? prev.users.map(u => u.unit === old.name ? {
+        ...u,
+        unit: name
+      } : u) : prev.users;
+      return {
+        ...prev,
+        users,
+        systemConfig: {
+          ...prev.systemConfig,
+          organizationalUnits: nextList
+        }
+      };
+    });
+    if (isNew) setStructSel({
+      kind: "unit",
+      id
+    });
+    showToast(isNew ? "تم تأسيس الوحدة ✓" : "تم حفظ التغييرات ✓");
+  };
+  const deleteUnit = unitId => {
+    if (units.length <= 1) {
+      showToast("يجب الإبقاء على وحدة واحدة على الأقل");
+      return;
+    }
+    patchConfig(cfg => ({
+      organizationalUnits: (cfg.organizationalUnits || DEFAULT_UNITS).filter(u => u.id !== unitId)
+    }));
+    setStructSel(null);
+    showToast("تم حذف الوحدة");
+  };
+  const isUsernameTaken = (name, ignoreId) => {
+    const clean = name.trim().toLowerCase();
+    return db.users.some(u => u.id !== ignoreId && (u.username || "").toLowerCase() === clean);
+  };
+  const saveLeader = (userId, draft) => {
+    const isNew = !userId;
+    const id = userId || mxRandomId("u");
+    setDb(prev => {
+      let users = prev.users;
+      const role = draft.roleType;
+      const deptId = role === "operational_admin" ? draft.departmentId : null;
+      // مدير واحد لكل إدارة: يُفك ارتباط المدير السابق
+      if (deptId) users = users.map(u => u.id !== id && isOperational(u) && u.departmentId === deptId ? {
+        ...u,
+        departmentId: null
+      } : u);
+      const deptObj = (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).find(d => d.id === deptId);
+      const base = {
+        name: draft.name.trim(),
+        jobTitle: draft.jobTitle.trim() || (deptObj ? `مدير ${deptObj.name}` : pa2RoleLabel({
+          roleType: role
+        })),
+        roleType: role,
+        departmentId: deptId,
+        username: draft.username.trim(),
+        unit: role === "executive" ? "القيادة التنفيذية" : role === "platform_admin" ? "إدارة المنصة التقنية" : deptObj?.name || ""
+      };
+      if (isNew) return {
+        ...prev,
+        users: [...users, {
+          id,
+          ...base,
+          password: mxHashPw(draft.password || pa2TempPassword()),
+          mustChangePassword: true,
+          joinedAt: mxCoarseNow(),
+          tasksRecord: {}
+        }]
+      };
+      return {
+        ...prev,
+        users: users.map(u => u.id === id ? {
+          ...u,
+          ...base
+        } : u)
+      };
+    });
+    if (isNew) setLeaderSel(id);
+    showToast(isNew ? "تم إنشاء الحساب ✓" : "تم حفظ التغييرات ✓");
+  };
+  const deleteLeader = userId => {
+    if (userId === currentUser.id) return;
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.filter(u => u.id !== userId),
+      systemConfig: {
+        ...prev.systemConfig,
+        organizationalUnits: (prev.systemConfig?.organizationalUnits || DEFAULT_UNITS).map(un => un.leaderUserId === userId ? {
+          ...un,
+          leaderUserId: null
+        } : un)
+      }
+    }));
+    setLeaderSel(null);
+    showToast("تم حذف الحساب");
+  };
+  const resetPassword = userId => {
+    const temp = pa2TempPassword();
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => u.id === userId ? {
+        ...u,
+        password: mxHashPw(temp),
+        mustChangePassword: true
+      } : u)
+    }));
+    return temp;
+  };
+  const setRule = (key, value) => {
+    patchConfig(cfg => ({
+      governanceRules: {
+        ...DEFAULT_GOVERNANCE_RULES,
+        ...(cfg.governanceRules || {}),
+        [key]: value
+      }
+    }));
+    pulseSaved();
+  };
+  const go = s => {
+    setScreen(s);
+    window.scrollTo({
+      top: 0
+    });
+  };
+
+  // ---------- الهيكل العام ----------
+  const NAV = [{
+    id: "overview",
+    label: "نظرة عامة",
+    icon: "home",
+    badge: gaps.length || null
+  }, {
+    id: "structure",
+    label: "الهيكل التنظيمي",
+    icon: "tree"
+  }, {
+    id: "leaders",
+    label: "الحسابات والصلاحيات",
+    icon: "users"
+  }, {
+    id: "rules",
+    label: "ضوابط النظام",
+    icon: "sliders"
+  }];
+  const cloudOk = cloudStatus === "connected";
+  const firstName = pa2Short(currentUser.name);
+  const Header = ({
+    eyebrow,
+    title,
+    desc,
+    actions
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-orange-700"
+  }, eyebrow), /*#__PURE__*/React.createElement("h1", {
+    className: "text-[30px] sm:text-[34px] font-bold text-stone-900 leading-tight mt-1.5"
+  }, title), desc && /*#__PURE__*/React.createElement("p", {
+    className: "text-[15px] text-stone-500 mt-2 leading-relaxed max-w-xl"
+  }, desc)), actions && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0"
+  }, actions));
+  const PrimaryBtn = ({
+    onClick,
+    children
+  }) => /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: "h-11 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 inline-flex items-center gap-2 transition"
+  }, children);
+
+  // ---------- شاشة: نظرة عامة ----------
+  const renderOverview = () => {
+    const bars = [{
+      label: "إدارات لها مدير",
+      done: deptsWithMgr,
+      total: departments.length
+    }, {
+      label: "وحدات لها قائد",
+      done: unitsWithLeader,
+      total: units.length
+    }, {
+      label: "إدارات حُددت مهامها",
+      done: deptsWithTypes,
+      total: departments.length
+    }];
+    const visibleGaps = showAllGaps ? gaps : gaps.slice(0, 1);
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Header, {
+      eyebrow: "إدارة المنصة",
+      title: `أهلاً، ${firstName}`,
+      desc: "هذا هيكل ميدان كما هو الآن، وما يحتاج انتباهك قبل أن يبدأ الكوادر.",
+      actions: /*#__PURE__*/React.createElement(PrimaryBtn, {
+        onClick: () => {
+          go("structure");
+          setStructSel({
+            kind: "new_dept"
+          });
+        }
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), " إدارة جديدة")
+    }), gaps.length > 0 ? /*#__PURE__*/React.createElement("div", {
+      className: "rounded-[24px] bg-[#FFF3E2] px-6 py-5 mb-6"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col sm:flex-row sm:items-center gap-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-11 h-11 rounded-full bg-white text-orange-600 inline-flex items-center justify-center shrink-0"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "spark",
+      className: "w-5 h-5"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-medium text-orange-700"
+    }, "مساعد الإعداد"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[17px] font-semibold text-stone-900 mt-0.5"
+    }, gaps.length, " ", gaps.length === 1 ? "نقطة تحتاج" : "نقاط تحتاج", " انتباهك")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: gaps[0].go,
+      className: "h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800"
+    }, "معالجة الآن"), gaps.length > 1 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setShowAllGaps(v => !v),
+      className: "h-10 px-4 rounded-full text-[14px] text-stone-700 hover:bg-white/70"
+    }, showAllGaps ? "إخفاء" : "عرض الكل"))), /*#__PURE__*/React.createElement("div", {
+      className: "mt-4 sm:mr-[60px] divide-y divide-orange-200/60"
+    }, visibleGaps.map(g => /*#__PURE__*/React.createElement("button", {
+      key: g.key,
+      onClick: g.go,
+      className: "w-full flex items-center justify-between py-2.5 text-right group"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "flex items-center gap-2.5 text-[14px] text-stone-700"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-1.5 rounded-full bg-orange-500"
+    }), g.text), /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] text-orange-700 opacity-70 group-hover:opacity-100 inline-flex items-center gap-1"
+    }, "معالجة ", /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "chevron",
+      className: "w-3.5 h-3.5"
+    })))))) : /*#__PURE__*/React.createElement("div", {
+      className: "rounded-[24px] bg-[#E3F1E8] px-6 py-5 mb-6 flex items-center gap-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-11 h-11 rounded-full bg-white text-emerald-600 inline-flex items-center justify-center"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: "w-5 h-5"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-medium text-emerald-700"
+    }, "مساعد الإعداد"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[17px] font-semibold text-stone-900 mt-0.5"
+    }, "الهيكل مكتمل وجاهز للتشغيل"))), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-3 mb-10 flex flex-col md:flex-row gap-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "md:w-[300px] rounded-[22px] bg-[#1C1917] text-white p-6 flex flex-col justify-between min-h-[200px]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[14px] text-stone-400"
+    }, "جاهزية الهيكل"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[56px] font-bold leading-none tabular-nums"
+    }, readiness, /*#__PURE__*/React.createElement("span", {
+      className: "text-[28px] text-stone-500"
+    }, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-400 mt-3"
+    }, passedChecks, " من ", totalChecks, " فحوصات مكتملة"))), /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 px-4 py-4 md:px-6 flex flex-col justify-between gap-6"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-4"
+    }, bars.map(b => {
+      const pct = b.total ? Math.round(b.done / b.total * 100) : 100;
+      return /*#__PURE__*/React.createElement("div", {
+        key: b.label
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between mb-2"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] text-stone-600"
+      }, b.label), /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] font-semibold text-stone-900 tabular-nums"
+      }, b.done, " من ", b.total)), /*#__PURE__*/React.createElement("div", {
+        className: "h-2 rounded-full bg-[#F1EEE9] overflow-hidden"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: `h-full rounded-full ${pct === 100 ? "bg-emerald-500" : "bg-orange-500"}`,
+        style: {
+          width: `${pct}%`
+        }
+      })));
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-3 divide-x divide-x-reverse divide-stone-200 border-t border-stone-100 pt-4"
+    }, [{
+      n: departments.length,
+      l: "إدارات"
+    }, {
+      n: units.length,
+      l: "وحدات"
+    }, {
+      n: cadres.length,
+      l: "كوادر"
+    }].map(s => /*#__PURE__*/React.createElement("div", {
+      key: s.l,
+      className: "px-3 first:pr-0 text-right"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[24px] font-bold text-stone-900 tabular-nums"
+    }, s.n), /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-500"
+    }, s.l)))))), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between mb-4"
+    }, /*#__PURE__*/React.createElement("h2", {
+      className: "text-xl font-bold text-stone-900"
+    }, "مستويات المنصة"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => go("structure"),
+      className: "text-[14px] text-stone-500 hover:text-stone-900"
+    }, "عرض الهيكل")), /*#__PURE__*/React.createElement("div", {
+      className: "grid sm:grid-cols-2 xl:grid-cols-3 gap-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `${PA2_PASTELS[2].bg} rounded-[24px] p-6 flex flex-col min-h-[180px]`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `text-[13px] font-medium ${PA2_PASTELS[2].ink}`
+    }, "المستوى الأعلى"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[19px] font-bold text-stone-900 mt-1"
+    }, "الإدارة التنفيذية"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[14px] text-stone-600 mt-1.5"
+    }, executives.length ? pa2Short(executives[0].name) + (executives.length > 1 ? ` و${executives.length - 1} آخرون` : "") : "لا يوجد حساب بعد"), /*#__PURE__*/React.createElement("div", {
+      className: "mt-auto pt-5 flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] text-stone-500"
+    }, "المكتب التنفيذي"), executives[0] && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onPreviewUser(executives[0].id),
+      className: "h-8 px-3.5 rounded-full bg-white text-[13px] text-stone-800 hover:bg-white/80"
+    }, "معاينة الواجهة"))), departments.map((d, i) => {
+      const tone = pa2DeptTone(d, i);
+      const mgr = findDeptManager(d.id);
+      return /*#__PURE__*/React.createElement("div", {
+        key: d.id,
+        className: `${tone.bg} rounded-[24px] p-6 flex flex-col min-h-[180px] ${d.enabled === false ? "opacity-60" : ""}`
+      }, /*#__PURE__*/React.createElement("div", {
+        className: `text-[13px] font-medium ${tone.ink}`
+      }, d.enabled === false ? "إدارة موقوفة" : "إدارة تشغيلية"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => {
+          go("structure");
+          setStructSel({
+            kind: "dept",
+            id: d.id
+          });
+        },
+        className: "text-[19px] font-bold text-stone-900 mt-1 text-right hover:underline underline-offset-4 decoration-stone-300"
+      }, d.name), /*#__PURE__*/React.createElement("div", {
+        className: `text-[14px] mt-1.5 ${mgr ? "text-stone-600" : "text-orange-800"}`
+      }, mgr ? pa2Short(mgr.name) : "بدون مدير"), /*#__PURE__*/React.createElement("div", {
+        className: "mt-auto pt-5 flex items-center justify-between"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[13px] text-stone-500"
+      }, (d.allowedTaskTypes || []).length, " أنواع مهام · ", deptCadreCount(d), " كادر"), mgr && /*#__PURE__*/React.createElement("button", {
+        onClick: () => onPreviewUser(mgr.id),
+        className: "h-8 px-3.5 rounded-full bg-white text-[13px] text-stone-800 hover:bg-white/80"
+      }, "معاينة الواجهة")));
+    })));
+  };
+
+  // ---------- شاشة: الهيكل التنظيمي ----------
+  const renderStructurePanel = () => {
+    if (!structSel) return /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "اختر عنصراً من الهيكل",
+      text: "تظهر تفاصيل الإدارة أو الوحدة هنا لتعديلها، دون مغادرة الصفحة."
+    });
+    if (structSel.kind === "new_dept") {
+      return /*#__PURE__*/React.createElement(PA2DeptPanel, {
+        key: "new_dept",
+        isNew: true,
+        managerOptions: managerOptions,
+        onSave: d => saveDept(null, d),
+        onClose: () => setStructSel(null),
+        onPreview: onPreviewUser
+      });
+    }
+    if (structSel.kind === "new_unit") {
+      return /*#__PURE__*/React.createElement(PA2UnitPanel, {
+        key: "new_unit",
+        isNew: true,
+        leaderOptions: unitLeaderOptions,
+        onSave: d => saveUnit(null, d),
+        onClose: () => setStructSel(null),
+        showToast: showToast
+      });
+    }
+    if (structSel.kind === "dept") {
+      const d = departments.find(x => x.id === structSel.id);
+      if (!d) return null;
+      const mgr = findDeptManager(d.id);
+      return /*#__PURE__*/React.createElement(PA2DeptPanel, {
+        key: d.id + (mgr?.id || ""),
+        dept: d,
+        managerId: mgr?.id || "",
+        managerOptions: managerOptions,
+        cadreCount: deptCadreCount(d),
+        onSave: draft => saveDept(d.id, draft),
+        onDelete: () => deleteDept(d.id),
+        onPreview: onPreviewUser,
+        onClose: () => setStructSel(null)
+      });
+    }
+    const u = units.find(x => x.id === structSel.id);
+    if (!u) return null;
+    return /*#__PURE__*/React.createElement(PA2UnitPanel, {
+      key: u.id,
+      unit: u,
+      leaderOptions: unitLeaderOptions,
+      cadreCount: unitCadreCount(u),
+      canDelete: units.length > 1,
+      onSave: draft => saveUnit(u.id, draft),
+      onDelete: () => deleteUnit(u.id),
+      onClose: () => setStructSel(null),
+      showToast: showToast
+    });
+  };
+  const isSel = (kind, id) => structSel && structSel.kind === kind && structSel.id === id;
+  const TreeNode = ({
+    selected,
+    onClick,
+    tone,
+    title,
+    sub,
+    subWarn,
+    meta,
+    dashed
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "absolute top-1/2 -right-7 w-7 h-[2px] bg-stone-200"
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: `w-full text-right rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 transition ${dashed ? "border-2 border-dashed border-stone-300 text-stone-500 hover:border-stone-400 hover:text-stone-800 bg-transparent" : selected ? "bg-white ring-2 ring-stone-900 shadow-sm" : "bg-white hover:shadow-[0_6px_20px_-10px_rgba(28,25,23,0.25)]"}`
+  }, dashed ? /*#__PURE__*/React.createElement("span", {
+    className: "w-10 h-10 rounded-full bg-white inline-flex items-center justify-center shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "plus",
+    className: "w-4 h-4"
+  })) : /*#__PURE__*/React.createElement("span", {
+    className: `w-10 h-10 rounded-full ${tone.bg} inline-flex items-center justify-center shrink-0`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `w-2.5 h-2.5 rounded-full ${tone.dot}`
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `block text-[15px] ${dashed ? "" : "font-semibold text-stone-900"} truncate`
+  }, title), sub && /*#__PURE__*/React.createElement("span", {
+    className: `block text-[13px] mt-0.5 truncate ${subWarn ? "text-orange-700" : "text-stone-500"}`
+  }, sub)), meta && /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-400 shrink-0"
+  }, meta)));
+  const GroupLabel = ({
+    children,
+    count
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "relative flex items-center gap-2 py-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "absolute top-1/2 -right-[35px] w-3 h-3 rounded-full bg-[#F4F2EE] border-2 border-stone-300 -translate-y-1/2"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-medium text-stone-500"
+  }, children), /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-400"
+  }, "· ", count));
+  const renderMap = () => /*#__PURE__*/React.createElement("div", {
+    className: "bg-[#EFECE6] rounded-[28px] p-5 sm:p-7"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[22px] bg-[#1C1917] text-white px-5 py-4 flex items-center gap-4 max-w-md"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-11 h-11 rounded-full bg-white/10 inline-flex items-center justify-center"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "tree",
+    className: "w-5 h-5"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[16px] font-semibold"
+  }, "ميدان"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-400 truncate"
+  }, "الإدارة التنفيذية · ", executives.length, " حساب"))), /*#__PURE__*/React.createElement("div", {
+    className: "mr-[41px] pr-7 border-r-2 border-stone-200 pt-5 space-y-3"
+  }, /*#__PURE__*/React.createElement(GroupLabel, {
+    count: departments.length
+  }, "الإدارات التشغيلية"), departments.map((d, i) => {
+    const mgr = findDeptManager(d.id);
+    return /*#__PURE__*/React.createElement(TreeNode, {
+      key: d.id,
+      selected: isSel("dept", d.id),
+      onClick: () => setStructSel({
+        kind: "dept",
+        id: d.id
+      }),
+      tone: pa2DeptTone(d, i),
+      title: d.name,
+      sub: mgr ? pa2Short(mgr.name) : "بدون مدير",
+      subWarn: !mgr,
+      meta: d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع`
+    });
+  }), /*#__PURE__*/React.createElement(TreeNode, {
+    dashed: true,
+    title: "إضافة إدارة",
+    onClick: () => setStructSel({
+      kind: "new_dept"
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "pt-4"
+  }, /*#__PURE__*/React.createElement(GroupLabel, {
+    count: units.length
+  }, "الوحدات التنظيمية")), units.map(u => {
+    const ld = findUnitLeader(u);
+    return /*#__PURE__*/React.createElement(TreeNode, {
+      key: u.id,
+      selected: isSel("unit", u.id),
+      onClick: () => setStructSel({
+        kind: "unit",
+        id: u.id
+      }),
+      tone: PA2_PASTELS[4],
+      title: u.name,
+      sub: ld ? pa2Short(ld.name) : "بدون قائد",
+      subWarn: !ld,
+      meta: `${unitCadreCount(u)} كادر`
+    });
+  }), /*#__PURE__*/React.createElement(TreeNode, {
+    dashed: true,
+    title: "إضافة وحدة",
+    onClick: () => setStructSel({
+      kind: "new_unit"
+    })
+  })));
+  const ListSection = ({
+    title,
+    rows,
+    onAdd,
+    addLabel
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] p-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-4 pt-3 pb-2"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-[17px] font-bold text-stone-900"
+  }, title), /*#__PURE__*/React.createElement("button", {
+    onClick: onAdd,
+    className: "h-9 px-3.5 rounded-full text-[13px] text-stone-600 hover:bg-[#F4F2EE] inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "plus",
+    className: "w-4 h-4"
+  }), addLabel)), /*#__PURE__*/React.createElement("div", null, rows.map(r => /*#__PURE__*/React.createElement("button", {
+    key: r.key,
+    onClick: r.onClick,
+    className: `w-full text-right px-4 py-3.5 rounded-[18px] flex items-center gap-3.5 transition ${r.selected ? "bg-[#F4F2EE]" : "hover:bg-[#FAF9F7]"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `w-9 h-9 rounded-full ${r.tone.bg} inline-flex items-center justify-center shrink-0`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `w-2 h-2 rounded-full ${r.tone.dot}`
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block text-[15px] font-semibold text-stone-900 truncate"
+  }, r.title), /*#__PURE__*/React.createElement("span", {
+    className: `block text-[13px] mt-0.5 truncate ${r.warn ? "text-orange-700" : "text-stone-500"}`
+  }, r.sub)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-stone-400 shrink-0 hidden sm:block"
+  }, r.meta), /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "chevron",
+    className: "w-4 h-4 text-stone-300 shrink-0"
+  })))));
+  const renderList = () => /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement(ListSection, {
+    title: "الإدارات التشغيلية",
+    addLabel: "إدارة",
+    onAdd: () => setStructSel({
+      kind: "new_dept"
+    }),
+    rows: departments.map((d, i) => {
+      const mgr = findDeptManager(d.id);
+      return {
+        key: d.id,
+        tone: pa2DeptTone(d, i),
+        title: d.name,
+        sub: mgr ? pa2Short(mgr.name) : "بدون مدير",
+        warn: !mgr,
+        meta: d.enabled === false ? "موقوفة" : `${(d.allowedTaskTypes || []).length} أنواع إسنادات`,
+        selected: isSel("dept", d.id),
+        onClick: () => setStructSel({
+          kind: "dept",
+          id: d.id
+        })
+      };
+    })
+  }), /*#__PURE__*/React.createElement(ListSection, {
+    title: "الوحدات التنظيمية",
+    addLabel: "وحدة",
+    onAdd: () => setStructSel({
+      kind: "new_unit"
+    }),
+    rows: units.map(u => {
+      const ld = findUnitLeader(u);
+      return {
+        key: u.id,
+        tone: PA2_PASTELS[4],
+        title: u.name,
+        sub: ld ? pa2Short(ld.name) : "بدون قائد",
+        warn: !ld,
+        meta: `${unitCadreCount(u)} كادر`,
+        selected: isSel("unit", u.id),
+        onClick: () => setStructSel({
+          kind: "unit",
+          id: u.id
+        })
+      };
+    })
+  }));
+  const renderStructure = () => /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Header, {
+    eyebrow: "الهيكل التنظيمي",
+    title: "الإدارات والوحدات",
+    desc: "اختر أي عنصر لتعديله في اللوحة الجانبية. لا يُحفظ شيء حتى تضغط حفظ.",
+    actions: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(PA2Segmented, {
+      value: mapMode,
+      onChange: setMapMode,
+      options: [{
+        value: "map",
+        label: "خريطة"
+      }, {
+        value: "list",
+        label: "قائمة"
+      }]
+    }), /*#__PURE__*/React.createElement(PrimaryBtn, {
+      onClick: () => setStructSel({
+        kind: "new_dept"
+      })
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "plus",
+      className: "w-4 h-4"
+    }), " إدارة جديدة"))
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "grid lg:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start"
+  }, /*#__PURE__*/React.createElement("div", null, mapMode === "map" ? renderMap() : renderList()), /*#__PURE__*/React.createElement("div", {
+    className: "lg:sticky lg:top-6"
+  }, renderStructurePanel())));
+
+  // ---------- شاشة: القادة والصلاحيات ----------
+  const renderLeaders = () => {
+    const q = leaderSearch.trim().toLowerCase();
+    const isCadreTab = leaderFilter === "cadre";
+    const pool = isCadreTab ? db.users.filter(u => u.roleType === "cadre") : leaders;
+    const rows = pool.filter(u => isCadreTab || leaderFilter === "all" || (leaderFilter === "executive" ? u.roleType === "executive" : isOperational(u))).filter(u => !q || (u.name || "").toLowerCase().includes(q) || (u.username || "").toLowerCase().includes(q)).sort((a, b) => {
+      const rank = r => r === "platform_admin" ? 0 : r === "executive" ? 1 : 2;
+      return rank(a.roleType) - rank(b.roleType);
+    });
+    const selUser = leaderSel && leaderSel !== "new_leader" && leaderSel !== "new_cadre" ? db.users.find(u => u.id === leaderSel) : null;
+    const deptManagers = {};
+    departments.forEach(d => {
+      const m = findDeptManager(d.id);
+      if (m) deptManagers[d.id] = {
+        id: m.id,
+        name: pa2Short(m.name)
+      };
+    });
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Header, {
+      eyebrow: "الحسابات والصلاحيات",
+      title: isCadreTab ? "حسابات الأعضاء" : "حسابات القيادة",
+      desc: isCadreTab ? "تُدار بالمشاركة مع الموارد البشرية: الوحدة والإدارات التي تصل العضو إسناداتها." : "من يدخل المنصة بصلاحيات قيادية.",
+      actions: isCadreTab ? /*#__PURE__*/React.createElement(PrimaryBtn, {
+        onClick: () => setLeaderSel("new_cadre")
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), " عضو جديد") : /*#__PURE__*/React.createElement(PrimaryBtn, {
+        onClick: () => setLeaderSel("new_leader")
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), " قائد جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid lg:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 pt-3 pb-3"
+    }, /*#__PURE__*/React.createElement(PA2Segmented, {
+      size: "sm",
+      value: leaderFilter,
+      onChange: setLeaderFilter,
+      options: [{
+        value: "all",
+        label: "القيادة"
+      }, {
+        value: "executive",
+        label: "التنفيذية"
+      }, {
+        value: "operational",
+        label: "مديرو الإدارات"
+      }, {
+        value: "cadre",
+        label: `الأعضاء · ${db.users.filter(u => u.roleType === "cadre").length}`
+      }]
+    }), /*#__PURE__*/React.createElement("label", {
+      className: "relative block sm:w-60"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "search",
+      className: "w-4 h-4 text-stone-400 absolute right-3.5 top-1/2 -translate-y-1/2"
+    }), /*#__PURE__*/React.createElement("input", {
+      value: leaderSearch,
+      onChange: e => setLeaderSearch(e.target.value),
+      placeholder: "بحث بالاسم أو المستخدم",
+      className: "w-full h-10 rounded-full bg-[#F4F2EE] pr-10 pl-4 text-[14px] focus:outline-none focus:bg-white focus:ring-1 focus:ring-stone-300"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "hidden md:grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.1fr)_96px] gap-4 px-4 py-2.5 text-[12px] text-stone-400 border-b border-stone-100"
+    }, /*#__PURE__*/React.createElement("span", null, "الاسم"), /*#__PURE__*/React.createElement("span", null, "المستوى"), /*#__PURE__*/React.createElement("span", null, "الإدارة"), /*#__PURE__*/React.createElement("span", {
+      className: "text-left"
+    }, "المستخدم")), /*#__PURE__*/React.createElement("div", null, rows.map(u => {
+      const d = isOperational(u) ? departments.find(x => x.id === u.departmentId) : null;
+      const selected = leaderSel === u.id;
+      return /*#__PURE__*/React.createElement("button", {
+        key: u.id,
+        onClick: () => setLeaderSel(u.id),
+        className: `w-full text-right grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.1fr)_96px] gap-4 items-center px-4 py-3.5 rounded-[18px] transition ${selected ? "bg-[#F4F2EE]" : "hover:bg-[#FAF9F7]"}`
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "flex items-center gap-3 min-w-0"
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: u
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "flex items-center gap-2"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[15px] font-semibold text-stone-900 truncate"
+      }, pa2Short(u.name)), u.id === currentUser.id && /*#__PURE__*/React.createElement("span", {
+        className: "text-[11px] px-2 py-0.5 rounded-full bg-stone-900 text-white shrink-0"
+      }, "حسابك")), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-500 truncate mt-0.5"
+      }, u.jobTitle))), /*#__PURE__*/React.createElement("span", {
+        className: "hidden md:block text-[14px] text-stone-600"
+      }, pa2RoleLabel(u)), /*#__PURE__*/React.createElement("span", {
+        className: `hidden md:block text-[14px] truncate ${isOperational(u) && !d ? "text-orange-700" : "text-stone-600"}`
+      }, d ? d.name : u.roleType === "cadre" ? u.unit || "—" : isOperational(u) ? "بلا إدارة" : "—"), /*#__PURE__*/React.createElement("span", {
+        dir: "ltr",
+        className: "text-[13px] text-stone-400 font-mono text-left truncate"
+      }, u.username));
+    }), rows.length === 0 && /*#__PURE__*/React.createElement("div", {
+      className: "text-center text-[14px] text-stone-400 py-10"
+    }, "لا توجد نتائج"))), /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, leaderSel === "new_cadre" || selUser && selUser.roleType === "cadre" ? /*#__PURE__*/React.createElement(MXCadrePanel, {
+      key: leaderSel,
+      db: db,
+      user: leaderSel === "new_cadre" ? null : selUser,
+      isNew: leaderSel === "new_cadre",
+      isUsernameTaken: isUsernameTaken,
+      onClose: () => setLeaderSel(null),
+      onSave: draft => {
+        const id = mxSaveCadre(setDb, leaderSel === "new_cadre" ? null : selUser, leaderSel === "new_cadre", draft);
+        setLeaderSel(id);
+        showToast(leaderSel === "new_cadre" ? "أُنشئ الحساب" : "تم الحفظ");
+      },
+      onDelete: () => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.filter(u => u.id !== selUser.id)
+        }));
+        setLeaderSel(null);
+        showToast("حُذف الحساب");
+      },
+      onResetPassword: () => resetPassword(selUser.id)
+    }) : leaderSel === "new_leader" ? /*#__PURE__*/React.createElement(PA2LeaderPanel, {
+      key: "new_leader",
+      isNew: true,
+      departments: departments,
+      deptManagers: deptManagers,
+      isUsernameTaken: isUsernameTaken,
+      onSave: d => saveLeader(null, d),
+      onClose: () => setLeaderSel(null),
+      showToast: showToast
+    }) : selUser ? /*#__PURE__*/React.createElement(PA2LeaderPanel, {
+      key: selUser.id,
+      user: selUser,
+      isSelf: selUser.id === currentUser.id,
+      departments: departments,
+      deptManagers: deptManagers,
+      isUsernameTaken: isUsernameTaken,
+      onSave: d => saveLeader(selUser.id, d),
+      onDelete: () => deleteLeader(selUser.id),
+      onPreview: onPreviewUser,
+      onResetPassword: resetPassword,
+      onClose: () => setLeaderSel(null),
+      showToast: showToast
+    }) : /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "اختر حساباً",
+      text: "تظهر بيانات الحساب وصلاحياته هنا، مع إعادة تعيين كلمة المرور بأمان."
+    }))));
+  };
+
+  // ---------- شاشة: ضوابط النظام ----------
+  const RuleRow = ({
+    title,
+    desc,
+    children
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[15px] font-medium text-stone-900"
+  }, title), desc && /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 mt-0.5 leading-relaxed"
+  }, desc)), /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0"
+  }, children));
+  const RuleCard = ({
+    title,
+    desc,
+    children
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] px-6 pt-5 pb-2"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-[17px] font-bold text-stone-900"
+  }, title), desc && /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-500 mt-1"
+  }, desc), /*#__PURE__*/React.createElement("div", {
+    className: "divide-y divide-stone-100 mt-2"
+  }, children));
+  const brand = mxBranding(db);
+  const [brandNameDraft, setBrandNameDraft] = useState(brand.platformName || "ميدان");
+  const [logoUrlDraft, setLogoUrlDraft] = useState(brand.logoUrl || "");
+  const logoFileRef = useRef(null);
+  const updateBranding = patch => {
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        branding: {
+          ...mxBranding(prev),
+          ...patch
+        }
+      }
+    }));
+    pulseSaved();
+  };
+  const onLogoFileUpload = e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!f.type.startsWith("image/")) {
+      showToast("اختر ملف صورة صالحاً (PNG, JPG, SVG, WebP)");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      if (f.type === "image/svg+xml" || dataUrl.length < 90000) {
+        setLogoUrlDraft(dataUrl);
+        updateBranding({
+          logoUrl: dataUrl
+        });
+        showToast("تم رفع شعار المنصة وحفظه ✓");
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          const maxDim = 180;
+          const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const compressed = canvas.toDataURL("image/png", 0.9);
+          setLogoUrlDraft(compressed);
+          updateBranding({
+            logoUrl: compressed
+          });
+          showToast("تم رفع شعار المنصة وحفظه ✓");
+        } catch (err) {
+          setLogoUrlDraft(dataUrl);
+          updateBranding({
+            logoUrl: dataUrl
+          });
+          showToast("تم رفع شعار المنصة ✓");
+        }
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsText ? reader.readAsDataURL(f) : null;
+  };
+  const renderRules = () => /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Header, {
+    eyebrow: "ضوابط النظام والهوية",
+    title: "هوية المنصة والقواعد العامة",
+    desc: "تخصيص اسم المنصة وشعارها وثيم الألوان لكل الأعضاء، وضبط القواعد العامة للنظام.",
+    actions: /*#__PURE__*/React.createElement("span", {
+      className: `h-9 px-4 rounded-full text-[13px] inline-flex items-center gap-1.5 transition ${savedPulse ? "bg-emerald-50 text-emerald-700" : "bg-white text-stone-400"}`
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: "w-4 h-4"
+    }), " ", savedPulse ? "تم الحفظ" : "يُحفظ تلقائياً")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] p-6 sm:p-7 mb-6 space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-[18px] font-bold text-stone-900"
+  }, "هوية المنصة وثيمات الألوان"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-500 mt-1"
+  }, "تُطبّق هذه الهوية والألوان فوراً على جميع الواجهات ولكل أعضاء المنصة.")), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#1C1917] px-4 py-2.5 inline-flex items-center gap-3 self-start"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: true,
+    size: "sm"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid lg:grid-cols-2 gap-6 items-start"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "يظهر في شاشة الدخول وجميع البوابات"
+  }, "اسم المنصة"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: brandNameDraft,
+    onChange: e => setBrandNameDraft(e.target.value),
+    placeholder: "مثال: ميدان",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      const clean = brandNameDraft.trim() || "ميدان";
+      setBrandNameDraft(clean);
+      updateBranding({
+        platformName: clean
+      });
+      showToast(`تم تحديث اسم المنصة إلى «${clean}» ✓`);
+    },
+    className: "h-11 px-5 rounded-2xl bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800 shrink-0"
+  }, "حفظ الاسم"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "صورة PNG أو SVG أو JPG"
+  }, "شعار المنصة (اللوجو)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => logoFileRef.current && logoFileRef.current.click(),
+    className: "h-10 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800 inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "upload",
+    className: "w-4 h-4"
+  }), " رفع شعار من جهازك"), brand.logoUrl && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setLogoUrlDraft("");
+      updateBranding({
+        logoUrl: ""
+      });
+      showToast("تمت إزالة الشعار");
+    },
+    className: "h-10 px-4 rounded-full bg-rose-50 text-rose-700 text-[13px] font-medium hover:bg-rose-100"
+  }, "إزالة الشعار"), /*#__PURE__*/React.createElement("input", {
+    ref: logoFileRef,
+    type: "file",
+    accept: "image/*",
+    className: "hidden",
+    onChange: onLogoFileUpload
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2.5 flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    value: logoUrlDraft.startsWith("data:") ? "" : logoUrlDraft,
+    onChange: e => setLogoUrlDraft(e.target.value),
+    placeholder: "https://... أو الصق رابط صورة مباشر للشعار",
+    className: pa2InputCls
+  }), !logoUrlDraft.startsWith("data:") && logoUrlDraft.trim() !== brand.logoUrl && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      updateBranding({
+        logoUrl: logoUrlDraft.trim()
+      });
+      showToast("تم حفظ رابط الشعار ✓");
+    },
+    className: "h-11 px-4 rounded-2xl bg-[#F4F2EE] text-stone-800 text-[13px] font-semibold hover:bg-stone-200 shrink-0"
+  }, "تطبيق الرابط"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "اختر بين المظهر النهاري الدافئ أو الليلي المظلم"
+  }, "وضع الإضاءة (فاتح / مظلم)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2.5"
+  }, [{
+    id: "light",
+    label: "☀️ الوضع الفاتح",
+    desc: "خلفيات دافئة ومريحة للقراءة"
+  }, {
+    id: "dark",
+    label: "🌙 الوضع المظلم",
+    desc: "مظهر ليلي داكن عالي التباين"
+  }].map(m => {
+    const active = (brand.colorMode || "light") === m.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: m.id,
+      type: "button",
+      onClick: () => {
+        updateBranding({
+          colorMode: m.id
+        });
+        showToast(`تم التبديل إلى «${m.label}» ✓`);
+      },
+      className: `text-right rounded-2xl p-3 border transition ${active ? "border-stone-900 ring-2 ring-stone-900 bg-[#F4F2EE]" : "border-stone-200 bg-white hover:bg-stone-50"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-semibold text-stone-900"
+    }, m.label), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] text-stone-500 mt-0.5"
+    }, m.desc));
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "يُطبّق على المنصة بالكامل"
+  }, "ثيم ألوان المنصة"), /*#__PURE__*/React.createElement("div", {
+    className: "grid sm:grid-cols-2 gap-2.5"
+  }, PA2_PLATFORM_THEMES.map(th => {
+    const active = brand.themeId === th.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: th.id,
+      type: "button",
+      onClick: () => {
+        updateBranding({
+          themeId: th.id
+        });
+        showToast(`تم تفعيل ثيم «${th.name}» ✓`);
+      },
+      className: `text-right rounded-2xl p-3.5 border transition flex items-center justify-between gap-3 ${active ? "border-stone-900 ring-2 ring-stone-900 bg-[#F4F2EE]" : "border-stone-200 bg-white hover:bg-stone-50"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-semibold text-stone-900 truncate"
+    }, th.name), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] text-stone-500 truncate mt-0.5"
+    }, th.desc)), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center -space-x-1.5 space-x-reverse shrink-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-5 h-5 rounded-full border border-white shadow-sm",
+      style: {
+        backgroundColor: th.sidebar
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "w-5 h-5 rounded-full border border-white shadow-sm",
+      style: {
+        backgroundColor: th.accent
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "w-5 h-5 rounded-full border border-stone-300 shadow-sm",
+      style: {
+        backgroundColor: th.canvas
+      }
+    })));
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "تخصيص مستقل للعمود الجانبي وشريط الجوال"
+  }, "لون الشريط الجانبي"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 sm:grid-cols-4 gap-2"
+  }, PA2_SIDEBAR_PRESETS.map(sb => {
+    const active = (brand.sidebarId || "theme") === sb.id;
+    const activeTheme = PA2_PLATFORM_THEMES.find(t => t.id === brand.themeId) || PA2_PLATFORM_THEMES[0];
+    const swatchColor = sb.color || activeTheme.sidebar;
+    return /*#__PURE__*/React.createElement("button", {
+      key: sb.id,
+      type: "button",
+      onClick: () => {
+        updateBranding({
+          sidebarId: sb.id
+        });
+        showToast(`تم تطبيق لون الشريط الجانبي «${sb.name}» ✓`);
+      },
+      className: `h-11 px-3 rounded-2xl border transition flex items-center gap-2 text-right ${active ? "border-stone-900 ring-2 ring-stone-900 bg-[#F4F2EE]" : "border-stone-200 bg-white hover:bg-stone-50"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-4 h-4 rounded-full border border-stone-300 shrink-0 shadow-sm",
+      style: {
+        backgroundColor: swatchColor
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] font-semibold text-stone-800 truncate"
+    }, sb.name));
+  })))))), /*#__PURE__*/React.createElement("div", {
+    className: "grid xl:grid-cols-2 gap-5 items-start"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement(RuleCard, {
+    title: "التقييم والنقاط",
+    desc: "كيف تُحسب إنجازات الكوادر."
+  }, /*#__PURE__*/React.createElement(RuleRow, {
+    title: "نقاط التسليم المتأخر",
+    desc: "نسبة النقاط التي يحصل عليها الكادر عند التأخر."
+  }, /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: rules.latePointsPct,
+    min: 0,
+    max: 100,
+    suffix: "%",
+    onChange: v => setRule("latePointsPct", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "حد النجاح في الاختبار",
+    desc: "أقل نسبة لاعتبار اختبار المحاضرة ناجحاً."
+  }, /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: rules.quizPassThresholdPct,
+    min: 0,
+    max: 100,
+    suffix: "%",
+    onChange: v => setRule("quizPassThresholdPct", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "أيام الورد اليومي المطلوبة",
+    desc: "عدد الأيام في الأسبوع لاكتمال العادة اليومية."
+  }, /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: rules.dailyTaskTargetDays,
+    min: 1,
+    max: 7,
+    suffix: "أيام",
+    onChange: v => setRule("dailyTaskTargetDays", v)
+  }))), /*#__PURE__*/React.createElement(RuleCard, {
+    title: "الخصوصية والأمان الصفري",
+    desc: "تشفير طرفي وصفر آثار على أجهزة الأعضاء وقاعدة البيانات."
+  }, /*#__PURE__*/React.createElement(RuleRow, {
+    title: "تغيير كلمة المرور عند أول دخول",
+    desc: "يُطلب من كل حساب جديد تعيين كلمة مرور خاصة."
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.forcePasswordChangeOnFirstLogin,
+    onChange: v => setRule("forcePasswordChangeOnFirstLogin", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "اشتراط المتصفح الخفي أو النافذة المعزولة",
+    desc: "منع فتح البيئة الفعلية إلا في متصفح خفي أو نافذة معزولة بلا سجل تاريخ."
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: rules.requirePrivateBrowser !== false,
+    onChange: v => setRule("requirePrivateBrowser", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "القفل التلقائي ومسح الذاكرة عند الخمول",
+    desc: rules.autoLockMinutes > 0 ? `تُمسح المفاتيح من الذاكرة بعد ${rules.autoLockMinutes} دقيقة من عدم النشاط` : "معطّل (يدوي فقط)"
+  }, /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: Number(rules.autoLockMinutes ?? 15),
+    min: 0,
+    max: 60,
+    suffix: "دقيقة",
+    onChange: v => setRule("autoLockMinutes", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "القفل الفوري عند إخفاء التبويب",
+    desc: "مسح الجلسة فوراً بمجرد تبديل النافذة أو تصغير المتصفح (اختياري صارم)."
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.lockOnTabHide,
+    onChange: v => setRule("lockOnTabHide", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "إخفاء بيئة التجربة من شاشة الدخول",
+    desc: "عند التفعيل يظهر خيار البيئة الفعلية المشفرة فقط لزوار الرابط."
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.hideDemoOnLogin,
+    onChange: v => setRule("hideDemoOnLogin", v)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "pt-3 mt-1 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      const ok = mxOpenIsolatedBlankWindow();
+      if (!ok && showToast) showToast("يرجى السماح بالنوافذ المنبثقة لفتح النافذة المعزولة");
+    },
+    className: "h-9 px-3.5 rounded-full bg-[#F4F2EE] text-stone-800 text-[12px] font-semibold hover:bg-stone-200 transition inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "shield",
+    className: "w-3.5 h-3.5"
+  }), " فتح في نافذة معزولة بلا سجل"), onPurgeLegacyPlaintext && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onPurgeLegacyPlaintext,
+    className: "h-9 px-3.5 rounded-full bg-rose-50 text-rose-700 text-[12px] font-semibold hover:bg-rose-100 transition"
+  }, "تطهير أي بيانات قديمة غير مشفرة")))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement(RuleCard, {
+    title: "صلاحيات الكادر",
+    desc: "ما يستطيع الكادر تعديله بنفسه."
+  }, /*#__PURE__*/React.createElement(RuleRow, {
+    title: "تعديل الاسم"
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.allowCadreNameEdit,
+    onChange: v => setRule("allowCadreNameEdit", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "تغيير كلمة المرور"
+  }, /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.allowCadrePasswordChange,
+    onChange: v => setRule("allowCadrePasswordChange", v)
+  })), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "تغيير موعد اللقاء الأسبوعي",
+    desc: rules.allowCadreScheduleChange ? `حتى ${rules.maxScheduleChangesPerMonth} مرات في الشهر` : "الموعد يحدده المدير فقط"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, rules.allowCadreScheduleChange && /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: rules.maxScheduleChangesPerMonth,
+    min: 1,
+    max: 10,
+    onChange: v => setRule("maxScheduleChangesPerMonth", v)
+  }), /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.allowCadreScheduleChange,
+    onChange: v => setRule("allowCadreScheduleChange", v)
+  }))), /*#__PURE__*/React.createElement(RuleRow, {
+    title: "التسليم المتأخر",
+    desc: rules.allowLateSubmissions ? `للأسابيع الماضية حتى ${rules.maxPastWeeksEditable} أسابيع` : "لا يُقبل بعد انتهاء الأسبوع"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, rules.allowLateSubmissions && /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: rules.maxPastWeeksEditable,
+    min: 1,
+    max: 12,
+    onChange: v => setRule("maxPastWeeksEditable", v)
+  }), /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: !!rules.allowLateSubmissions,
+    onChange: v => setRule("allowLateSubmissions", v)
+  })))), /*#__PURE__*/React.createElement(RuleCard, {
+    title: "البيانات والخزنة السحابية"
+  }, /*#__PURE__*/React.createElement(RuleRow, {
+    title: "الخزنة السحابية المشفرة",
+    desc: envMode === "demo" ? "أنت حالياً في بيئة التجربة المعزولة (لا تُحفظ في السحابة)" : cloudOk ? `خزنة مشفرة متصلة${lastSyncAt ? ` · آخر مزامنة ${lastSyncAt}` : ""}` : "البيانات في الذاكرة المؤقتة لهذه الجلسة فقط"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onOpenCloudSetup,
+    className: "h-9 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50"
+  }, cloudOk ? "إعدادات الخزنة" : "ربط الخزنة"))), /*#__PURE__*/React.createElement(PA2DataCard, {
+    db: db,
+    setDb: setDb,
+    onResetDemo: onResetDemo,
+    showToast: showToast,
+    envMode: envMode,
+    disableReset: Boolean(rules.disableResetButton)
+  }))));
+
+  // ---------- الإطار ----------
+  return /*#__PURE__*/React.createElement("div", {
+    dir: "rtl",
+    className: "min-h-screen bg-[#F4F2EE] text-stone-900 lg:pr-[264px] -mb-20 pb-20"
+  }, /*#__PURE__*/React.createElement("aside", {
+    className: "hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-2"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: true,
+    inSidebar: true,
+    size: "md"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 mt-2 flex items-center gap-2 flex-wrap"
+  }, "إدارة المنصة", /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300"
+  }, envMode === "demo" ? "بيئة تجربة" : "خزنة مشفرة"))), /*#__PURE__*/React.createElement("nav", {
+    className: "mt-10 space-y-1"
+  }, NAV.map(n => /*#__PURE__*/React.createElement("button", {
+    key: n.id,
+    onClick: () => go(n.id),
+    className: `w-full h-11 px-4 rounded-full flex items-center gap-3 text-[14px] transition ${screen === n.id ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"}`
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: n.icon
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 text-right"
+  }, n.label), n.badge ? /*#__PURE__*/React.createElement("span", {
+    className: "min-w-[22px] h-[22px] px-1.5 rounded-full bg-orange-500 text-white text-[12px] font-semibold inline-flex items-center justify-center"
+  }, n.badge) : null))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-auto space-y-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onOpenCloudSetup,
+    className: "w-full flex items-center gap-2.5 px-4 h-10 rounded-full bg-white/5 text-[13px] text-stone-400 hover:text-white"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `w-2 h-2 rounded-full ${envMode === "demo" ? "bg-amber-400" : cloudOk ? "bg-emerald-400" : "bg-stone-400"}`
+  }), envMode === "demo" ? "بيئة تجربة معزولة" : cloudOk ? "خزنة مشفرة متصلة" : "ذاكرة مؤقتة فقط"), /*#__PURE__*/React.createElement("button", {
+    onClick: onQuickLock || onLogout,
+    className: "w-full flex items-center justify-between px-4 h-9 rounded-full bg-white/5 text-[12px] text-stone-400 hover:text-white",
+    title: "قفل فوري ومسح الذاكرة (Esc مرتين)"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "lock",
+    className: "w-3.5 h-3.5 text-emerald-400"
+  }), " قفل فوري"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-stone-500"
+  }, "Esc×2")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 px-2 pt-3 border-t border-white/10"
+  }, /*#__PURE__*/React.createElement(PA2Avatar, {
+    user: {
+      ...currentUser,
+      roleType: "executive"
+    },
+    size: "w-9 h-9"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-white truncate"
+  }, firstName), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500"
+  }, "مدير المنصة")), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "w-9 h-9 rounded-full text-stone-400 hover:text-white hover:bg-white/10 inline-flex items-center justify-center",
+    title: "تسجيل الخروج ومسح الذاكرة"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "logout"
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: true,
+    inSidebar: true,
+    size: "sm",
+    subtitle: /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] font-normal text-stone-400"
+    }, "· إدارة المنصة")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onQuickLock || onLogout,
+    className: "w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center text-emerald-300",
+    title: "قفل فوري"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "lock"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center",
+    title: "تسجيل الخروج"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "logout"
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1.5 overflow-x-auto mt-3 -mx-1 px-1"
+  }, NAV.map(n => /*#__PURE__*/React.createElement("button", {
+    key: n.id,
+    onClick: () => go(n.id),
+    className: `h-9 px-3.5 rounded-full text-[13px] whitespace-nowrap ${screen === n.id ? "bg-white text-stone-900 font-semibold" : "text-stone-400 bg-white/5"}`
+  }, n.label, n.badge ? ` · ${n.badge}` : "")))), /*#__PURE__*/React.createElement("main", {
+    className: "px-5 sm:px-8 xl:px-12 py-8 lg:py-12 max-w-[1240px]"
+  }, screen === "overview" && renderOverview(), screen === "structure" && renderStructure(), screen === "leaders" && renderLeaders(), screen === "rules" && renderRules()));
+}
+
+// ============================================================================
+// 9.7 MX CORE — محرك الإسنادات الموحد + الإطار المشترك لكل الواجهات (نسخة كلاود)
+// ============================================================================
+const MX_TYPE_META = {
+  lecture_quiz: {
+    label: "محاضرة / اختبار",
+    icon: "🎬",
+    approval: "self"
+  },
+  daily_habit: {
+    label: "عادة يومية",
+    icon: "🔄",
+    approval: "self"
+  },
+  reading: {
+    label: "مطالعة",
+    icon: "📖",
+    approval: "self"
+  },
+  meeting: {
+    label: "حضور لقاء",
+    icon: "🤝",
+    approval: "manager"
+  },
+  practical: {
+    label: "تكليف عملي",
+    icon: "📋",
+    approval: "manager"
+  },
+  agenda_minutes: {
+    label: "أجندة أو محضر",
+    icon: "📝",
+    approval: "self"
+  }
+};
+const MX_DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+// المحاور الخمسة المقسّمة لإسناد أجندة الاجتماع
+const MX_AGENDA_PROMPTS = [{
+  key: "faithThought",
+  label: "هل هناك خاطرة إيمانية ترغب بإيصالها للوحدة هذا الأسبوع؟",
+  placeholder: "اكتب الخاطرة أو المعنى الإيماني الذي تود افتتاح اللقاء به..."
+}, {
+  key: "adminUpdates",
+  label: "اكتب ما هي أهم التحديثات الإدارية التي ترغب بإيصالها للوحدة؟",
+  placeholder: "أهم القرارات أو المستجدات أو التنبيهات الإدارية..."
+}, {
+  key: "lastWeekReview",
+  label: "ما هي المشاريع والمسؤوليات التي عمل عليها كل فرد بالوحدة الأسبوع الماضي وترغب بمراجعتها في اللقاء؟",
+  placeholder: "المشاريع والإسنادات السابقة المراد مراجعة إنجازها مع كل فرد..."
+}, {
+  key: "unitChallenge",
+  label: "ما هو التحدي الذي يواجه الوحدة هذه الفترة وترغب بعقد عصف ذهني لمناقشته مع أعضاء الوحدة؟",
+  placeholder: "وصف التحدي الحالي والأسئلة المطروحة للعصف الذهني..."
+}, {
+  key: "nextWeekAssignments",
+  label: "ما هي المشاريع والمسؤوليات التي سيتم إسنادها لأفراد الوحدة الأسبوع القادم بإذن الله؟",
+  placeholder: "توزيع المسؤوليات والإسنادات المستهدفة للأسبوع القادم..."
+}];
+const DEFAULT_HR_QUESTION_POOL = [{
+  id: "q1",
+  text: "ما هو التوقيت المعياري لإرسال أجندة اللقاء الأسبوعي قبل موعد الاجتماع؟",
+  options: ["قبل الاجتماع بساعة واحدة", "قبل الاجتماع بـ 24 ساعة على الأقل", "أثناء انعقاد الاجتماع", "بعد انتهاء الاجتماع"],
+  correctIndex: 1
+}, {
+  id: "q2",
+  text: "ما الهدف الأساسي من توثيق محضر الاجتماع خلال 24 ساعة؟",
+  options: ["حفظ الأرشيف فقط", "تثبيت المخرجات المعتمدة والإسنادات الزمنية بوضوح", "زيادة عدد التقارير الورقية", "إلغاء الاجتماع القادم"],
+  correctIndex: 1
+}, {
+  id: "q3",
+  text: "عند إنجاز إسناد أسبوع سابق بعد انتهاء أسبوعه، كيف يتعامل النظام معه؟",
+  options: ["يرفض النظام فتحه نهائياً", "يُحتسب مكتملاً في الموعد بـ 100%", "يُوسم كمكتمل متأخر ويأخذ نسبة نقاط التأخير المقررة", "تُحذف جميع نقاط العضو"],
+  correctIndex: 2
+}, {
+  id: "q4",
+  text: "كيف تعمل خاصية «سلسلة الإسنادات المتتابعة» مع العضو الذي التحق متأخراً؟",
+  options: ["تعرض له آخر حلقة فقط وتفوّت الباقي", "تبدأ معه من الحلقة الأولى بالترتيب وتفتح له كل أسبوع ما يليه", "تمنعه من مشاهدة السلسلة", "تُلزمه بإعادة جميع الحلقات في يوم واحد"],
+  correctIndex: 1
+}, {
+  id: "q5",
+  text: "ما فائدة تقسيم أجندة اللقاء الأسبوعي إلى محاور واضحة قبل الاجتماع؟",
+  options: ["إطالة زمن الاجتماع", "ضمان شمول الجانب الإيماني والإداري ومراجعة الإسنادات والعصف الذهني", "الاستغناء عن حضور الأعضاء", "تأجيل القرارات للأسبوع القادم"],
+  correctIndex: 1
+}];
+const DEFAULT_HR_LECTURE_SERIES = [{
+  id: "ep_hr_1",
+  title: "الحلقة 1: منهجية التخطيط الأسبوعي وإدارة الأولويات",
+  instructions: "شاهد المحاضرة التأسيسية الأولى ثم أجب عن الأسئلة المنتقاة لك.",
+  videoUrl: "builtin://demo-lecture",
+  questions: DEFAULT_HR_QUESTION_POOL
+}, {
+  id: "ep_hr_2",
+  title: "الحلقة 2: إدارة الاجتماعات الفعالة وصناعة القرار",
+  instructions: "تفتح بعد إتمام الحلقة الأولى؛ تركّز على إدارة وقت اللقاء وتحويل النقاش إلى إسنادات محددة.",
+  videoUrl: "builtin://demo-lecture",
+  questions: DEFAULT_HR_QUESTION_POOL
+}, {
+  id: "ep_hr_3",
+  title: "الحلقة 3: المتابعة المؤسسية وقياس الأثر",
+  instructions: "تفتح بعد إتمام الحلقة الثانية؛ تشرح آليات المتابعة الهادئة ودعم المتأخرين.",
+  videoUrl: "builtin://demo-lecture",
+  questions: DEFAULT_HR_QUESTION_POOL
+}];
+const DEFAULT_TARBAWI_READING_SERIES = [{
+  id: "ep_tb_1",
+  title: "الجزء 1: فقه الأولويات والتوازن في حياة الكادر",
+  instructions: "اقرأ القدر المقرر من الجزء الأول ودوّن أهم فائدة عملية خرجت بها."
+}, {
+  id: "ep_tb_2",
+  title: "الجزء 2: تزكية النفس وأثرها في العمل الجماعي",
+  instructions: "اقرأ القدر المقرر من الجزء الثاني وسجّل خلاصة الفكرة."
+}, {
+  id: "ep_tb_3",
+  title: "الجزء 3: صناعة القدوة والأثر المستدام",
+  instructions: "اقرأ القدر المقرر من الجزء الثالث ودوّن تطبيقاً عملياً واحداً."
+}];
+function mxBuildDefaultDeptTasks(sc) {
+  const hrDefs = {
+    ...INITIAL_STATE.systemConfig.taskDefinitions,
+    ...(sc?.taskDefinitions || {})
+  };
+  const hr = [{
+    id: "lecture",
+    type: "lecture_quiz",
+    lectureMode: "lecture_and_quiz",
+    deliveryMode: "series",
+    approval: "self",
+    targetScope: "all_units",
+    title: "المحاضرة الأسبوعية واختبارها",
+    subtitle: hrDefs.lecture?.subtitle || "",
+    instructions: hrDefs.lecture?.instructions || "شاهد محاضرة السلسلة المقررة لك بالترتيب ثم أجب عن الأسئلة.",
+    lectureTitle: "منهجية التخطيط الأسبوعي وإدارة الأولويات",
+    lectureDesc: "كيف تبني إيقاع عمل مؤسسي مستدام يمنع تراكم الإسنادات ويرفع كفاءة الاجتماعات.",
+    videoUrl: "builtin://demo-lecture",
+    videoType: "mp4",
+    questionsPerMember: 3,
+    shuffleQuestions: true,
+    questionPool: DEFAULT_HR_QUESTION_POOL,
+    seriesItems: DEFAULT_HR_LECTURE_SERIES,
+    enabled: true
+  }, {
+    id: "agenda",
+    type: "agenda_minutes",
+    useStructuredAgenda: true,
+    deliveryMode: "direct",
+    approval: "self",
+    targetScope: "all_units",
+    title: "إرسال أجندة اللقاء",
+    subtitle: hrDefs.agenda?.subtitle || "",
+    instructions: hrDefs.agenda?.instructions || "املأ محاور أجندة اللقاء الأسبوعي قبل موعد الاجتماع بـ 24 ساعة.",
+    enabled: true
+  }, {
+    id: "attendance",
+    type: "meeting",
+    deliveryMode: "direct",
+    approval: "manager",
+    targetScope: "all_units",
+    title: "حضور اللقاء الأسبوعي",
+    subtitle: hrDefs.attendance?.subtitle || "",
+    instructions: hrDefs.attendance?.instructions || "",
+    enabled: true
+  }, {
+    id: "minutes",
+    type: "agenda_minutes",
+    useStructuredAgenda: false,
+    deliveryMode: "direct",
+    approval: "self",
+    targetScope: "all_units",
+    title: "توثيق محضر اللقاء",
+    subtitle: hrDefs.minutes?.subtitle || "",
+    instructions: hrDefs.minutes?.instructions || "",
+    enabled: true
+  }];
+  const tDefs = Array.isArray(sc?.tarbawiTaskDefinitions) && sc.tarbawiTaskDefinitions.length ? sc.tarbawiTaskDefinitions : DEFAULT_TARBAWI_TASKS;
+  const tarbawi = tDefs.map(t => {
+    const type = t.trackType === "daily_days" ? "daily_habit" : t.id === "tarbawi_majlis" ? "meeting" : t.id === "tarbawi_reading" ? "reading" : "practical";
+    const isReading = t.id === "tarbawi_reading";
+    const isAmal = t.id === "tarbawi_amal";
+    return {
+      id: t.id,
+      type,
+      deliveryMode: isReading ? "series" : "direct",
+      seriesItems: isReading ? DEFAULT_TARBAWI_READING_SERIES : undefined,
+      approval: type === "meeting" ? "manager" : isAmal ? "person" : "self",
+      approverUserId: isAmal ? "u_m04" : undefined,
+      targetScope: "all_units",
+      title: t.title,
+      subtitle: t.subtitle || "",
+      instructions: t.instructions || "",
+      targetDays: type === "daily_habit" ? t.targetDays || 5 : undefined,
+      enabled: t.enabled !== false
+    };
+  });
+  return {
+    dept_hr: hr,
+    dept_tarbawi: tarbawi
+  };
+}
+function mxBuildDefaultExecTasks() {
+  return [{
+    id: "exec_unit_agenda",
+    title: "إعداد أجندة لقاء الوحدة الأسبوعي",
+    type: "agenda_minutes",
+    useStructuredAgenda: true,
+    deliveryMode: "direct",
+    approval: "manager",
+    targetGroup: "unit_leaders",
+    assignedBy: "exec_office",
+    instructions: "املأ محاور أجندة لقاء وحدتك الخمسة؛ تُحفظ في مساحتك وتُرسل تلقائياً للمكتب التنفيذي والمدير التنفيذي.",
+    enabled: true
+  }, {
+    id: "exec_dept_brief",
+    title: "موجز متابعة الإدارة والمكتب التنفيذي",
+    type: "agenda_minutes",
+    useStructuredAgenda: false,
+    deliveryMode: "direct",
+    approval: "manager",
+    targetGroup: "exec_office",
+    assignedBy: "exec_head",
+    instructions: "دوّن أبرز مؤشرات الأسبوع والتحديات التي تحتاج قراراً أو دعماً من قائد المكتب التنفيذي.",
+    enabled: true
+  }];
+}
+function mxBuildDefaultUnitTasks(units) {
+  const list = Array.isArray(units) && units.length ? units : DEFAULT_UNITS;
+  const out = {};
+  list.forEach(un => {
+    out[un.id] = [{
+      id: `ut_${un.id}_1`,
+      title: "إسناد الوحدة الأسبوعي",
+      type: "practical",
+      deliveryMode: "direct",
+      approval: "manager",
+      instructions: "أنجز التكليف العملي المتفق عليه في لقاء الوحدة وأرسله لاعتماد مدير الوحدة.",
+      enabled: true
+    }];
+  });
+  return out;
+}
+const mxRules = db => ({
+  ...DEFAULT_GOVERNANCE_RULES,
+  ...(db.systemConfig?.governanceRules || {})
+});
+const mxDepartments = db => db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+const mxUnits = db => db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+const mxDeptById = (db, id) => mxDepartments(db).find(d => d.id === id) || null;
+
+// فحص الأدوار في هيكلة ميدان
+const mxIsExecHead = u => Boolean(u && u.roleType === "executive" && (u.isExecHead || u.id === "u_exec"));
+const mxIsExecOfficeMember = u => Boolean(u && u.roleType === "executive" && !mxIsExecHead(u));
+const mxIsOperationalMgr = u => Boolean(u && (u.roleType === "operational_admin" || u.roleType === "admin"));
+const mxIsLeaderRole = u => Boolean(u && (u.roleType === "platform_admin" || u.roleType === "executive"));
+const mxUnitLedByUser = (db, u) => u ? mxUnits(db).find(un => un.leaderUserId === u.id) || null : null;
+const mxIsUnitLeader = (db, u) => Boolean(mxUnitLedByUser(db, u));
+function mxDeptTaskDefs(db, deptId, includeDisabled = false) {
+  const list = db.systemConfig?.deptTasks && db.systemConfig.deptTasks[deptId] || [];
+  return includeDisabled ? list : list.filter(t => t.enabled !== false);
+}
+function mxExecTaskDefs(db, includeDisabled = false) {
+  const list = db.systemConfig?.execTasks || [];
+  return includeDisabled ? list : list.filter(t => t.enabled !== false);
+}
+function mxUnitTaskDefs(db, unitId, includeDisabled = false) {
+  const list = db.systemConfig?.unitTasks && db.systemConfig.unitTasks[unitId] || [];
+  return includeDisabled ? list : list.filter(t => t.enabled !== false);
+}
+function mxUserDeptIds(db, user) {
+  if (!user || user.roleType === "platform_admin" || mxIsExecHead(user)) return [];
+  const list = Array.isArray(user.assignedDepartments) ? user.assignedDepartments : [];
+  return list.filter(id => {
+    const d = mxDeptById(db, id);
+    return d && d.enabled !== false;
+  });
+}
+
+// الإسنادات المطلوبة من أي عضو في ميدان (حسب موقعه في الهيكلة)
+function mxUserTasks(db, user, deptFilter = null) {
+  if (!user || user.roleType === "platform_admin" || mxIsExecHead(user)) return [];
+  const out = [];
+  const isOffice = mxIsExecOfficeMember(user);
+  const isOpMgr = mxIsOperationalMgr(user);
+  const ledUnit = mxUnitLedByUser(db, user);
+
+  // 1. إسنادات القيادة التنفيذية / المكتب التنفيذي (للمكتب التنفيذي، مديري الإدارات، ومديري الوحدات)
+  if (isOffice || isOpMgr || ledUnit) {
+    mxExecTaskDefs(db).forEach(t => {
+      const tg = t.targetGroup || "unit_leaders";
+      const forOffice = (tg === "exec_office" || tg === "all_leaders") && (isOffice || isOpMgr) && !(isOffice && t.assignedBy === "exec_office");
+      const forUnitLeader = (tg === "unit_leaders" || tg === "all_leaders") && Boolean(ledUnit);
+      if (forOffice || forUnitLeader) {
+        out.push({
+          ...t,
+          deptId: "src_exec",
+          sourceName: t.assignedBy === "exec_office" ? "المكتب التنفيذي" : "المدير التنفيذي"
+        });
+      }
+    });
+  }
+
+  // 2. إسنادات الإدارات التشغيلية (الموارد البشرية + التربوية + أي إدارة مستحدثة)
+  mxUserDeptIds(db, user).forEach(did => {
+    const d = mxDeptById(db, did);
+    mxDeptTaskDefs(db, did).forEach(t => {
+      if (t.targetScope === "dept_team" && user.deptTeamId !== did) return;
+      out.push({
+        ...t,
+        deptId: did,
+        sourceName: d?.shortName || d?.name || did
+      });
+    });
+  });
+
+  // 3. إسنادات مدير الوحدة لأفراد وحدته
+  const memberUnit = mxUnits(db).find(un => un.name === user.unit);
+  if (memberUnit && memberUnit.leaderUserId !== user.id && !isOffice && !isOpMgr) {
+    mxUnitTaskDefs(db, memberUnit.id).forEach(t => {
+      out.push({
+        ...t,
+        deptId: "src_unit_" + memberUnit.id,
+        unitId: memberUnit.id,
+        sourceName: memberUnit.name
+      });
+    });
+  }
+  return deptFilter && deptFilter !== "all" ? out.filter(t => t.deptId === deptFilter) : out;
+}
+const mxCurrentWeek = user => calculateWeeksSinceJoin(user?.joinedAt);
+const mxRec = (user, week, taskId) => user?.tasksRecord && user.tasksRecord[week] && user.tasksRecord[week][taskId] || {
+  status: "pending"
+};
+const mxApproval = def => def.approval || MX_TYPE_META[def.type]?.approval || "self";
+const mxTargetDays = (def, rules) => Math.max(1, Math.min(7, def.targetDays || rules?.dailyTaskTargetDays || 5));
+
+// سحب عشوائي ثابت البذرة لأسئلة الاختبار لكل عضو
+function mxDrawQuestions(def, curriculum, userId, week, attempt = 0, episode = null) {
+  const basePool = episode && Array.isArray(episode.questions) && episode.questions.length ? episode.questions : Array.isArray(def?.questionPool) && def.questionPool.length ? def.questionPool : curriculum?.questions || [];
+  if (!basePool.length) return [];
+  const seedStr = `${userId || "u"}:${def?.id || "t"}:${episode?.id || week}:${attempt}`;
+  let h = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    h ^= seedStr.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const rng = () => {
+    h += 0x6D2B79F5;
+    let t = Math.imul(h ^ h >>> 15, 1 | h);
+    t ^= t + Math.imul(t ^ t >>> 7, 61 | t);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+  const copy = basePool.map(q => ({
+    ...q
+  }));
+  if (def?.shuffleQuestions !== false) {
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = copy[i];
+      copy[i] = copy[j];
+      copy[j] = tmp;
+    }
+  }
+  const limit = parseInt(def?.questionsPerMember, 10);
+  return limit && limit > 0 && limit < copy.length ? copy.slice(0, limit) : copy;
+}
+
+// حالة سلسلة الإسنادات المتتابعة للعضو (تبدأ من الحلقة الأولى دائماً وتفتح أسبوعياً بالترتيب)
+function mxSeriesInfo(def, user, selectedWeek) {
+  if (!def || def.deliveryMode !== "series" || !Array.isArray(def.seriesItems) || def.seriesItems.length === 0) return null;
+  const items = def.seriesItems;
+  const curWeek = mxCurrentWeek(user);
+  const maxUnlockedByWeek = Math.max(1, Math.min(items.length, selectedWeek || curWeek));
+  const doneMap = {};
+  const allWeeks = Object.keys(user?.tasksRecord || {}).map(Number).sort((a, b) => a - b);
+  allWeeks.forEach(w => {
+    const r = user.tasksRecord[w] && user.tasksRecord[w][def.id];
+    if (!r) return;
+    if (r.seriesDone && typeof r.seriesDone === "object") {
+      Object.keys(r.seriesDone).forEach(epId => {
+        if (r.seriesDone[epId]) doneMap[epId] = r.seriesDone[epId];
+      });
+    } else if ((r.status === "on_time" || r.status === "late") && w >= 1 && w <= items.length) {
+      const ep = items[w - 1];
+      if (ep && !doneMap[ep.id]) doneMap[ep.id] = {
+        at: r.completedAt || true
+      };
+    }
+  });
+  // الحلقة رقم i تفتح إذا كانت <= أسبوع العضو الحالي وأتمّ العضو جميع الحلقات السابقة لها بالترتيب
+  let unlockedCount = 1;
+  for (let i = 0; i < items.length; i++) {
+    if (doneMap[items[i].id]) unlockedCount = Math.min(items.length, Math.max(unlockedCount, i + 2));else break;
+  }
+  unlockedCount = Math.min(unlockedCount, Math.max(maxUnlockedByWeek, Object.keys(doneMap).length + 1), items.length);
+  const nextIdx = items.findIndex(ep => !doneMap[ep.id]);
+  const activeIdx = nextIdx === -1 ? items.length - 1 : Math.min(nextIdx, unlockedCount - 1);
+  return {
+    items,
+    doneMap,
+    unlockedCount,
+    completedCount: Object.keys(doneMap).filter(k => items.some(x => x.id === k)).length,
+    totalCount: items.length,
+    activeIdx
+  };
+}
+function mxTaskState(def, rec, rules) {
+  const s = rec?.status || "pending";
+  const latePct = Math.max(0, Math.min(100, parseInt(rules?.latePointsPct, 10) || 50));
+  if (s === "on_time") return {
+    key: "done",
+    label: "مكتملة",
+    points: 100,
+    done: true
+  };
+  if (s === "late") return {
+    key: "late",
+    label: "مكتملة متأخرة",
+    points: latePct,
+    done: true
+  };
+  if (s === "submitted") return {
+    key: "submitted",
+    label: "بانتظار الاعتماد",
+    points: 0,
+    done: false
+  };
+  if (s === "rejected") return {
+    key: "rejected",
+    label: "أُعيدت للمراجعة",
+    points: 0,
+    done: false
+  };
+  const days = Array.isArray(rec?.daysCompleted) ? rec.daysCompleted.length : 0;
+  if (def.type === "daily_habit" && days > 0) {
+    const target = mxTargetDays(def, rules);
+    return {
+      key: "partial",
+      label: `${days} من ${target} أيام`,
+      points: Math.min(90, Math.round(days / target * 100)),
+      done: false
+    };
+  }
+  return {
+    key: "pending",
+    label: "لم تُنجز",
+    points: 0,
+    done: false
+  };
+}
+function mxWeekSummary(db, user, week, deptFilter = null) {
+  const rules = mxRules(db);
+  const tasks = mxUserTasks(db, user, deptFilter);
+  const byDept = {};
+  let points = 0,
+    done = 0,
+    submitted = 0;
+  tasks.forEach(t => {
+    const st = mxTaskState(t, mxRec(user, week, t.id), rules);
+    points += st.points;
+    if (st.done) done++;
+    if (st.key === "submitted") submitted++;
+    const b = byDept[t.deptId] || (byDept[t.deptId] = {
+      total: 0,
+      done: 0,
+      points: 0,
+      pct: 0,
+      label: t.sourceName || mxDeptById(db, t.deptId)?.name || t.deptId
+    });
+    b.total++;
+    b.points += st.points;
+    if (st.done) b.done++;
+  });
+  Object.values(byDept).forEach(b => {
+    b.pct = b.total ? Math.round(b.points / b.total) : 0;
+  });
+  return {
+    week,
+    total: tasks.length,
+    done,
+    submitted,
+    remaining: tasks.length - done - submitted,
+    points,
+    pct: tasks.length ? Math.round(points / tasks.length) : 0,
+    byDept,
+    tasks
+  };
+}
+function mxRecentPct(db, user, weeks = 4, deptFilter = null) {
+  const cur = mxCurrentWeek(user);
+  const list = [];
+  for (let w = Math.max(1, cur - weeks + 1); w <= cur; w++) list.push(mxWeekSummary(db, user, w, deptFilter).pct);
+  return list.length ? Math.round(list.reduce((a, b) => a + b, 0) / list.length) : 0;
+}
+function mxStatusOf(pct) {
+  if (pct >= 75) return {
+    key: "committed",
+    label: "ملتزم",
+    dot: "bg-emerald-500",
+    ink: "text-emerald-700",
+    bg: "bg-emerald-50"
+  };
+  if (pct > 0) return {
+    key: "behind",
+    label: "متأخر",
+    dot: "bg-amber-500",
+    ink: "text-amber-700",
+    bg: "bg-amber-50"
+  };
+  return {
+    key: "not_started",
+    label: "لم يبدأ",
+    dot: "bg-stone-400",
+    ink: "text-stone-500",
+    bg: "bg-stone-100"
+  };
+}
+
+// أعضاء إدارة = كل من أُسندت له إسنادات هذه الإدارة (أعضاء الوحدات أو فريق الإدارة)
+function mxDeptMembers(db, deptId, scopeFilter = "all") {
+  const all = db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).includes(deptId));
+  if (scopeFilter === "dept_team") return all.filter(u => u.deptTeamId === deptId);
+  return all;
+}
+function mxDeptManager(db, deptId) {
+  return db.users.find(u => (u.roleType === "operational_admin" || u.roleType === "admin") && u.departmentId === deptId) || null;
+}
+
+// الإسنادات التي تنتظر اعتماد مدير الإدارة
+function mxPendingApprovals(db, deptId) {
+  const defs = mxDeptTaskDefs(db, deptId);
+  const out = [];
+  mxDeptMembers(db, deptId).forEach(u => {
+    Object.keys(u.tasksRecord || {}).forEach(wk => {
+      defs.forEach(t => {
+        const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+        if (r && r.status === "submitted") out.push({
+          user: u,
+          task: t,
+          week: Number(wk),
+          rec: r
+        });
+      });
+    });
+  });
+  return out.sort((a, b) => b.week - a.week);
+}
+
+// الإسنادات التي تنتظر اعتماد القيادة التنفيذية / المكتب التنفيذي
+function mxPendingExecApprovals(db, isHead = true) {
+  const defs = mxExecTaskDefs(db).filter(t => isHead || t.targetGroup === "unit_leaders" || t.assignedBy === "exec_office");
+  const out = [];
+  db.users.forEach(u => {
+    Object.keys(u.tasksRecord || {}).forEach(wk => {
+      defs.forEach(t => {
+        const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+        if (r && r.status === "submitted") out.push({
+          user: u,
+          task: t,
+          week: Number(wk),
+          rec: r
+        });
+      });
+    });
+  });
+  return out.sort((a, b) => b.week - a.week);
+}
+
+// الإسنادات التي تنتظر اعتماد مدير الوحدة
+function mxPendingUnitApprovals(db, unit) {
+  if (!unit) return [];
+  const defs = mxUnitTaskDefs(db, unit.id);
+  const out = [];
+  db.users.filter(u => u.unit === unit.name && u.id !== unit.leaderUserId).forEach(u => {
+    Object.keys(u.tasksRecord || {}).forEach(wk => {
+      defs.forEach(t => {
+        const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+        if (r && r.status === "submitted") out.push({
+          user: u,
+          task: t,
+          week: Number(wk),
+          rec: r
+        });
+      });
+    });
+  });
+  return out.sort((a, b) => b.week - a.week);
+}
+
+// الإسنادات الموكلة لشخص محدد في الإدارة/الوحدة لاعتمادها (approval === "person")
+function mxPendingForReviewer(db, reviewerUserId) {
+  if (!reviewerUserId) return [];
+  const allDefs = [...mxDepartments(db).flatMap(d => mxDeptTaskDefs(db, d.id).map(t => ({
+    ...t,
+    sourceName: d.shortName || d.name
+  }))), ...mxExecTaskDefs(db).map(t => ({
+    ...t,
+    sourceName: "القيادة التنفيذية"
+  })), ...mxUnits(db).flatMap(un => mxUnitTaskDefs(db, un.id).map(t => ({
+    ...t,
+    sourceName: un.name
+  })))].filter(t => t.approval === "person" && t.approverUserId === reviewerUserId);
+  if (!allDefs.length) return [];
+  const out = [];
+  db.users.forEach(u => {
+    Object.keys(u.tasksRecord || {}).forEach(wk => {
+      allDefs.forEach(t => {
+        const r = u.tasksRecord[wk] && u.tasksRecord[wk][t.id];
+        if (r && r.status === "submitted") out.push({
+          user: u,
+          task: t,
+          week: Number(wk),
+          rec: r
+        });
+      });
+    });
+  });
+  return out.sort((a, b) => b.week - a.week);
+}
+function mxDeptStats(db, deptId) {
+  const rules = mxRules(db);
+  const defs = mxDeptTaskDefs(db, deptId);
+  const rows = mxDeptMembers(db, deptId).map(u => {
+    const week = mxCurrentWeek(u);
+    const userDefs = defs.filter(t => t.targetScope !== "dept_team" || u.deptTeamId === deptId);
+    let pts = 0,
+      done = 0;
+    userDefs.forEach(t => {
+      const st = mxTaskState(t, mxRec(u, week, t.id), rules);
+      pts += st.points;
+      if (st.done) done++;
+    });
+    const pct = userDefs.length ? Math.round(pts / userDefs.length) : 0;
+    return {
+      user: u,
+      week,
+      pct,
+      done,
+      total: userDefs.length,
+      status: mxStatusOf(pct),
+      recentPct: mxRecentPct(db, u, 4, deptId)
+    };
+  });
+  const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+  const byUnit = mxUnits(db).map(un => {
+    const r = rows.filter(x => x.user.unit === un.name);
+    return {
+      unit: un,
+      count: r.length,
+      pct: r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0
+    };
+  }).filter(x => x.count > 0);
+  const byTask = defs.map(t => {
+    const eligible = rows.filter(r => t.targetScope !== "dept_team" || r.user.deptTeamId === deptId);
+    return {
+      task: t,
+      done: eligible.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length,
+      total: eligible.length
+    };
+  });
+  const counts = {
+    committed: 0,
+    behind: 0,
+    not_started: 0
+  };
+  rows.forEach(r => {
+    counts[r.status.key]++;
+  });
+  return {
+    deptId,
+    defs,
+    rows,
+    avg,
+    byUnit,
+    byTask,
+    counts,
+    pending: mxPendingApprovals(db, deptId)
+  };
+}
+function mxOrgStats(db) {
+  const depts = mxDepartments(db).filter(d => d.enabled !== false);
+  const weights = db.systemConfig?.deptWeights || {};
+  const deptStats = depts.map(d => ({
+    dept: d,
+    weight: Math.max(1, Math.min(3, Number(weights[d.id]) || 1)),
+    ...mxDeptStats(db, d.id)
+  }));
+  const wSum = deptStats.reduce((a, s) => a + (s.rows.length ? s.weight : 0), 0);
+  const index = wSum ? Math.round(deptStats.reduce((a, s) => a + (s.rows.length ? s.avg * s.weight : 0), 0) / wSum) : 0;
+  const members = db.users.filter(u => !mxIsLeaderRole(u) && mxUserDeptIds(db, u).length > 0);
+  const memberRows = members.map(u => {
+    const s = mxWeekSummary(db, u, mxCurrentWeek(u));
+    return {
+      user: u,
+      pct: s.pct,
+      recentPct: mxRecentPct(db, u, 4),
+      status: mxStatusOf(s.pct)
+    };
+  });
+  const units = mxUnits(db).map(un => {
+    const r = memberRows.filter(x => x.user.unit === un.name);
+    return {
+      unit: un,
+      count: r.length,
+      pct: r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0
+    };
+  }).filter(x => x.count > 0).sort((a, b) => b.pct - a.pct);
+  return {
+    index,
+    deptStats,
+    memberRows,
+    units
+  };
+}
+
+// ---------- التعميمات ----------
+function mxBulletinRecipients(db, b) {
+  const pool = db.users.filter(u => u.roleType !== "platform_admin" && !mxIsExecHead(u) && u.id !== b.senderId);
+  if (!b.targetType || b.targetType === "all") return pool;
+  if (b.targetType === "exec_office") return pool.filter(u => mxIsExecOfficeMember(u) || mxIsOperationalMgr(u));
+  if (b.targetType === "unit_leaders") return pool.filter(u => mxIsUnitLeader(db, u));
+  if (b.targetType === "dept_team") return pool.filter(u => u.deptTeamId === b.targetDeptId);
+  if (b.targetType === "dept") return pool.filter(u => u.departmentId === b.targetDeptId || u.deptTeamId === b.targetDeptId || mxUserDeptIds(db, u).includes(b.targetDeptId));
+  if (b.targetType === "unit") return pool.filter(u => u.unit === b.targetUnit);
+  if (b.targetType === "custom") return pool.filter(u => (b.recipientIds || []).includes(u.id));
+  return pool;
+}
+function mxBulletinsForUser(db, user) {
+  return (db.bulletins || []).map((b, i) => ({
+    b,
+    i
+  })).filter(({
+    b
+  }) => mxBulletinRecipients(db, b).some(u => u.id === user.id)).sort((x, y) => (y.b.createdAtTs || 0) - (x.b.createdAtTs || 0) || y.i - x.i).map(({
+    b
+  }) => b);
+}
+const mxIsAcked = (b, userId) => Boolean(b.acknowledgedBy && b.acknowledgedBy[userId]);
+function mxBulletinTargetLabel(db, b) {
+  if (!b.targetType || b.targetType === "all") return "كل أفراد الحركة";
+  if (b.targetType === "exec_office") return "المكتب التنفيذي ومديرو الإدارات";
+  if (b.targetType === "unit_leaders") return "مديرو الوحدات";
+  if (b.targetType === "dept_team") return `فريق ${mxDeptById(db, b.targetDeptId)?.shortName || "الإدارة"}`;
+  if (b.targetType === "dept") return mxDeptById(db, b.targetDeptId)?.name || "إدارة";
+  if (b.targetType === "unit") return b.targetUnit || "وحدة";
+  return "أعضاء محددون";
+}
+function mxNowStamp() {
+  const d = new Date();
+  return `${d.getUTCDate()} ${MONTHS_AR[d.getUTCMonth()]}`;
+}
+
+// تحديث سجل إسناد لعضو
+function mxPatchRecord(setDb, userId, week, taskId, patch) {
+  setDb(prev => ({
+    ...prev,
+    users: prev.users.map(u => {
+      if (u.id !== userId) return u;
+      const rec = {
+        ...(u.tasksRecord || {})
+      };
+      const wk = {
+        ...(rec[week] || {})
+      };
+      wk[taskId] = {
+        ...(wk[taskId] || {
+          status: "pending"
+        }),
+        ...patch
+      };
+      rec[week] = wk;
+      return {
+        ...u,
+        tasksRecord: rec
+      };
+    })
+  }));
+}
+
+// ---------- عناصر واجهة مشتركة ----------
+function MXHeader({
+  eyebrow,
+  title,
+  desc,
+  actions
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-orange-700"
+  }, eyebrow), /*#__PURE__*/React.createElement("h1", {
+    className: "text-[30px] sm:text-[34px] font-bold text-stone-900 leading-tight mt-1.5"
+  }, title), desc && /*#__PURE__*/React.createElement("p", {
+    className: "text-[15px] text-stone-500 mt-2 leading-relaxed max-w-xl"
+  }, desc)), actions && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0 flex-wrap"
+  }, actions));
+}
+function MXPrimaryBtn({
+  onClick,
+  children,
+  disabled
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    disabled: disabled,
+    className: `h-11 px-5 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 transition ${disabled ? "bg-stone-200 text-stone-400 cursor-not-allowed" : "bg-stone-900 text-white hover:bg-stone-800"}`
+  }, children);
+}
+function MXGhostBtn({
+  onClick,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: "h-10 px-4 rounded-full bg-white border border-stone-200 text-[13px] text-stone-700 hover:bg-stone-50 inline-flex items-center gap-1.5 transition"
+  }, children);
+}
+function MXCard({
+  children,
+  className = ""
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: `bg-white rounded-[28px] ${className}`
+  }, children);
+}
+function MXSectionTitle({
+  children,
+  action
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-4"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-bold text-stone-900"
+  }, children), action);
+}
+function MXProgress({
+  pct,
+  tone
+}) {
+  const color = tone || (pct >= 75 ? "bg-emerald-500" : pct > 0 ? "bg-orange-500" : "bg-stone-300");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "h-2 rounded-full bg-[#F1EEE9] overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `h-full rounded-full ${color} transition-all`,
+    style: {
+      width: `${Math.max(0, Math.min(100, pct))}%`
+    }
+  }));
+}
+function MXStatusPill({
+  pct,
+  status
+}) {
+  const s = status || mxStatusOf(pct);
+  return /*#__PURE__*/React.createElement("span", {
+    className: `inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[12px] ${s.bg} ${s.ink}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `w-1.5 h-1.5 rounded-full ${s.dot}`
+  }), s.label);
+}
+function MXDeptChip({
+  dept,
+  label,
+  idx = 0
+}) {
+  const text = label || dept?.shortName || dept?.name;
+  if (!text) return null;
+  const tone = dept ? pa2DeptTone(dept, idx) : PA2_PASTELS[idx % PA2_PASTELS.length];
+  return /*#__PURE__*/React.createElement("span", {
+    className: `inline-flex items-center h-6 px-2.5 rounded-full text-[12px] whitespace-nowrap shrink-0 ${tone.bg} ${tone.ink}`
+  }, text);
+}
+// شريط «يحتاج انتباهك»
+function MXAttention({
+  title,
+  items,
+  emptyText,
+  onPrimary,
+  primaryLabel = "معالجة الآن"
+}) {
+  const [all, setAll] = useState(false);
+  if (!items || items.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "rounded-[24px] bg-[#E3F1E8] px-6 py-5 mb-6 flex items-center gap-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-11 h-11 rounded-full bg-white text-emerald-600 inline-flex items-center justify-center shrink-0"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: "w-5 h-5"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-medium text-emerald-700"
+    }, title), /*#__PURE__*/React.createElement("div", {
+      className: "text-[17px] font-semibold text-stone-900 mt-0.5"
+    }, emptyText)));
+  }
+  const visible = all ? items : items.slice(0, 2);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[24px] bg-[#FFF3E2] px-6 py-5 mb-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-center gap-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-11 h-11 rounded-full bg-white text-orange-600 inline-flex items-center justify-center shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "spark",
+    className: "w-5 h-5"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-orange-700"
+  }, title), /*#__PURE__*/React.createElement("div", {
+    className: "text-[17px] font-semibold text-stone-900 mt-0.5"
+  }, items.length, " ", items.length === 1 ? "أمر يحتاج" : "أمور تحتاج", " انتباهك")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onPrimary || items[0].go,
+    className: "h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800"
+  }, primaryLabel), items.length > 2 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setAll(v => !v),
+    className: "h-10 px-4 rounded-full text-[14px] text-stone-700 hover:bg-white/70"
+  }, all ? "إخفاء" : "عرض الكل"))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 sm:mr-[60px] divide-y divide-orange-200/60"
+  }, visible.map(g => /*#__PURE__*/React.createElement("button", {
+    key: g.key,
+    onClick: g.go,
+    className: "w-full flex items-center justify-between py-2.5 text-right group"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-2.5 text-[14px] text-stone-700 min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "truncate"
+  }, g.text)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-orange-700 opacity-70 group-hover:opacity-100 inline-flex items-center gap-1 shrink-0"
+  }, g.cta || "فتح", " ", /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "chevron",
+    className: "w-3.5 h-3.5"
+  }))))));
+}
+// بطاقة الأرقام: كتلة داكنة + أشرطة + أرقام
+function MXScoreCard({
+  label,
+  pct,
+  caption,
+  bars = [],
+  stats = []
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-[28px] p-3 mb-10 flex flex-col md:flex-row gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "md:w-[280px] rounded-[22px] bg-[#1C1917] text-white p-6 flex flex-col justify-between min-h-[190px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-400"
+  }, label), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[56px] font-bold leading-none tabular-nums"
+  }, pct, /*#__PURE__*/React.createElement("span", {
+    className: "text-[28px] text-stone-500"
+  }, "%")), caption && /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-400 mt-3"
+  }, caption))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 px-4 py-4 md:px-6 flex flex-col justify-between gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, bars.map(b => /*#__PURE__*/React.createElement("div", {
+    key: b.label
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] text-stone-600"
+  }, b.label), /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] font-semibold text-stone-900 tabular-nums"
+  }, b.value)), /*#__PURE__*/React.createElement(MXProgress, {
+    pct: b.pct,
+    tone: b.tone
+  })))), stats.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: `grid grid-cols-${stats.length} divide-x divide-x-reverse divide-stone-200 border-t border-stone-100 pt-4`
+  }, stats.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.l,
+    className: "px-3 first:pr-0 text-right"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[24px] font-bold text-stone-900 tabular-nums"
+  }, s.n), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500"
+  }, s.l))))));
+}
+
+// ---------- هوية المنصة والثيمات اللونية (قابلة للتخصيص من مدير المنصة) ----------
+const PA2_PLATFORM_THEMES = [{
+  id: "default",
+  name: "أصالة ميدان (الافتراضي)",
+  desc: "رملي دافئ مع فحمي داكن وبرتقالي عنبري",
+  canvas: "#F4F2EE",
+  surface: "#ECE9E3",
+  sidebar: "#1C1917",
+  primary: "#1C1917",
+  primaryHover: "#292524",
+  accent: "#F97316",
+  accentInk: "#C2410C",
+  accentSoft: "#FFF3E2",
+  accentChipBg: "rgba(249, 115, 22, 0.15)",
+  accentChipInk: "#FDBA74",
+  darkCanvas: "#11100F",
+  darkCard: "#1A1816",
+  darkSurface: "#24211E",
+  darkSidebar: "#0B0A09"
+}, {
+  id: "emerald",
+  name: "واحة الزمرد",
+  desc: "عاجي هادئ مع أخضر غابي داكن وزمردي",
+  canvas: "#F2F5F3",
+  surface: "#E6ECE8",
+  sidebar: "#0F2922",
+  primary: "#0F2922",
+  primaryHover: "#163B31",
+  accent: "#10B981",
+  accentInk: "#047857",
+  accentSoft: "#E3F5EC",
+  accentChipBg: "rgba(16, 185, 129, 0.18)",
+  accentChipInk: "#6EE7B7",
+  darkCanvas: "#0B1411",
+  darkCard: "#12201B",
+  darkSurface: "#1A2D26",
+  darkSidebar: "#070E0C"
+}, {
+  id: "royal",
+  name: "كحلي مؤسسي",
+  desc: "رمادي ثلجي مع كحلي عميق وأزرق ملكي",
+  canvas: "#F3F5F8",
+  surface: "#E6EAF0",
+  sidebar: "#0F172A",
+  primary: "#0F172A",
+  primaryHover: "#1E293B",
+  accent: "#3B82F6",
+  accentInk: "#1D4ED8",
+  accentSoft: "#E6EFFD",
+  accentChipBg: "rgba(59, 130, 246, 0.18)",
+  accentChipInk: "#93C5FD",
+  darkCanvas: "#0B111E",
+  darkCard: "#131C2E",
+  darkSurface: "#1C2840",
+  darkSidebar: "#070B14"
+}, {
+  id: "burgundy",
+  name: "عقيقي وقور",
+  desc: "كريمي دافئ مع عنابي داكن وعقيقي",
+  canvas: "#F6F3F2",
+  surface: "#EDE6E4",
+  sidebar: "#281115",
+  primary: "#281115",
+  primaryHover: "#3B191F",
+  accent: "#E11D48",
+  accentInk: "#BE123C",
+  accentSoft: "#FCE8EC",
+  accentChipBg: "rgba(225, 29, 72, 0.18)",
+  accentChipInk: "#FDA4AF",
+  darkCanvas: "#140C0E",
+  darkCard: "#201316",
+  darkSurface: "#2D1B20",
+  darkSidebar: "#0D0709"
+}, {
+  id: "olive",
+  name: "زيتوني تراثي",
+  desc: "كتاني فاتح مع زيتوني داكن وذهبي دافئ",
+  canvas: "#F4F4EE",
+  surface: "#EAEAE0",
+  sidebar: "#1D231A",
+  primary: "#1D231A",
+  primaryHover: "#2A3326",
+  accent: "#D97706",
+  accentInk: "#B45309",
+  accentSoft: "#FEF3C7",
+  accentChipBg: "rgba(217, 119, 6, 0.18)",
+  accentChipInk: "#FCD34D",
+  darkCanvas: "#10130E",
+  darkCard: "#191E16",
+  darkSurface: "#232A1F",
+  darkSidebar: "#0A0C09"
+}, {
+  id: "violet",
+  name: "أرجواني معاصر",
+  desc: "لؤلؤي ناعم مع أرجواني داكن وبنفسجي",
+  canvas: "#F4F3F7",
+  surface: "#E9E6F0",
+  sidebar: "#1B1528",
+  primary: "#1B1528",
+  primaryHover: "#2A213D",
+  accent: "#8B5CF6",
+  accentInk: "#6D28D9",
+  accentSoft: "#EDE9FE",
+  accentChipBg: "rgba(139, 92, 246, 0.18)",
+  accentChipInk: "#C4B5FD",
+  darkCanvas: "#100D18",
+  darkCard: "#191526",
+  darkSurface: "#241E36",
+  darkSidebar: "#0A0810"
+}];
+const PA2_SIDEBAR_PRESETS = [{
+  id: "theme",
+  name: "مطابق للثيم",
+  color: null,
+  isLight: false
+}, {
+  id: "obsidian",
+  name: "فحمي داكن",
+  color: "#1C1917",
+  isLight: false
+}, {
+  id: "midnight",
+  name: "كحلي ليلي",
+  color: "#0F172A",
+  isLight: false
+}, {
+  id: "forest",
+  name: "أخضر غابي",
+  color: "#0D261F",
+  isLight: false
+}, {
+  id: "espresso",
+  name: "بني إسبريسو",
+  color: "#231712",
+  isLight: false
+}, {
+  id: "plum",
+  name: "برقوقي داكن",
+  color: "#1E132A",
+  isLight: false
+}, {
+  id: "sand_light",
+  name: "رملي فاتح",
+  color: "#EAE6DF",
+  isLight: true
+}, {
+  id: "pure_white",
+  name: "أبيض ناصع",
+  color: "#FFFFFF",
+  isLight: true
+}];
+const DEFAULT_BRANDING = {
+  platformName: "ميدان",
+  logoUrl: "",
+  themeId: "default",
+  sidebarId: "theme",
+  colorMode: "light"
+};
+function mxBranding(db) {
+  const b = db && db.systemConfig && db.systemConfig.branding || {};
+  const out = {
+    platformName: typeof b.platformName === "string" && b.platformName.trim() ? b.platformName.trim() : DEFAULT_BRANDING.platformName,
+    logoUrl: typeof b.logoUrl === "string" ? b.logoUrl.trim() : "",
+    themeId: PA2_PLATFORM_THEMES.some(t => t.id === b.themeId) ? b.themeId : "default",
+    sidebarId: PA2_SIDEBAR_PRESETS.some(s => s.id === b.sidebarId) ? b.sidebarId : "theme",
+    colorMode: b.colorMode === "dark" ? "dark" : "light"
+  };
+  if (typeof window !== "undefined") window.__MX_BRANDING = out;
+  return out;
+}
+function mxCurrentBranding() {
+  if (typeof window !== "undefined" && window.__MX_BRANDING) return window.__MX_BRANDING;
+  return DEFAULT_BRANDING;
+}
+function MXBrandIdentity({
+  branding,
+  dark = true,
+  inSidebar = false,
+  size = "md",
+  subtitle = null
+}) {
+  const b = branding || mxCurrentBranding();
+  const sbPreset = PA2_SIDEBAR_PRESETS.find(s => s.id === b.sidebarId) || PA2_SIDEBAR_PRESETS[0];
+  const effectiveDark = inSidebar ? !(sbPreset.isLight && b.colorMode !== "dark") : b.colorMode === "dark" ? true : dark;
+  const logoSize = size === "lg" ? "w-11 h-11 rounded-2xl" : size === "sm" ? "w-7 h-7 rounded-xl" : "w-9 h-9 rounded-xl";
+  const textSize = size === "lg" ? "text-[36px]" : size === "sm" ? "text-[18px]" : "text-[24px]";
+  const TitleTag = size === "lg" ? "h1" : "span";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2.5 min-w-0"
+  }, b.logoUrl ? /*#__PURE__*/React.createElement("img", {
+    src: b.logoUrl,
+    alt: b.platformName,
+    className: `${logoSize} object-contain shrink-0 ${effectiveDark ? "bg-white/10 p-1" : "bg-[#F4F2EE] p-1"}`
+  }) : null, /*#__PURE__*/React.createElement(TitleTag, {
+    className: `${textSize} font-bold leading-snug py-0.5 tracking-tight truncate ${effectiveDark ? "text-white" : "text-stone-900"}`
+  }, b.platformName || "ميدان"), subtitle);
+}
+function MXThemeStyle({
+  branding
+}) {
+  const b = branding || mxCurrentBranding();
+  const theme = PA2_PLATFORM_THEMES.find(t => t.id === b.themeId) || PA2_PLATFORM_THEMES[0];
+  const sbPreset = PA2_SIDEBAR_PRESETS.find(s => s.id === b.sidebarId) || PA2_SIDEBAR_PRESETS[0];
+  const isDark = b.colorMode === "dark";
+  const isLightSidebar = Boolean(sbPreset.isLight && !isDark);
+  const sidebarColor = sbPreset.color ? isDark && sbPreset.isLight ? theme.darkSidebar : sbPreset.color : isDark ? theme.darkSidebar : theme.sidebar;
+  useEffect(() => {
+    try {
+      // عنوان محايد لا يترك بصمة في سجل المتصفح أو مدير المهام
+      document.title = "بوابة المتابعة";
+    } catch (e) {}
+  }, [b.platformName]);
+  if (theme.id === "default" && b.sidebarId === "theme" && !isDark) return null;
+  let css = `
+        :root {
+          --mx-canvas: ${isDark ? theme.darkCanvas : theme.canvas};
+          --mx-surface: ${isDark ? theme.darkSurface : theme.surface};
+          --mx-sidebar: ${sidebarColor};
+          --mx-primary: ${isDark ? theme.accent : theme.primary};
+          --mx-primary-hover: ${theme.primaryHover};
+          --mx-accent: ${theme.accent};
+          --mx-accent-ink: ${theme.accentInk};
+        }
+        body, .bg-\\[\\#F4F2EE\\], .bg-\\[\\#F6F5F2\\] { background-color: ${isDark ? theme.darkCanvas : theme.canvas} !important; }
+        .bg-\\[\\#ECE9E3\\], .bg-\\[\\#F1EEE9\\] { background-color: ${isDark ? theme.darkSurface : theme.surface} !important; }
+        aside.bg-\\[\\#1C1917\\], div.lg\\:hidden.bg-\\[\\#1C1917\\] { background-color: ${sidebarColor} !important; }
+        .text-orange-700, .text-orange-600 { color: ${isDark ? theme.accentChipInk : theme.accentInk} !important; }
+        .bg-orange-500 { background-color: ${theme.accent} !important; }
+        .bg-\\[\\#FFF3E2\\] { background-color: ${isDark ? "rgba(245, 158, 11, 0.14)" : theme.accentSoft} !important; }
+        .bg-orange-500\\/15 { background-color: ${theme.accentChipBg} !important; }
+        .text-orange-300 { color: ${theme.accentChipInk} !important; }
+      `;
+  if (!isDark) {
+    css += `
+          div.bg-\\[\\#1C1917\\]:not(.lg\\:hidden) { background-color: ${theme.primary} !important; }
+          .bg-stone-900 { background-color: ${theme.primary} !important; }
+          .hover\\:bg-stone-800:hover { background-color: ${theme.primaryHover} !important; }
+          .ring-stone-900 { --tw-ring-color: ${theme.primary} !important; }
+          .border-stone-900 { border-color: ${theme.primary} !important; }
+        `;
+  }
+  if (isLightSidebar) {
+    css += `
+          aside.bg-\\[\\#1C1917\\], div.lg\\:hidden.bg-\\[\\#1C1917\\] {
+            color: #292524 !important;
+            border-left: 1px solid rgba(28, 25, 23, 0.09) !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .text-white:not(.bg-orange-500):not(.bg-white\\/10),
+          div.lg\\:hidden.bg-\\[\\#1C1917\\] .text-white:not(.bg-orange-500):not(.bg-white\\/10) {
+            color: #1C1917 !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .text-stone-300,
+          aside.bg-\\[\\#1C1917\\] .text-stone-400,
+          aside.bg-\\[\\#1C1917\\] .text-stone-500,
+          div.lg\\:hidden.bg-\\[\\#1C1917\\] .text-stone-400 {
+            color: #57534E !important;
+          }
+          aside.bg-\\[\\#1C1917\\] button.bg-white\\/10 {
+            background-color: ${theme.primary} !important;
+            color: #FFFFFF !important;
+          }
+          aside.bg-\\[\\#1C1917\\] button.bg-white\\/10 span,
+          aside.bg-\\[\\#1C1917\\] button.bg-white\\/10 svg {
+            color: #FFFFFF !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .bg-white\\/5,
+          div.lg\\:hidden.bg-\\[\\#1C1917\\] .bg-white\\/5 {
+            background-color: rgba(28, 25, 23, 0.06) !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .hover\\:bg-white\\/5:hover,
+          aside.bg-\\[\\#1C1917\\] .hover\\:bg-white\\/10:hover {
+            background-color: rgba(28, 25, 23, 0.08) !important;
+            color: #1C1917 !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .border-white\\/10 {
+            border-color: rgba(28, 25, 23, 0.10) !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .text-orange-300 {
+            color: ${theme.accentInk} !important;
+          }
+          aside.bg-\\[\\#1C1917\\] .bg-orange-500\\/15 {
+            background-color: ${theme.accentSoft} !important;
+          }
+        `;
+  }
+  if (isDark) {
+    css += `
+          body { color: #F5F5F4 !important; }
+          .bg-white {
+            background-color: ${theme.darkCard} !important;
+            color: #F5F5F4 !important;
+          }
+          aside .bg-white,
+          div.lg\\:hidden .bg-white,
+          button.bg-white.shadow-sm {
+            background-color: ${theme.accent} !important;
+            color: #FFFFFF !important;
+          }
+          div.bg-\\[\\#1C1917\\]:not(.lg\\:hidden) {
+            background-color: ${theme.darkSurface} !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+          }
+          .bg-stone-50, .bg-stone-100, .bg-stone-200\\/60, .hover\\:bg-stone-50:hover {
+            background-color: ${theme.darkSurface} !important;
+          }
+          .text-stone-900, .text-stone-800 { color: #F5F5F4 !important; }
+          .text-stone-700, .text-stone-600 { color: #D6D3D1 !important; }
+          .text-stone-500, .text-stone-400 { color: #A8A29E !important; }
+          .border-stone-100, .border-stone-200, .border-stone-200\\/80, .border-stone-200\\/70, .border-stone-300 {
+            border-color: rgba(255, 255, 255, 0.10) !important;
+          }
+          .divide-stone-100 > :not([hidden]) ~ :not([hidden]),
+          .divide-stone-200\\/60 > :not([hidden]) ~ :not([hidden]),
+          .divide-orange-200\\/60 > :not([hidden]) ~ :not([hidden]) {
+            border-color: rgba(255, 255, 255, 0.08) !important;
+          }
+          button.bg-stone-900, a.bg-stone-900 {
+            background-color: ${theme.accent} !important;
+            color: #FFFFFF !important;
+            border-color: ${theme.accent} !important;
+          }
+          .ring-stone-900 { --tw-ring-color: ${theme.accent} !important; }
+          .border-stone-900 { border-color: ${theme.accent} !important; }
+          input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+            background-color: ${theme.darkSurface} !important;
+            color: #F5F5F4 !important;
+            border-color: rgba(255, 255, 255, 0.12) !important;
+          }
+          .bg-\\[\\#E3F1E8\\], .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.15) !important; }
+          .bg-amber-50, .bg-amber-50\\/70 { background-color: rgba(245, 158, 11, 0.15) !important; }
+          .bg-rose-50, .bg-\\[\\#FBE4E6\\] { background-color: rgba(244, 63, 94, 0.16) !important; }
+          .bg-\\[\\#EAE4F7\\], .bg-\\[\\#EDE7F8\\] { background-color: rgba(139, 92, 246, 0.16) !important; }
+          aside.bg-\\[\\#1C1917\\] { border-left: 1px solid rgba(255, 255, 255, 0.07) !important; }
+        `;
+  }
+  return /*#__PURE__*/React.createElement("style", {
+    id: "mx-theme-overrides",
+    dangerouslySetInnerHTML: {
+      __html: css
+    }
+  });
+}
+
+// ---------- الإطار المشترك (العمود الجانبي + شريط الجوال) ----------
+function MXShell({
+  areaLabel,
+  chip,
+  modeSwitch,
+  nav,
+  active,
+  onNav,
+  user,
+  roleLabel,
+  onLogout,
+  children
+}) {
+  const go = id => {
+    onNav(id);
+    window.scrollTo({
+      top: 0
+    });
+  };
+  const brand = mxCurrentBranding();
+  return /*#__PURE__*/React.createElement("div", {
+    dir: "rtl",
+    className: "min-h-screen bg-[#F4F2EE] text-stone-900 lg:pr-[264px] -mb-20 pb-20"
+  }, /*#__PURE__*/React.createElement("aside", {
+    className: "hidden lg:flex fixed top-0 right-0 h-screen w-[264px] bg-[#1C1917] text-stone-300 flex-col px-5 py-7 z-30"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-2"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: true,
+    inSidebar: true,
+    size: "md"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 mt-2 flex items-center gap-2 flex-wrap"
+  }, areaLabel, chip && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300"
+  }, chip))), modeSwitch && /*#__PURE__*/React.createElement("div", {
+    className: "mt-6 p-1 rounded-full bg-white/5 grid grid-cols-2 gap-1"
+  }, modeSwitch.options.map(o => /*#__PURE__*/React.createElement("button", {
+    key: o.value,
+    onClick: () => modeSwitch.onChange(o.value),
+    className: `h-9 rounded-full text-[13px] inline-flex items-center justify-center gap-1.5 transition ${modeSwitch.value === o.value ? "bg-white text-stone-900 font-semibold" : "text-stone-400 hover:text-white"}`
+  }, o.label, o.badge ? /*#__PURE__*/React.createElement("span", {
+    className: "min-w-[18px] h-[18px] px-1 rounded-full bg-orange-500 text-white text-[11px] inline-flex items-center justify-center"
+  }, o.badge) : null))), /*#__PURE__*/React.createElement("nav", {
+    className: `${modeSwitch ? "mt-6" : "mt-10"} space-y-1`
+  }, nav.map(n => /*#__PURE__*/React.createElement("button", {
+    key: n.id,
+    onClick: () => go(n.id),
+    className: `w-full h-11 px-4 rounded-full flex items-center gap-3 text-[14px] transition ${active === n.id ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"}`
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: n.icon
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 text-right"
+  }, n.label), n.badge ? /*#__PURE__*/React.createElement("span", {
+    className: "min-w-[22px] h-[22px] px-1.5 rounded-full bg-orange-500 text-white text-[12px] font-semibold inline-flex items-center justify-center"
+  }, n.badge) : null))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-auto space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-3 py-1.5 rounded-full bg-white/5 text-[11px] text-stone-400"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-1.5 h-1.5 rounded-full bg-emerald-400"
+  }), " صفر آثار"), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "text-emerald-300 hover:text-white font-medium",
+    title: "قفل فوري ومسح الذاكرة (Esc مرتين)"
+  }, "قفل فوري · Esc×2")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 px-2 pt-3 border-t border-white/10"
+  }, /*#__PURE__*/React.createElement(PA2Avatar, {
+    user: user,
+    size: "w-9 h-9"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-white truncate"
+  }, pa2Short(user?.name)), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500 truncate"
+  }, roleLabel)), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "w-9 h-9 rounded-full text-stone-400 hover:text-white hover:bg-white/10 inline-flex items-center justify-center",
+    title: "تسجيل الخروج ومسح الذاكرة"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "logout"
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:hidden sticky top-0 z-30 bg-[#1C1917] text-white px-4 pt-4 pb-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement(MXBrandIdentity, {
+    branding: brand,
+    dark: true,
+    inSidebar: true,
+    size: "sm",
+    subtitle: /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] font-normal text-stone-400"
+    }, "· ", areaLabel)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center text-emerald-300",
+    title: "قفل فوري"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "lock"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "w-9 h-9 rounded-full hover:bg-white/10 inline-flex items-center justify-center",
+    title: "تسجيل الخروج"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "logout"
+  })))), modeSwitch && /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 p-1 rounded-full bg-white/5 grid grid-cols-2 gap-1"
+  }, modeSwitch.options.map(o => /*#__PURE__*/React.createElement("button", {
+    key: o.value,
+    onClick: () => modeSwitch.onChange(o.value),
+    className: `h-8 rounded-full text-[13px] ${modeSwitch.value === o.value ? "bg-white text-stone-900 font-semibold" : "text-stone-400"}`
+  }, o.label, o.badge ? ` · ${o.badge}` : ""))), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1.5 overflow-x-auto mt-3 -mx-1 px-1"
+  }, nav.map(n => /*#__PURE__*/React.createElement("button", {
+    key: n.id,
+    onClick: () => go(n.id),
+    className: `h-9 px-3.5 rounded-full text-[13px] whitespace-nowrap ${active === n.id ? "bg-white text-stone-900 font-semibold" : "text-stone-400 bg-white/5"}`
+  }, n.label, n.badge ? ` · ${n.badge}` : "")))), /*#__PURE__*/React.createElement("main", {
+    className: "px-5 sm:px-8 xl:px-12 py-8 lg:py-12 max-w-[1240px]"
+  }, children));
+}
+
+// ============================================================================
+// 9.8 MX WORKSPACE — الواجهة المزدوجة (إدارة الفريق ⇄ إسناداتي)
+// ============================================================================
+// كل أعضاء ميدان (إلا قائد المكتب التنفيذي حصراً) لديهم واجهة «إسناداتي»؛
+// والمكتب التنفيذي + الموارد البشرية + التربوية + مديري الوحدات لديهم واجهتان (إدارة فرقهم ⇄ إسناداتي)
+function MXWorkspace({
+  db,
+  setDb,
+  currentUser,
+  isUsernameTaken,
+  onAcknowledgeBulletin,
+  onPreviewUser,
+  onLogout,
+  showToast
+}) {
+  const isOffice = mxIsExecOfficeMember(currentUser);
+  const isOpMgr = mxIsOperationalMgr(currentUser);
+  const ledUnit = mxUnitLedByUser(db, currentUser);
+  const canManage = isOffice || isOpMgr || Boolean(ledUnit);
+  const [mode, setMode] = useState(() => {
+    const ws = mxGetBootParam("ws", null);
+    if (ws === "mine") return "mine";
+    if (ws === "manage") return "manage";
+    return canManage ? "manage" : "mine";
+  });
+  const week = mxCurrentWeek(currentUser);
+  const sum = mxWeekSummary(db, currentUser, week);
+  const unread = mxBulletinsForUser(db, currentUser).filter(b => !mxIsAcked(b, currentUser.id)).length;
+  const revPending = mxPendingForReviewer(db, currentUser.id).length;
+  let manageLabel = "إدارة القسم";
+  let pendingManage = 0;
+  if (isOffice) {
+    manageLabel = "المكتب التنفيذي";
+    pendingManage = mxPendingExecApprovals(db, false).length;
+  } else if (isOpMgr) {
+    manageLabel = "إدارة القسم";
+    pendingManage = currentUser.departmentId ? mxPendingApprovals(db, currentUser.departmentId).length : 0;
+  } else if (ledUnit) {
+    manageLabel = "إدارة الوحدة";
+    pendingManage = mxPendingUnitApprovals(db, ledUnit).length;
+  }
+  const modeSwitch = canManage ? {
+    value: mode,
+    onChange: setMode,
+    options: [{
+      value: "manage",
+      label: manageLabel,
+      badge: pendingManage || null
+    }, {
+      value: "mine",
+      label: "إسناداتي",
+      badge: (sum ? sum.remaining : 0) + unread + revPending || null
+    }]
+  } : null;
+  if (!canManage || mode === "mine") {
+    return /*#__PURE__*/React.createElement(CadrePortalV3, {
+      db: db,
+      setDb: setDb,
+      currentUser: currentUser,
+      isUsernameTaken: isUsernameTaken,
+      onAcknowledgeBulletin: onAcknowledgeBulletin,
+      onLogout: onLogout,
+      showToast: showToast,
+      modeSwitch: modeSwitch
+    });
+  }
+  if (isOffice) {
+    return /*#__PURE__*/React.createElement(ExecutivePortalV3, {
+      db: db,
+      setDb: setDb,
+      currentUser: currentUser,
+      isHead: false,
+      modeSwitch: modeSwitch,
+      onPreviewUser: onPreviewUser,
+      onLogout: onLogout,
+      showToast: showToast
+    });
+  }
+  if (isOpMgr) {
+    return /*#__PURE__*/React.createElement(OperationalPortalV3, {
+      db: db,
+      setDb: setDb,
+      currentUser: currentUser,
+      isUsernameTaken: isUsernameTaken,
+      onLogout: onLogout,
+      showToast: showToast,
+      modeSwitch: modeSwitch
+    });
+  }
+  return /*#__PURE__*/React.createElement(UnitLeaderPortalV3, {
+    db: db,
+    setDb: setDb,
+    currentUser: currentUser,
+    unit: ledUnit,
+    onLogout: onLogout,
+    showToast: showToast,
+    modeSwitch: modeSwitch
+  });
+}
+
+// ==== PART:OPS START ====
+// ---------- توجيهات الإدارة التنفيذية (تظهر للمدير أو قائد الوحدة) ----------
+function mxMarkDirectiveRead(setDb, id) {
+  setDb(prev => ({
+    ...prev,
+    directives: (prev.directives || []).map(d => d.id === id ? {
+      ...d,
+      readAt: mxCoarseNow(),
+      readAtLabel: mxNowStamp()
+    } : d)
+  }));
+}
+function MXDirectiveStrip({
+  directives,
+  onRead
+}) {
+  if (!directives || directives.length === 0) return null;
+  const d = directives[0];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[24px] bg-[#1C1917] text-white px-6 py-5 mb-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-start gap-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-11 h-11 rounded-full bg-white/10 text-orange-300 inline-flex items-center justify-center shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "send",
+    className: "w-5 h-5"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-orange-300"
+  }, "توجيه من ", d.fromName || "الإدارة التنفيذية", " · ", d.createdAt, directives.length > 1 ? ` · ${directives.length - 1} آخر` : ""), /*#__PURE__*/React.createElement("p", {
+    className: "text-[16px] text-white mt-1 leading-relaxed whitespace-pre-line"
+  }, d.text)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onRead(d.id),
+    className: "h-10 px-5 rounded-full bg-white text-stone-900 text-[14px] font-semibold hover:bg-stone-100 shrink-0"
+  }, "تم الاطلاع")));
+}
+
+// عرض المحاور الخمسة المقسّمة لأجندة الاجتماع داخل لوحة المتابعة
+function MXAgendaFieldsPreview({
+  fields
+}) {
+  if (!fields || typeof fields !== "object") return null;
+  const entries = MX_AGENDA_PROMPTS.filter(p => (fields[p.key] || "").trim().length > 0);
+  if (entries.length === 0) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mt-2.5 space-y-2 rounded-2xl bg-white/80 p-3 border border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-semibold text-orange-700"
+  }, "محاور أجندة الاجتماع (", entries.length, " من ", MX_AGENDA_PROMPTS.length, "):"), entries.map((p, idx) => /*#__PURE__*/React.createElement("div", {
+    key: p.key,
+    className: "text-[12px] text-stone-700 leading-relaxed"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold text-stone-900 block"
+  }, idx + 1, ". ", p.label), /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-600 whitespace-pre-line"
+  }, fields[p.key]))));
+}
+
+// لوحة متابعة عضو: إسنادات الأسبوع + الاعتمادات المعلّقة + استعراض الأجندة المقسّمة
+function MXMemberFollowPanel({
+  db,
+  deptId,
+  customDefs,
+  customPending,
+  user,
+  onApprove,
+  onReject,
+  onClose
+}) {
+  const rules = mxRules(db);
+  const week = mxCurrentWeek(user);
+  const defs = customDefs || mxDeptTaskDefs(db, deptId).filter(t => t.targetScope !== "dept_team" || user.deptTeamId === deptId);
+  const pending = (customPending || mxPendingApprovals(db, deptId)).filter(p => p.user.id === user.id);
+  const s = mxWeekSummary(db, user, week, deptId || null);
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: `${user.unit || pa2RoleLabel(user)} · الأسبوع ${week}`,
+    title: pa2Short(user.name),
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[22px] font-bold tabular-nums"
+  }, s.pct, "%"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500"
+  }, "هذا الأسبوع")), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[22px] font-bold tabular-nums"
+  }, mxRecentPct(db, user, 4, deptId || null), "%"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500"
+  }, "آخر 4 أسابيع"))), pending.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: `${pending.length}`
+  }, "بانتظار اعتمادك"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, pending.map(p => /*#__PURE__*/React.createElement("div", {
+    key: `${p.week}:${p.task.id}`,
+    className: "rounded-2xl bg-[#ECE7FA]/60 px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] font-medium text-stone-900"
+  }, p.task.title), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500 mt-0.5"
+  }, "الأسبوع ", p.week, p.rec.lateSubmit ? " · متأخرة" : ""), p.rec.agendaFields ? /*#__PURE__*/React.createElement(MXAgendaFieldsPreview, {
+    fields: p.rec.agendaFields
+  }) : p.rec.note && /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-600 mt-2 leading-relaxed whitespace-pre-line"
+  }, "«", p.rec.note, "»"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onApprove(p),
+    className: "h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold"
+  }, "اعتماد"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onReject(p),
+    className: "h-9 px-4 rounded-full text-[13px] text-rose-600 hover:bg-rose-50"
+  }, "إعادة للمراجعة")))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "إسنادات هذا الأسبوع"), /*#__PURE__*/React.createElement("div", {
+    className: "divide-y divide-stone-100"
+  }, defs.map(t => {
+    const rec = mxRec(user, week, t.id);
+    const st = mxTaskState(t, rec, rules);
+    const sInfo = mxSeriesInfo(t, user, week);
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      className: "py-2.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] text-stone-700 truncate"
+    }, t.title, sInfo && /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] text-orange-700 mr-1.5"
+    }, "(", sInfo.completedCount, "/", sInfo.totalCount, ")")), /*#__PURE__*/React.createElement(MXStateTag, {
+      st: st
+    })), rec.agendaFields && /*#__PURE__*/React.createElement(MXAgendaFieldsPreview, {
+      fields: rec.agendaFields
+    }));
+  }))));
+}
+
+// لوحة تعريف إسناد (إنشاء/تعديل مع إعدادات متقدمة: نوع المحاضرة/الاختبار، بنك الأسئلة العشوائي، السلسلة المتتابعة، الأجندة المقسّمة، و3 خيارات اعتماد)
+function MXTaskDefPanel({
+  db,
+  deptId,
+  scopeMode = "dept",
+  isHead = true,
+  def,
+  isNew,
+  allowedTypes,
+  onSave,
+  onDelete,
+  onClose
+}) {
+  const candidates = useMemo(() => {
+    if (!db) return [];
+    if (deptId) {
+      const team = db.users.filter(u => u.deptTeamId === deptId || u.departmentId === deptId || Array.isArray(u.assignedDepartments) && u.assignedDepartments.includes(deptId));
+      return team.length ? team : db.users.filter(u => u.roleType === "cadre");
+    }
+    return db.users.filter(u => u.roleType !== "platform_admin");
+  }, [db, deptId]);
+  const [d, setD] = useState(() => ({
+    title: def?.title || "",
+    type: def?.type || allowedTypes[0] || "practical",
+    approval: def?.approval || MX_TYPE_META[def?.type || allowedTypes[0]]?.approval || "self",
+    approverUserId: def?.approverUserId || candidates[0]?.id || "",
+    targetScope: def?.targetScope || "all_units",
+    targetGroup: def?.targetGroup || "unit_leaders",
+    deliveryMode: def?.deliveryMode || "direct",
+    lectureMode: def?.lectureMode || "lecture_and_quiz",
+    lectureTitle: def?.lectureTitle || "",
+    lectureDesc: def?.lectureDesc || "",
+    videoUrl: def?.videoUrl || "builtin://demo-lecture",
+    questionsPerMember: def?.questionsPerMember || 3,
+    shuffleQuestions: def?.shuffleQuestions !== false,
+    questionPool: Array.isArray(def?.questionPool) && def.questionPool.length ? def.questionPool : DEFAULT_HR_QUESTION_POOL,
+    seriesItems: Array.isArray(def?.seriesItems) && def.seriesItems.length ? def.seriesItems : [{
+      id: "ep_1",
+      title: "الحلقة 1: المدخل التأسيسي",
+      instructions: "شاهد الحلقة الأولى وأتمم المطلوب لتفتح لك الحلقة التالية في الأسبوع القادم.",
+      videoUrl: "builtin://demo-lecture"
+    }, {
+      id: "ep_2",
+      title: "الحلقة 2: التطبيق العملي",
+      instructions: "تفتح بعد إتمام الحلقة الأولى.",
+      videoUrl: "builtin://demo-lecture"
+    }],
+    useStructuredAgenda: Boolean(def?.useStructuredAgenda),
+    targetDays: def?.targetDays || 5,
+    instructions: def?.instructions || ""
+  }));
+  const [newQ, setNewQ] = useState({
+    text: "",
+    options: ["", "", "", ""],
+    correctIndex: 0
+  });
+  const [showAddQ, setShowAddQ] = useState(false);
+  const [newEp, setNewEp] = useState({
+    title: "",
+    instructions: "",
+    videoUrl: ""
+  });
+  const [showAddEp, setShowAddEp] = useState(false);
+  const [editEpId, setEditEpId] = useState(() => Array.isArray(def?.seriesItems) && def.seriesItems[0]?.id || "ep_1");
+  const set = (k, v) => setD(p => ({
+    ...p,
+    [k]: v
+  }));
+  const fixedSelf = d.type === "lecture_quiz" || d.type === "daily_habit";
+  const supportsSeries = d.type === "lecture_quiz" || d.type === "reading" || d.type === "practical";
+  const dirty = isNew ? d.title.trim().length > 1 : true;
+  const updateEpisodeInSeries = (epid, patch) => {
+    set("seriesItems", (d.seriesItems || []).map(ep => ep.id === epid ? {
+      ...ep,
+      ...patch
+    } : ep));
+  };
+  const addQuestionToPool = () => {
+    if (!newQ.text.trim() || newQ.options.some(o => !o.trim())) return;
+    const qObj = {
+      id: mxRandomId("q"),
+      text: newQ.text.trim(),
+      options: newQ.options.map(o => o.trim()),
+      correctIndex: Number(newQ.correctIndex) || 0
+    };
+    set("questionPool", [...(d.questionPool || []), qObj]);
+    setNewQ({
+      text: "",
+      options: ["", "", "", ""],
+      correctIndex: 0
+    });
+    setShowAddQ(false);
+  };
+  const removeQuestionFromPool = qid => {
+    set("questionPool", (d.questionPool || []).filter(q => q.id !== qid));
+  };
+  const addEpisodeToSeries = () => {
+    if (!newEp.title.trim()) return;
+    const epObj = {
+      id: mxRandomId("ep"),
+      title: newEp.title.trim(),
+      instructions: newEp.instructions.trim(),
+      videoUrl: newEp.videoUrl.trim() || "builtin://demo-lecture"
+    };
+    set("seriesItems", [...(d.seriesItems || []), epObj]);
+    setEditEpId(epObj.id);
+    setNewEp({
+      title: "",
+      instructions: "",
+      videoUrl: ""
+    });
+    setShowAddEp(false);
+  };
+  const removeEpisodeFromSeries = epid => {
+    if ((d.seriesItems || []).length <= 1) return;
+    const next = (d.seriesItems || []).filter(ep => ep.id !== epid);
+    set("seriesItems", next);
+    if (editEpId === epid) setEditEpId(next[0]?.id || null);
+  };
+  const save = () => {
+    if (!d.title.trim()) return;
+    const out = {
+      ...d,
+      title: d.title.trim(),
+      approval: fixedSelf ? "self" : d.approval,
+      approverUserId: !fixedSelf && d.approval === "person" ? d.approverUserId : undefined,
+      deliveryMode: supportsSeries ? d.deliveryMode : "direct",
+      seriesItems: supportsSeries && d.deliveryMode === "series" ? d.seriesItems : undefined,
+      useStructuredAgenda: d.type === "agenda_minutes" ? Boolean(d.useStructuredAgenda) : undefined,
+      targetDays: d.type === "daily_habit" ? d.targetDays : undefined
+    };
+    onSave(out);
+  };
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: isNew ? "إسناد جديد" : "إعدادات الإسناد",
+    title: d.title || "بدون عنوان",
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: dirty,
+      onSave: save,
+      saveLabel: isNew ? "إضافة الإسناد" : "حفظ الإعدادات",
+      danger: !isNew && /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "حذف الإسناد",
+        confirmLabel: "تأكيد الحذف",
+        onConfirm: onDelete
+      })
+    })
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "عنوان الإسناد"), /*#__PURE__*/React.createElement("input", {
+    value: d.title,
+    onChange: e => set("title", e.target.value),
+    className: pa2InputCls,
+    placeholder: "مثال: المحاضرة الأسبوعية أو أجندة اللقاء"
+  })), scopeMode === "dept" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "لمن يوجّه هذا الإسناد؟"
+  }, "نطاق الإسناد"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.targetScope,
+    onChange: v => set("targetScope", v),
+    options: [{
+      value: "all_units",
+      label: "كافة الوحدات"
+    }, {
+      value: "dept_team",
+      label: "فريق الإدارة فقط"
+    }]
+  })), scopeMode === "exec" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "حسب هيكلة القيادة التنفيذية"
+  }, "الجهة المسند إليها"), isHead ? /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.targetGroup,
+    onChange: v => set("targetGroup", v),
+    options: [{
+      value: "unit_leaders",
+      label: "مديرو الوحدات"
+    }, {
+      value: "exec_office",
+      label: "المكتب التنفيذي"
+    }, {
+      value: "all_leaders",
+      label: "الاثنان معاً"
+    }]
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] px-4 py-2.5 text-[13px] text-stone-700"
+  }, "يُسند إلى: مديري الوحدات")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "يتحكم في إمكانيات الإسناد"
+  }, "نوع الإسناد"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2"
+  }, allowedTypes.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    onClick: () => setD(p => ({
+      ...p,
+      type: t,
+      approval: MX_TYPE_META[t]?.approval || "self"
+    })),
+    className: `h-11 px-3 rounded-2xl text-[13px] text-right flex items-center gap-2 transition ${d.type === t ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`
+  }, /*#__PURE__*/React.createElement("span", null, MX_TYPE_META[t]?.icon), MX_TYPE_META[t]?.label || t)))), supportsSeries && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 rounded-2xl bg-[#F4F2EE] p-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "مباشر أو سلسلة تبدأ من الحلقة 1"
+  }, "طريقة عرض الإسناد للعضو"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.deliveryMode,
+    onChange: v => set("deliveryMode", v),
+    options: [{
+      value: "direct",
+      label: "عرض مباشر"
+    }, {
+      value: "series",
+      label: "سلسلة متتابعة من البداية"
+    }]
+  })), d.deliveryMode === "series" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5 pt-2 border-t border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] font-semibold text-stone-700"
+  }, "حلقات السلسلة بالترتيب (", (d.seriesItems || []).length, ")"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowAddEp(v => !v),
+    className: "text-[12px] font-semibold text-orange-700 hover:underline"
+  }, showAddEp ? "إلغاء" : "+ إضافة حلقة جديدة")), /*#__PURE__*/React.createElement("p", {
+    className: "text-[12px] text-stone-500 leading-relaxed"
+  }, "اضغط على أي حلقة لتعديل عنوانها أو لصق ", /*#__PURE__*/React.createElement("strong", {
+    className: "text-stone-700"
+  }, "رابط فيديو المحاضرة (يوتيوب أو MP4)"), " الخاص بها مباشرة."), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2 max-h-80 overflow-y-auto pr-0.5"
+  }, (d.seriesItems || []).map((ep, idx) => {
+    const isExpanded = editEpId === ep.id;
+    return /*#__PURE__*/React.createElement("div", {
+      key: ep.id,
+      className: "rounded-xl bg-white p-3 border border-stone-200/80 space-y-2.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-2 text-[13px]"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setEditEpId(isExpanded ? null : ep.id),
+      className: "flex-1 text-right font-semibold text-stone-900 truncate flex items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", null, idx + 1, ". ", ep.title)), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 shrink-0"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setEditEpId(isExpanded ? null : ep.id),
+      className: "text-[12px] text-orange-700 font-medium hover:underline"
+    }, isExpanded ? "طي" : d.type === "lecture_quiz" ? "تعديل الرابط" : "تعديل"), (d.seriesItems || []).length > 1 && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeEpisodeFromSeries(ep.id),
+      className: "text-[12px] text-rose-600 hover:underline"
+    }, "حذف"))), isExpanded && /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 pt-2 border-t border-stone-100"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] font-medium text-stone-500 mb-1"
+    }, "عنوان الحلقة ", idx + 1), /*#__PURE__*/React.createElement("input", {
+      value: ep.title || "",
+      onChange: e => updateEpisodeInSeries(ep.id, {
+        title: e.target.value
+      }),
+      placeholder: "عنوان الحلقة",
+      className: pa2InputCls
+    })), d.type === "lecture_quiz" && d.lectureMode !== "quiz_only" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] font-medium text-stone-500 mb-1"
+    }, "رابط فيديو المحاضرة (يوتيوب أو MP4)"), /*#__PURE__*/React.createElement("input", {
+      dir: "ltr",
+      value: ep.videoUrl || "",
+      onChange: e => updateEpisodeInSeries(ep.id, {
+        videoUrl: e.target.value
+      }),
+      placeholder: "https://www.youtube.com/watch?v=... أو رابط MP4",
+      className: pa2InputCls
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] font-medium text-stone-500 mb-1"
+    }, "وصف أو تعليمات الحلقة"), /*#__PURE__*/React.createElement("input", {
+      value: ep.instructions || "",
+      onChange: e => updateEpisodeInSeries(ep.id, {
+        instructions: e.target.value
+      }),
+      placeholder: "تعليمات للعضو",
+      className: pa2InputCls
+    }))));
+  })), showAddEp && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl bg-white p-3 space-y-2 border border-stone-300"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-semibold text-stone-800"
+  }, "إضافة حلقة جديدة للسلسلة"), /*#__PURE__*/React.createElement("input", {
+    value: newEp.title,
+    onChange: e => setNewEp(p => ({
+      ...p,
+      title: e.target.value
+    })),
+    placeholder: "عنوان الحلقة الجديدة",
+    className: pa2InputCls
+  }), d.type === "lecture_quiz" && d.lectureMode !== "quiz_only" && /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    value: newEp.videoUrl,
+    onChange: e => setNewEp(p => ({
+      ...p,
+      videoUrl: e.target.value
+    })),
+    placeholder: "https://... رابط فيديو الحلقة (يوتيوب أو MP4)",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("input", {
+    value: newEp.instructions,
+    onChange: e => setNewEp(p => ({
+      ...p,
+      instructions: e.target.value
+    })),
+    placeholder: "وصف مختصر أو تعليمات الحلقة",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: addEpisodeToSeries,
+    className: "h-9 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold"
+  }, "حفظ الحلقة في السلسلة")))), d.type === "lecture_quiz" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4 rounded-2xl bg-[#F4F2EE] p-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "نمط المحاضرة والاختبار"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.lectureMode,
+    onChange: v => set("lectureMode", v),
+    options: [{
+      value: "lecture_and_quiz",
+      label: "محاضرة بأسئلة"
+    }, {
+      value: "lecture_only",
+      label: "محاضرة فقط"
+    }, {
+      value: "quiz_only",
+      label: "اختبار فقط"
+    }]
+  })), d.lectureMode !== "quiz_only" && d.deliveryMode !== "series" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 pt-2 border-t border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "عنوان المحاضرة"), /*#__PURE__*/React.createElement("input", {
+    value: d.lectureTitle,
+    onChange: e => set("lectureTitle", e.target.value),
+    className: pa2InputCls,
+    placeholder: "عنوان المحاضرة المعروضة للعضو"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "يوتيوب أو MP4"
+  }, "رابط فيديو المحاضرة المباشر"), /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    value: d.videoUrl,
+    onChange: e => set("videoUrl", e.target.value),
+    className: pa2InputCls,
+    placeholder: "https://www.youtube.com/watch?v=... أو رابط MP4"
+  }))), d.lectureMode !== "lecture_only" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 pt-2 border-t border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-stone-800"
+  }, "عدد الأسئلة التي تظهر لكل عضو"), /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: d.questionsPerMember,
+    min: 1,
+    max: Math.max(1, (d.questionPool || []).length),
+    onChange: v => set("questionsPerMember", v),
+    suffix: "أسئلة"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-stone-700"
+  }, "اختيار وترتيب عشوائي مختلف لكل عضو"), /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: d.shuffleQuestions,
+    onChange: v => set("shuffleQuestions", v)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "pt-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] font-semibold text-stone-700"
+  }, "بنك الأسئلة (", (d.questionPool || []).length, " سؤالاً)"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowAddQ(v => !v),
+    className: "text-[12px] font-semibold text-orange-700 hover:underline"
+  }, showAddQ ? "إلغاء" : "+ إضافة سؤال للبنك")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5 max-h-48 overflow-y-auto"
+  }, (d.questionPool || []).map((q, qi) => /*#__PURE__*/React.createElement("div", {
+    key: q.id,
+    className: "rounded-xl bg-white px-3 py-2 flex items-start justify-between gap-2 text-[12px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-800 leading-snug"
+  }, qi + 1, ". ", q.text), (d.questionPool || []).length > 1 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => removeQuestionFromPool(q.id),
+    className: "text-rose-600 hover:underline shrink-0"
+  }, "حذف")))), showAddQ && /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 rounded-xl bg-white p-3 space-y-2 border border-stone-200"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: newQ.text,
+    onChange: e => setNewQ(p => ({
+      ...p,
+      text: e.target.value
+    })),
+    placeholder: "نص السؤال الجديد",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2"
+  }, newQ.options.map((opt, oi) => /*#__PURE__*/React.createElement("input", {
+    key: oi,
+    value: opt,
+    onChange: e => {
+      const next = [...newQ.options];
+      next[oi] = e.target.value;
+      setNewQ(p => ({
+        ...p,
+        options: next
+      }));
+    },
+    placeholder: `الخيار ${oi + 1}`,
+    className: pa2InputCls
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2 pt-1"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: newQ.correctIndex,
+    onChange: e => setNewQ(p => ({
+      ...p,
+      correctIndex: Number(e.target.value)
+    })),
+    className: "h-9 rounded-xl bg-[#F4F2EE] px-3 text-[12px] text-stone-700"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: 0
+  }, "الإجابة الصحيحة: الخيار 1"), /*#__PURE__*/React.createElement("option", {
+    value: 1
+  }, "الإجابة الصحيحة: الخيار 2"), /*#__PURE__*/React.createElement("option", {
+    value: 2
+  }, "الإجابة الصحيحة: الخيار 3"), /*#__PURE__*/React.createElement("option", {
+    value: 3
+  }, "الإجابة الصحيحة: الخيار 4")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: addQuestionToPool,
+    className: "h-9 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold"
+  }, "إضافة السؤال")))))), d.type === "agenda_minutes" && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] p-4 space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-semibold text-stone-900"
+  }, "تفعيل الخانات الخمس المقسّمة لأجندة اللقاء"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-500"
+  }, "خاطرة إيمانية · تحديثات إدارية · مراجعة الأسبوع الماضي · تحدي العصف الذهني · إسنادات الأسبوع القادم")), /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: Boolean(d.useStructuredAgenda),
+    onChange: v => set("useStructuredAgenda", v)
+  }))), d.type === "daily_habit" ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement(PA2Label, null, "الأيام المطلوبة أسبوعياً"), /*#__PURE__*/React.createElement(PA2Stepper, {
+    value: d.targetDays,
+    min: 1,
+    max: 7,
+    onChange: v => set("targetDays", v),
+    suffix: "أيام"
+  })) : !fixedSelf && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "طريقة الاعتماد"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.approval,
+    onChange: v => set("approval", v),
+    options: [{
+      value: "self",
+      label: "اعتماد فوري"
+    }, {
+      value: "manager",
+      label: "مدير الإدارة"
+    }, {
+      value: "person",
+      label: "شخص في الإدارة"
+    }]
+  })), d.approval === "person" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "مثال: مسؤول تسميع الورد أو مراجع التكليف"
+  }, "الشخص الموكل إليه الاعتماد"), /*#__PURE__*/React.createElement("select", {
+    value: d.approverUserId,
+    onChange: e => set("approverUserId", e.target.value),
+    className: pa2InputCls
+  }, candidates.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, pa2Short(u.name), " (", u.jobTitle || u.unit || "عضو", ")"))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "اختياري"
+  }, "تعليمات للعضو"), /*#__PURE__*/React.createElement("textarea", {
+    value: d.instructions,
+    onChange: e => set("instructions", e.target.value),
+    rows: 3,
+    className: `${pa2InputCls} h-auto py-3 resize-none`
+  })));
+}
+
+// لوحة حساب عضو (للموارد البشرية ومدير المنصة)
+function MXCadrePanel({
+  db,
+  user,
+  isNew,
+  isUsernameTaken,
+  onSave,
+  onDelete,
+  onResetPassword,
+  onClose
+}) {
+  const units = mxUnits(db);
+  const depts = mxDepartments(db).filter(d => d.enabled !== false);
+  const [d, setD] = useState(() => ({
+    name: user?.name || "",
+    username: user?.username || "",
+    jobTitle: user?.jobTitle || "",
+    unit: user?.unit || units[0]?.name || "",
+    deptTeamId: user?.deptTeamId || "",
+    assignedDepartments: Array.isArray(user?.assignedDepartments) ? user.assignedDepartments : depts.map(x => x.id),
+    password: isNew ? pa2TempPassword() : ""
+  }));
+  const [err, setErr] = useState("");
+  const set = (k, v) => setD(p => ({
+    ...p,
+    [k]: v
+  }));
+  const toggleDept = id => set("assignedDepartments", d.assignedDepartments.includes(id) ? d.assignedDepartments.filter(x => x !== id) : [...d.assignedDepartments, id]);
+  const same = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+  const dirty = isNew ? d.name.trim() && d.username.trim() : d.name !== user.name || d.username !== user.username || d.jobTitle !== (user.jobTitle || "") || d.unit !== (user.unit || "") || (d.deptTeamId || "") !== (user.deptTeamId || "") || !same(d.assignedDepartments, user.assignedDepartments || []);
+  const save = () => {
+    setErr("");
+    const uname = d.username.trim().toLowerCase();
+    if (!d.name.trim() || !uname) {
+      setErr("الاسم واسم المستخدم مطلوبان");
+      return;
+    }
+    if (!/^[a-z0-9._-]{3,}$/.test(uname)) {
+      setErr("اسم المستخدم بالإنجليزية 3 أحرف على الأقل، بدون مسافات");
+      return;
+    }
+    if (isUsernameTaken(uname, user?.id)) {
+      setErr("اسم المستخدم مستخدم بالفعل");
+      return;
+    }
+    onSave({
+      ...d,
+      name: d.name.trim(),
+      username: uname,
+      jobTitle: d.jobTitle.trim(),
+      deptTeamId: d.deptTeamId || null
+    });
+  };
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: isNew ? "عضو جديد" : user.unit || "عضو",
+    title: d.name || "عضو جديد",
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: Boolean(dirty),
+      onSave: save,
+      saveLabel: isNew ? "إنشاء الحساب" : "حفظ التغييرات",
+      danger: !isNew && /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "حذف الحساب نهائياً",
+        confirmLabel: "تأكيد الحذف",
+        onConfirm: onDelete
+      })
+    })
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الاسم الكامل"), /*#__PURE__*/React.createElement("input", {
+    value: d.name,
+    onChange: e => set("name", e.target.value),
+    className: pa2InputCls
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    dir: "ltr",
+    value: d.username,
+    onChange: e => set("username", e.target.value),
+    className: pa2InputCls
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "اختياري"
+  }, "المسمى"), /*#__PURE__*/React.createElement("input", {
+    value: d.jobTitle,
+    onChange: e => set("jobTitle", e.target.value),
+    className: pa2InputCls
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الوحدة"), /*#__PURE__*/React.createElement("select", {
+    value: d.unit,
+    onChange: e => set("unit", e.target.value),
+    className: pa2InputCls
+  }, units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "اختياري"
+  }, "فريق الإدارة الداخلي"), /*#__PURE__*/React.createElement("select", {
+    value: d.deptTeamId,
+    onChange: e => set("deptTeamId", e.target.value),
+    className: pa2InputCls
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "عضو وحدة (عام)"), depts.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, "فريق ", x.shortName || x.name))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: "تحدد الإدارات التي تصله إسناداتها"
+  }, "تصله إسنادات من"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, depts.map(x => /*#__PURE__*/React.createElement("div", {
+    key: x.id,
+    className: "flex items-center justify-between rounded-2xl bg-[#F4F2EE] px-4 h-12"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] text-stone-700"
+  }, x.name), /*#__PURE__*/React.createElement(PA2Switch, {
+    checked: d.assignedDepartments.includes(x.id),
+    onChange: () => toggleDept(x.id)
+  }))))), isNew ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#FFF3E2] px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-orange-700"
+  }, "كلمة مرور مؤقتة (يُطلب تغييرها)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mt-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    dir: "ltr",
+    className: "text-[18px] font-semibold tracking-wider"
+  }, d.password), /*#__PURE__*/React.createElement("button", {
+    onClick: () => pa2Copy(d.password),
+    className: "text-[13px] text-stone-600 inline-flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "copy",
+    className: "w-4 h-4"
+  }), "نسخ"))) : /*#__PURE__*/React.createElement("button", {
+    onClick: onResetPassword,
+    className: "text-[13px] text-stone-600 hover:text-stone-900 inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "key",
+    className: "w-4 h-4"
+  }), "إصدار كلمة مرور مؤقتة جديدة"), err && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700"
+  }, err));
+}
+
+// دوال حفظ الحسابات (مشتركة بين الموارد البشرية ومدير المنصة)
+function mxSaveCadre(setDb, user, isNew, draft) {
+  if (isNew) {
+    const id = mxRandomId("u");
+    setDb(prev => ({
+      ...prev,
+      users: [...prev.users, {
+        id,
+        roleType: "cadre",
+        name: draft.name,
+        username: draft.username,
+        password: mxHashPw(draft.password),
+        mustChangePassword: true,
+        jobTitle: draft.jobTitle,
+        unit: draft.unit,
+        deptTeamId: draft.deptTeamId || null,
+        assignedDepartments: draft.assignedDepartments,
+        joinedAt: mxCoarseNow(),
+        tasksRecord: {},
+        profile: {}
+      }]
+    }));
+    return id;
+  }
+  setDb(prev => ({
+    ...prev,
+    users: prev.users.map(u => u.id === user.id ? {
+      ...u,
+      name: draft.name,
+      username: draft.username,
+      jobTitle: draft.jobTitle,
+      unit: draft.unit,
+      deptTeamId: draft.deptTeamId || null,
+      assignedDepartments: draft.assignedDepartments
+    } : u)
+  }));
+  return user.id;
+}
+
+// ---------- بوابة مدير الوحدة (الواجهة الأولى من الواجهة المزدوجة لمدير الوحدة: إدارة الوحدة ⇄ إسناداتي) ----------
+function UnitLeaderPortalV3({
+  db,
+  setDb,
+  currentUser,
+  unit,
+  onLogout,
+  showToast,
+  modeSwitch
+}) {
+  const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+  const rules = mxRules(db);
+  const [view, setView] = useState("follow");
+  const [sel, setSel] = useState(null);
+  const [statusF, setStatusF] = useState("all");
+  const members = db.users.filter(u => u.unit === unit.name && u.id !== me.id && !mxIsLeaderRole(u));
+  const allUnitDefs = mxUnitTaskDefs(db, unit.id, true);
+  const activeUnitDefs = mxUnitTaskDefs(db, unit.id, false);
+  const pending = mxPendingUnitApprovals(db, unit);
+  const directives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+  const rows = members.map(u => {
+    const week = mxCurrentWeek(u);
+    const s = mxWeekSummary(db, u, week);
+    return {
+      user: u,
+      week,
+      pct: s.pct,
+      done: s.done,
+      total: s.total,
+      status: mxStatusOf(s.pct),
+      recentPct: mxRecentPct(db, u, 4)
+    };
+  });
+  const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+  const counts = {
+    committed: 0,
+    behind: 0,
+    not_started: 0
+  };
+  rows.forEach(r => counts[r.status.key]++);
+  const myWeek = mxCurrentWeek(me);
+  const myAgendaRec = mxRec(me, myWeek, "exec_unit_agenda");
+  const patchUnitTasks = fn => setDb(prev => {
+    const sc = prev.systemConfig || {};
+    const ut = {
+      ...(sc.unitTasks || {})
+    };
+    ut[unit.id] = fn([...(ut[unit.id] || [])]);
+    return {
+      ...prev,
+      systemConfig: {
+        ...sc,
+        unitTasks: ut
+      }
+    };
+  });
+  const approve = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: p.rec.lateSubmit ? "late" : "on_time",
+      completedAt: mxCoarseNow(),
+      approvedBy: me.id
+    });
+    showToast("تم اعتماد إسناد العضو");
+  };
+  const reject = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: "rejected",
+      rejectedBy: me.id
+    });
+    showToast("أُعيد للمراجعة");
+  };
+  const unitBulletins = (db.bulletins || []).filter(b => b.targetType === "unit" && b.targetUnit === unit.name);
+  const [bulDraft, setBulDraft] = useState({
+    title: "",
+    content: "",
+    category: "تعميم وحدة"
+  });
+  const publishUnitBulletin = () => {
+    if (bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5) return;
+    const b = {
+      id: mxRandomId("bul"),
+      title: bulDraft.title.trim(),
+      content: bulDraft.content.trim(),
+      category: bulDraft.category || "تعميم وحدة",
+      senderId: me.id,
+      senderName: pa2Short(me.name),
+      senderRole: `مدير ${unit.name}`,
+      createdAt: mxNowStamp(),
+      createdAtTs: mxCoarseNow(),
+      targetType: "unit",
+      targetUnit: unit.name,
+      recipientIds: [],
+      acknowledgedBy: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      bulletins: [b, ...(prev.bulletins || [])]
+    }));
+    setBulDraft({
+      title: "",
+      content: "",
+      category: "تعميم وحدة"
+    });
+    setSel(null);
+    showToast(`نُشر التعميم لأفراد ${unit.name}`);
+  };
+  const nav = [{
+    id: "follow",
+    label: "متابعة الوحدة",
+    icon: "chart",
+    badge: pending.length + directives.length || null
+  }, {
+    id: "tasks",
+    label: "إسنادات الوحدة",
+    icon: "tasks"
+  }, {
+    id: "bulletins",
+    label: "تعميمات الوحدة",
+    icon: "megaphone"
+  }];
+  const go = (v, s = null) => {
+    setView(v);
+    setSel(s);
+    window.scrollTo({
+      top: 0
+    });
+  };
+  let main = null,
+    panel = null;
+  if (view === "follow") {
+    const filteredRows = rows.filter(r => statusF === "all" || r.status.key === statusF).sort((a, b) => a.pct - b.pct);
+    const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+    if (selUser) {
+      panel = /*#__PURE__*/React.createElement(MXMemberFollowPanel, {
+        db: db,
+        customDefs: mxUserTasks(db, selUser),
+        customPending: pending,
+        user: selUser,
+        onApprove: approve,
+        onReject: reject,
+        onClose: () => setSel(null)
+      });
+    }
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: unit.name,
+      title: "متابعة أفراد الوحدة",
+      desc: `متابعة التزام ${rows.length} أعضاء في ${unit.name} بإسناداتهم هذا الأسبوع.`,
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => go("tasks", {
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد للوحدة")
+    }), /*#__PURE__*/React.createElement(MXDirectiveStrip, {
+      directives: directives,
+      onRead: id => mxMarkDirectiveRead(setDb, id)
+    }), /*#__PURE__*/React.createElement(MXScoreCard, {
+      label: `التزام ${unit.name} هذا الأسبوع`,
+      pct: avg,
+      caption: `${rows.length} أعضاء · ${activeUnitDefs.length} إسنادات داخلية`,
+      bars: activeUnitDefs.map(t => {
+        const dCount = rows.filter(r => mxTaskState(t, mxRec(r.user, r.week, t.id), rules).done).length;
+        const p = rows.length ? Math.round(dCount / rows.length * 100) : 0;
+        return {
+          label: t.title,
+          value: `${dCount} / ${rows.length}`,
+          pct: p,
+          tone: "bg-teal-500"
+        };
+      }),
+      stats: [{
+        n: counts.committed,
+        l: "ملتزم"
+      }, {
+        n: counts.behind,
+        l: "متأخر"
+      }, {
+        n: counts.not_started,
+        l: "لم يبدأ"
+      }]
+    }), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 mb-8"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3 flex-wrap"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-medium text-orange-700"
+    }, "أجندة الاجتماع الأسبوعي"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[17px] font-bold text-stone-900 mt-0.5"
+    }, "أجندة لقاء ", unit.name, " (المحاور الخمسة)")), modeSwitch && /*#__PURE__*/React.createElement("button", {
+      onClick: () => modeSwitch.onChange("mine"),
+      className: "h-9 px-4 rounded-full bg-stone-900 text-white text-[13px] font-semibold hover:bg-stone-800"
+    }, myAgendaRec?.agendaFields ? "تعديل الأجندة في إسناداتي" : "كتابة الأجندة في إسناداتي")), myAgendaRec?.agendaFields ? /*#__PURE__*/React.createElement(MXAgendaFieldsPreview, {
+      fields: myAgendaRec.agendaFields
+    }) : /*#__PURE__*/React.createElement("p", {
+      className: "text-[13px] text-stone-500 mt-2"
+    }, "لم تُملأ محاور أجندة هذا الأسبوع بعد. افتح «إسناداتي» لملء المحاور الخمسة وحفظها في مساحتك وإرسالها للمكتب التنفيذي.")), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3 mb-4 flex-wrap"
+    }, /*#__PURE__*/React.createElement("h2", {
+      className: "text-xl font-bold text-stone-900"
+    }, "أفراد الوحدة"), /*#__PURE__*/React.createElement(PA2Segmented, {
+      size: "sm",
+      value: statusF,
+      onChange: setStatusF,
+      options: [{
+        value: "all",
+        label: "الكل"
+      }, {
+        value: "committed",
+        label: "ملتزم"
+      }, {
+        value: "behind",
+        label: "متأخر"
+      }, {
+        value: "not_started",
+        label: "لم يبدأ"
+      }]
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, filteredRows.map(r => {
+      const active = selUser?.id === r.user.id;
+      const uPend = pending.filter(p => p.user.id === r.user.id).length;
+      return /*#__PURE__*/React.createElement("button", {
+        key: r.user.id,
+        onClick: () => setSel(active ? null : {
+          kind: "member",
+          id: r.user.id
+        }),
+        className: `w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: r.user
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[15px] font-medium text-stone-900 truncate"
+      }, pa2Short(r.user.name)), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, r.user.jobTitle || "عضو")), uPend > 0 && /*#__PURE__*/React.createElement("span", {
+        className: "h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] inline-flex items-center"
+      }, uPend, " للاعتماد"), /*#__PURE__*/React.createElement("span", {
+        className: "hidden md:block w-28"
+      }, /*#__PURE__*/React.createElement(MXProgress, {
+        pct: r.pct
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "w-12 text-left text-[14px] font-semibold tabular-nums text-stone-900"
+      }, r.pct, "%"), /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:block"
+      }, /*#__PURE__*/React.createElement(MXStatusPill, {
+        status: r.status
+      })));
+    }))), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "tasks") {
+    const selDef = sel?.kind === "task" ? sel.id === "__new" ? "__new" : allUnitDefs.find(t => t.id === sel.id) : null;
+    if (selDef) {
+      panel = /*#__PURE__*/React.createElement(MXTaskDefPanel, {
+        key: sel.id,
+        db: db,
+        scopeMode: "unit",
+        def: selDef === "__new" ? null : selDef,
+        isNew: selDef === "__new",
+        allowedTypes: ["practical", "meeting", "reading", "agenda_minutes", "daily_habit"],
+        onClose: () => setSel(null),
+        onDelete: () => {
+          patchUnitTasks(list => list.filter(t => t.id !== selDef.id));
+          setSel(null);
+          showToast("حُذف الإسناد");
+        },
+        onSave: draft => {
+          if (selDef === "__new") {
+            const id = mxRandomId("ut");
+            patchUnitTasks(list => [...list, {
+              id,
+              ...draft,
+              enabled: true
+            }]);
+            setSel({
+              kind: "task",
+              id
+            });
+            showToast(`أُضيف الإسناد لأفراد ${unit.name}`);
+          } else {
+            patchUnitTasks(list => list.map(t => t.id === selDef.id ? {
+              ...t,
+              ...draft
+            } : t));
+            showToast("تم حفظ الإسناد");
+          }
+        }
+      });
+    }
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: unit.name,
+      title: "إسنادات الوحدة",
+      desc: `إسنادات خاصة بأفراد ${unit.name} (${rows.length} أعضاء).`,
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => setSel({
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 min-w-0"
+    }, allUnitDefs.length === 0 && /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد إسنادات خاصة بالوحدة",
+      text: "أضف أول إسناد ليظهر لأفراد وحدتك."
+    }), allUnitDefs.map(t => {
+      const active = sel?.id === t.id;
+      const off = t.enabled === false;
+      return /*#__PURE__*/React.createElement("div", {
+        key: t.id,
+        className: `flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => setSel(active ? null : {
+          kind: "task",
+          id: t.id
+        }),
+        className: "flex-1 min-w-0 flex items-center gap-4 text-right"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "w-11 h-11 rounded-full bg-teal-50 text-teal-800 inline-flex items-center justify-center text-[18px] shrink-0"
+      }, MX_TYPE_META[t.type]?.icon), /*#__PURE__*/React.createElement("span", {
+        className: "min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: `block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`
+      }, t.title), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, MX_TYPE_META[t.type]?.label, " · ", mxApproval(t) === "manager" ? "يعتمده مدير الوحدة" : "يؤكده العضو"))), /*#__PURE__*/React.createElement(PA2Switch, {
+        checked: !off,
+        onChange: v => patchUnitTasks(list => list.map(x => x.id === t.id ? {
+          ...x,
+          enabled: v
+        } : x))
+      }));
+    })), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "bulletins") {
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: unit.name,
+      title: "تعميمات الوحدة",
+      desc: `إرسال تعميم خاص لأفراد ${unit.name} ومتابعة اطلاعهم.`
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid lg:grid-cols-[1fr_380px] gap-6 items-start"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-3"
+    }, unitBulletins.length === 0 ? /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد تعميمات خاصة بالوحدة بعد",
+      text: "انشر تعميماً من النموذج الجانبي ليصل لأفراد وحدتك."
+    }) : unitBulletins.map(b => {
+      const rec = mxBulletinRecipients(db, b);
+      const acked = rec.filter(u => mxIsAcked(b, u.id)).length;
+      return /*#__PURE__*/React.createElement(MXCard, {
+        key: b.id,
+        className: "p-5"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between text-[12px] text-stone-400"
+      }, /*#__PURE__*/React.createElement("span", null, b.category, " · ", b.createdAt), /*#__PURE__*/React.createElement("span", {
+        className: "text-stone-700 font-semibold"
+      }, "اطّلع ", acked, " / ", rec.length)), /*#__PURE__*/React.createElement("div", {
+        className: "text-[16px] font-semibold text-stone-900 mt-2"
+      }, b.title), /*#__PURE__*/React.createElement("p", {
+        className: "text-[14px] text-stone-600 mt-1 leading-relaxed whitespace-pre-line"
+      }, b.content));
+    })), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 space-y-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[16px] font-semibold text-stone-900"
+    }, "تعميم جديد لأفراد ", unit.name), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "العنوان"), /*#__PURE__*/React.createElement("input", {
+      value: bulDraft.title,
+      onChange: e => setBulDraft(p => ({
+        ...p,
+        title: e.target.value
+      })),
+      className: pa2InputCls,
+      placeholder: "عنوان التعميم"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "النص"), /*#__PURE__*/React.createElement("textarea", {
+      value: bulDraft.content,
+      onChange: e => setBulDraft(p => ({
+        ...p,
+        content: e.target.value
+      })),
+      rows: 4,
+      className: `${pa2InputCls} h-auto py-3 resize-none`,
+      placeholder: "نص التعميم لأفراد وحدتك..."
+    })), /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+      onClick: publishUnitBulletin,
+      disabled: bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "send",
+      className: "w-4 h-4"
+    }), "نشر لأفراد الوحدة"))));
+  }
+  return /*#__PURE__*/React.createElement(MXShell, {
+    areaLabel: unit.name,
+    chip: "إدارة وحدة",
+    modeSwitch: modeSwitch,
+    nav: nav,
+    active: view,
+    onNav: v => go(v),
+    user: me,
+    roleLabel: `مدير ${unit.name}`,
+    onLogout: onLogout
+  }, main);
+}
+function OperationalPortalV3({
+  db,
+  setDb,
+  currentUser,
+  isUsernameTaken,
+  onLogout,
+  showToast,
+  modeSwitch
+}) {
+  const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+  const deptId = me.departmentId;
+  const dept = mxDeptById(db, deptId);
+  const depts = mxDepartments(db);
+  const deptIdx = Math.max(0, depts.findIndex(d => d.id === deptId));
+  const tone = dept ? pa2DeptTone(dept, deptIdx) : PA2_PASTELS[0];
+  const isHR = deptId === "dept_hr";
+  const rules = mxRules(db);
+  const [view, setView] = useState("follow");
+  const [sel, setSel] = useState(null); // { kind, id }
+  const [statusF, setStatusF] = useState("all");
+  const [unitF, setUnitF] = useState("all");
+  const [q, setQ] = useState("");
+  const [descDraft, setDescDraft] = useState(dept?.description || "");
+  const [bulDraft, setBulDraft] = useState({
+    title: "",
+    content: "",
+    category: "تعميم فريق الإدارة"
+  });
+  if (!dept) {
+    return /*#__PURE__*/React.createElement(MXShell, {
+      areaLabel: "إدارة تشغيلية",
+      nav: [{
+        id: "follow",
+        label: "المتابعة",
+        icon: "chart"
+      }],
+      active: "follow",
+      onNav: () => {},
+      user: me,
+      roleLabel: "مدير إدارة",
+      onLogout: onLogout,
+      modeSwitch: modeSwitch
+    }, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: "إدارة تشغيلية",
+      title: "لم تُربط بإدارة بعد",
+      desc: "اطلب من مدير المنصة ربط حسابك بإدارة لتظهر لك أدوات المتابعة."
+    }));
+  }
+  const stats = mxDeptStats(db, deptId);
+  const directives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+  const allDefs = mxDeptTaskDefs(db, deptId, true);
+  const allowedTypes = (dept.allowedTaskTypes || []).filter(t => MX_TYPE_META[t]);
+  const maxTasks = dept.maxTotalTasks || 6;
+  const units = mxUnits(db);
+  const deptTeamMembers = db.users.filter(u => u.deptTeamId === deptId);
+  const deptBulletins = (db.bulletins || []).filter(b => (b.targetType === "dept_team" || b.targetType === "dept") && b.targetDeptId === deptId);
+  const go = (v, s = null) => {
+    setView(v);
+    setSel(s);
+    window.scrollTo({
+      top: 0
+    });
+  };
+  const approve = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: p.rec.lateSubmit ? "late" : "on_time",
+      completedAt: mxCoarseNow(),
+      approvedBy: me.id
+    });
+    showToast("تم الاعتماد");
+  };
+  const reject = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: "rejected",
+      rejectedBy: me.id
+    });
+  };
+  const patchDeptTasks = fn => setDb(prev => {
+    const sc = prev.systemConfig || {};
+    const all = {
+      ...(sc.deptTasks || {})
+    };
+    all[deptId] = fn([...(all[deptId] || [])]);
+    return {
+      ...prev,
+      systemConfig: {
+        ...sc,
+        deptTasks: all
+      }
+    };
+  });
+  const publishTeamBulletin = () => {
+    if (bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5) return;
+    const b = {
+      id: mxRandomId("bul"),
+      title: bulDraft.title.trim(),
+      content: bulDraft.content.trim(),
+      category: bulDraft.category || "تعميم فريق الإدارة",
+      senderId: me.id,
+      senderName: pa2Short(me.name),
+      senderRole: `مدير ${dept.shortName || dept.name}`,
+      createdAt: mxNowStamp(),
+      createdAtTs: mxCoarseNow(),
+      targetType: "dept_team",
+      targetDeptId: deptId,
+      recipientIds: [],
+      acknowledgedBy: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      bulletins: [b, ...(prev.bulletins || [])]
+    }));
+    setBulDraft({
+      title: "",
+      content: "",
+      category: "تعميم فريق الإدارة"
+    });
+    showToast(`نُشر التعميم لأفراد فريق ${dept.shortName || dept.name}`);
+  };
+
+  // ----- يحتاج انتباهك -----
+  const attention = [];
+  const pendByUser = {};
+  stats.pending.forEach(p => {
+    (pendByUser[p.user.id] = pendByUser[p.user.id] || []).push(p);
+  });
+  Object.values(pendByUser).forEach(list => attention.push({
+    key: "ap_" + list[0].user.id,
+    text: `${pa2Short(list[0].user.name)} — ${list.length === 1 ? list[0].task.title : `${list.length} إسنادات`} بانتظار اعتمادك`,
+    go: () => go("follow", {
+      kind: "member",
+      id: list[0].user.id
+    }),
+    cta: "اعتماد"
+  }));
+  if (stats.counts.not_started > 0) attention.push({
+    key: "ns",
+    text: `${stats.counts.not_started} ${stats.counts.not_started === 1 ? "عضو لم يبدأ" : "أعضاء لم يبدؤوا"} إسنادات هذا الأسبوع`,
+    go: () => {
+      setStatusF("not_started");
+      setSel(null);
+    },
+    cta: "عرض"
+  });
+  if (me.mustChangePassword) attention.push({
+    key: "pw",
+    text: "ما زلت تستخدم كلمة مرور مؤقتة",
+    go: () => modeSwitch ? modeSwitch.onChange("mine") : null,
+    cta: "تغيير"
+  });
+  const nav = [{
+    id: "follow",
+    label: "المتابعة",
+    icon: "chart",
+    badge: stats.pending.length + directives.length || null
+  }, {
+    id: "tasks",
+    label: "الإسنادات",
+    icon: "tasks"
+  }, {
+    id: "bulletins",
+    label: "تعميمات الفريق",
+    icon: "megaphone"
+  }, {
+    id: "members",
+    label: isHR ? "الأعضاء والوحدات" : "الأعضاء",
+    icon: "users"
+  }, {
+    id: "settings",
+    label: "الإعدادات",
+    icon: "cog"
+  }];
+
+  // ----- الشاشات -----
+  let main = null,
+    panel = null;
+  if (view === "follow") {
+    const rows = stats.rows.filter(r => statusF === "all" || r.status.key === statusF).filter(r => unitF === "all" || (unitF === "__team" ? r.user.deptTeamId === deptId : r.user.unit === unitF)).sort((a, b) => a.pct - b.pct || pa2Short(a.user.name).localeCompare(pa2Short(b.user.name), "ar"));
+    const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+    if (selUser) panel = /*#__PURE__*/React.createElement(MXMemberFollowPanel, {
+      db: db,
+      deptId: deptId,
+      user: selUser,
+      onApprove: approve,
+      onReject: reject,
+      onClose: () => setSel(null)
+    });
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: dept.name,
+      title: "المتابعة",
+      desc: `التزام ${stats.rows.length} عضواً بإسنادات الإدارة في أسبوعهم الحالي.`,
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => go("tasks", {
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد جديد")
+    }), /*#__PURE__*/React.createElement(MXDirectiveStrip, {
+      directives: directives,
+      onRead: id => mxMarkDirectiveRead(setDb, id)
+    }), /*#__PURE__*/React.createElement(MXAttention, {
+      title: "يحتاج انتباهك",
+      items: attention,
+      emptyText: "لا اعتمادات معلّقة، والجميع بدأ أسبوعه.",
+      primaryLabel: stats.pending.length ? "ابدأ الاعتماد" : "عرض"
+    }), /*#__PURE__*/React.createElement(MXScoreCard, {
+      label: "التزام الإدارة هذا الأسبوع",
+      pct: stats.avg,
+      caption: `${stats.defs.length} إسنادات · ${stats.rows.length} عضواً`,
+      bars: stats.byUnit.map(b => ({
+        label: b.unit.name,
+        value: `${b.pct}%`,
+        pct: b.pct,
+        tone: tone.dot
+      })),
+      stats: [{
+        n: stats.counts.committed,
+        l: "ملتزم"
+      }, {
+        n: stats.counts.behind,
+        l: "متأخر"
+      }, {
+        n: stats.counts.not_started,
+        l: "لم يبدأ"
+      }]
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_400px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3 mb-4 flex-wrap"
+    }, /*#__PURE__*/React.createElement("h2", {
+      className: "text-xl font-bold text-stone-900"
+    }, "الأعضاء"), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 flex-wrap"
+    }, /*#__PURE__*/React.createElement("select", {
+      value: unitF,
+      onChange: e => setUnitF(e.target.value),
+      className: "h-9 rounded-full bg-[#ECE9E3] px-4 text-[13px] text-stone-700 focus:outline-none"
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "all"
+    }, "كل الوحدات (", stats.rows.length, ")"), /*#__PURE__*/React.createElement("option", {
+      value: "__team"
+    }, "فريق ", dept.shortName || dept.name, " الداخلي (", deptTeamMembers.length, ")"), stats.byUnit.map(b => /*#__PURE__*/React.createElement("option", {
+      key: b.unit.id,
+      value: b.unit.name
+    }, b.unit.name))), /*#__PURE__*/React.createElement(PA2Segmented, {
+      size: "sm",
+      value: statusF,
+      onChange: setStatusF,
+      options: [{
+        value: "all",
+        label: "الكل"
+      }, {
+        value: "committed",
+        label: "ملتزم"
+      }, {
+        value: "behind",
+        label: "متأخر"
+      }, {
+        value: "not_started",
+        label: "لم يبدأ"
+      }]
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, rows.length === 0 && /*#__PURE__*/React.createElement("div", {
+      className: "px-5 py-8 text-center text-[14px] text-stone-400"
+    }, "لا يوجد أعضاء بهذا الفلتر."), rows.map(r => {
+      const pend = (pendByUser[r.user.id] || []).length;
+      const active = selUser?.id === r.user.id;
+      return /*#__PURE__*/React.createElement("button", {
+        key: r.user.id,
+        onClick: () => setSel(active ? null : {
+          kind: "member",
+          id: r.user.id
+        }),
+        className: `w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: r.user
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[15px] font-medium text-stone-900 truncate"
+      }, pa2Short(r.user.name)), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, r.user.unit, r.user.deptTeamId === deptId ? ` · فريق ${dept.shortName || dept.name}` : "")), pend > 0 && /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:inline-flex h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] items-center"
+      }, pend, " للاعتماد"), /*#__PURE__*/React.createElement("span", {
+        className: "hidden md:block w-28"
+      }, /*#__PURE__*/React.createElement(MXProgress, {
+        pct: r.pct
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "w-12 text-left text-[14px] font-semibold tabular-nums text-stone-900"
+      }, r.pct, "%"), /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:block"
+      }, /*#__PURE__*/React.createElement(MXStatusPill, {
+        status: r.status
+      })));
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "mt-10"
+    }, /*#__PURE__*/React.createElement(MXSectionTitle, null, "إنجاز كل إسناد"), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-6 grid sm:grid-cols-2 gap-x-10 gap-y-5"
+    }, stats.byTask.map(b => {
+      const pct = b.total ? Math.round(b.done / b.total * 100) : 0;
+      return /*#__PURE__*/React.createElement("div", {
+        key: b.task.id
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between mb-2"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] text-stone-600 truncate"
+      }, b.task.title), /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] font-semibold tabular-nums"
+      }, b.done, " / ", b.total)), /*#__PURE__*/React.createElement(MXProgress, {
+        pct: pct,
+        tone: tone.dot
+      }));
+    })))), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "tasks") {
+    const selDef = sel?.kind === "task" ? sel.id === "__new" ? "__new" : allDefs.find(t => t.id === sel.id) : null;
+    const atCap = allDefs.length >= maxTasks;
+    if (selDef) {
+      panel = /*#__PURE__*/React.createElement(MXTaskDefPanel, {
+        key: sel.id,
+        db: db,
+        deptId: deptId,
+        scopeMode: "dept",
+        def: selDef === "__new" ? null : selDef,
+        isNew: selDef === "__new",
+        allowedTypes: allowedTypes.length ? allowedTypes : ["practical"],
+        onClose: () => setSel(null),
+        onDelete: () => {
+          patchDeptTasks(list => list.filter(t => t.id !== selDef.id));
+          setSel(null);
+          showToast("حُذف الإسناد");
+        },
+        onSave: draft => {
+          if (selDef === "__new") {
+            if (atCap) return;
+            const id = mxRandomId("t");
+            patchDeptTasks(list => [...list, {
+              id,
+              ...draft,
+              subtitle: "",
+              enabled: true
+            }]);
+            setSel({
+              kind: "task",
+              id
+            });
+            showToast("أُضيف الإسناد بنجاح");
+          } else {
+            patchDeptTasks(list => list.map(t => t.id === selDef.id ? {
+              ...t,
+              ...draft
+            } : t));
+            showToast("تم حفظ إعدادات الإسناد");
+          }
+        }
+      });
+    }
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: dept.name,
+      title: "الإسنادات",
+      desc: `تُسند لكافة الوحدات تحت التنفيذي (${stats.rows.length} عضواً) أو لفريق الإدارة الداخلي (${deptTeamMembers.length} أعضاء).`,
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        disabled: atCap,
+        onClick: () => setSel({
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_440px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-500 mb-3"
+    }, allDefs.length, " من ", maxTasks, " إسنادات مسموحة", atCap ? " · وصلت للسقف" : ""), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2"
+    }, allDefs.length === 0 && /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد إسنادات بعد",
+      text: "أضف أول إسناد ليظهر للأعضاء."
+    }), allDefs.map(t => {
+      const bt = stats.byTask.find(b => b.task.id === t.id);
+      const active = sel?.id === t.id;
+      const off = t.enabled === false;
+      const approverUser = t.approval === "person" && t.approverUserId ? db.users.find(u => u.id === t.approverUserId) : null;
+      return /*#__PURE__*/React.createElement("div", {
+        key: t.id,
+        className: `flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => setSel(active ? null : {
+          kind: "task",
+          id: t.id
+        }),
+        className: "flex-1 min-w-0 flex items-center gap-4 text-right"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: `w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${off ? "opacity-40" : ""}`
+      }, MX_TYPE_META[t.type]?.icon), /*#__PURE__*/React.createElement("span", {
+        className: "min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: `block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`
+      }, t.title), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, MX_TYPE_META[t.type]?.label, t.targetScope === "dept_team" ? " · فريق الإدارة فقط" : " · كافة الوحدات", t.deliveryMode === "series" ? ` · سلسلة (${(t.seriesItems || []).length} حلقات)` : "", t.useStructuredAgenda ? " · أجندة 5 محاور" : "", mxApproval(t) === "person" ? ` · يعتمده ${approverUser ? pa2Short(approverUser.name) : "عضو مختص"}` : mxApproval(t) === "manager" && t.type !== "lecture_quiz" && t.type !== "daily_habit" ? " · يعتمده المدير" : " · اعتماد فوري", t.type === "daily_habit" ? ` · ${mxTargetDays(t, rules)} أيام` : ""))), !off && bt && /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:block text-[13px] text-stone-500 tabular-nums whitespace-nowrap"
+      }, bt.done, " / ", bt.total, " أنجزوه"), /*#__PURE__*/React.createElement(PA2Switch, {
+        checked: !off,
+        onChange: v => patchDeptTasks(list => list.map(x => x.id === t.id ? {
+          ...x,
+          enabled: v
+        } : x))
+      }));
+    }))), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "bulletins") {
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: dept.name,
+      title: "تعميمات فريق الإدارة",
+      desc: `توجيه التعميمات الداخلية لأفراد فريق ${dept.shortName || dept.name} (${deptTeamMembers.length} أعضاء) ومتابعة اطلاعهم.`
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid lg:grid-cols-[1fr_380px] gap-6 items-start"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-3"
+    }, deptBulletins.length === 0 ? /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد تعميمات لفريق الإدارة بعد",
+      text: "انشر تعميماً من النموذج الجانبي ليصل لأفراد فريق إدارتك."
+    }) : deptBulletins.map(b => {
+      const rec = mxBulletinRecipients(db, b);
+      const acked = rec.filter(u => mxIsAcked(b, u.id)).length;
+      return /*#__PURE__*/React.createElement(MXCard, {
+        key: b.id,
+        className: "p-5"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between text-[12px] text-stone-400"
+      }, /*#__PURE__*/React.createElement("span", null, b.category, " · ", mxBulletinTargetLabel(db, b), " · ", b.createdAt), /*#__PURE__*/React.createElement("span", {
+        className: "text-stone-700 font-semibold"
+      }, "اطّلع ", acked, " / ", rec.length)), /*#__PURE__*/React.createElement("div", {
+        className: "text-[16px] font-semibold text-stone-900 mt-2"
+      }, b.title), /*#__PURE__*/React.createElement("p", {
+        className: "text-[14px] text-stone-600 mt-1 leading-relaxed whitespace-pre-line"
+      }, b.content));
+    })), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 space-y-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[16px] font-semibold text-stone-900"
+    }, "تعميم جديد لفريق ", dept.shortName || dept.name), /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl bg-[#F4F2EE] px-3.5 py-2.5 text-[12px] text-stone-600"
+    }, "يصل حصراً لأفراد فريق ", dept.shortName || dept.name, " الداخلي (", deptTeamMembers.length, " أعضاء). التعميمات العامة للحركة تصدر من القيادة التنفيذية والمكتب التنفيذي."), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "العنوان"), /*#__PURE__*/React.createElement("input", {
+      value: bulDraft.title,
+      onChange: e => setBulDraft(p => ({
+        ...p,
+        title: e.target.value
+      })),
+      className: pa2InputCls,
+      placeholder: "عنوان التعميم"
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "النص"), /*#__PURE__*/React.createElement("textarea", {
+      value: bulDraft.content,
+      onChange: e => setBulDraft(p => ({
+        ...p,
+        content: e.target.value
+      })),
+      rows: 4,
+      className: `${pa2InputCls} h-auto py-3 resize-none`,
+      placeholder: "نص التعميم لأفراد فريق إدارتك..."
+    })), /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+      onClick: publishTeamBulletin,
+      disabled: bulDraft.title.trim().length < 3 || bulDraft.content.trim().length < 5
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "send",
+      className: "w-4 h-4"
+    }), "نشر لفريق الإدارة"))));
+  }
+  if (view === "members") {
+    const pool = isHR ? db.users.filter(u => u.roleType === "cadre") : stats.rows.map(r => r.user);
+    const rowsAll = pool.filter(u => unitF === "all" || (unitF === "__team" ? u.deptTeamId === deptId : u.unit === unitF)).filter(u => !q.trim() || (u.name || "").includes(q.trim()) || (u.username || "").includes(q.trim().toLowerCase())).sort((a, b) => (a.unit || "").localeCompare(b.unit || "", "ar") || pa2Short(a.name).localeCompare(pa2Short(b.name), "ar"));
+    const selUser = sel?.kind === "cadre" ? sel.id === "__new" ? "__new" : db.users.find(u => u.id === sel.id) : null;
+    if (isHR && selUser) {
+      panel = /*#__PURE__*/React.createElement(MXCadrePanel, {
+        key: sel.id,
+        db: db,
+        user: selUser === "__new" ? null : selUser,
+        isNew: selUser === "__new",
+        isUsernameTaken: isUsernameTaken,
+        onClose: () => setSel(null),
+        onSave: draft => {
+          const id = mxSaveCadre(setDb, selUser === "__new" ? null : selUser, selUser === "__new", draft);
+          setSel({
+            kind: "cadre",
+            id
+          });
+          showToast(selUser === "__new" ? "أُنشئ الحساب" : "تم الحفظ");
+        },
+        onDelete: () => {
+          setDb(prev => ({
+            ...prev,
+            users: prev.users.filter(u => u.id !== selUser.id)
+          }));
+          setSel(null);
+          showToast("حُذف الحساب");
+        },
+        onResetPassword: () => {
+          const temp = pa2TempPassword();
+          setDb(prev => ({
+            ...prev,
+            users: prev.users.map(u => u.id === selUser.id ? {
+              ...u,
+              password: mxHashPw(temp),
+              mustChangePassword: true
+            } : u)
+          }));
+          pa2Copy(temp);
+          showToast(`كلمة المرور المؤقتة: ${temp} (نُسخت)`);
+        }
+      });
+    }
+    const unitCards = units.map(un => {
+      const members = pool.filter(u => u.unit === un.name);
+      const leader = un.leaderUserId ? db.users.find(u => u.id === un.leaderUserId) : null;
+      const r = stats.rows.filter(x => x.user.unit === un.name);
+      const pct = r.length ? Math.round(r.reduce((a, x) => a + x.pct, 0) / r.length) : 0;
+      return {
+        un,
+        count: members.length,
+        leader,
+        pct,
+        hasRows: r.length > 0
+      };
+    });
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: dept.name,
+      title: isHR ? "الأعضاء والوحدات" : "الأعضاء",
+      desc: isHR ? "إنشاء حسابات الأعضاء، وتسكينهم في الوحدات، وتحديد الإدارات التي تصلهم إسناداتها." : "أعضاء الإدارة موزعين على الوحدات وفريق الإدارة. إدارة الحسابات من الموارد البشرية.",
+      actions: isHR ? /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => setSel({
+          kind: "cadre",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "عضو جديد") : null
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-10"
+    }, unitCards.map(c => /*#__PURE__*/React.createElement("button", {
+      key: c.un.id,
+      onClick: () => setUnitF(unitF === c.un.name ? "all" : c.un.name),
+      className: `text-right rounded-[22px] p-5 transition ${unitF === c.un.name ? "bg-stone-900 text-white" : "bg-white hover:bg-[#FBFAF8]"}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `text-[14px] font-semibold leading-snug ${unitF === c.un.name ? "text-white" : "text-stone-900"}`
+    }, c.un.name.replace(/^وحدة\s*/, "")), /*#__PURE__*/React.createElement("div", {
+      className: `text-[28px] font-bold tabular-nums mt-3 ${unitF === c.un.name ? "text-white" : "text-stone-900"}`
+    }, c.count, /*#__PURE__*/React.createElement("span", {
+      className: `text-[13px] font-normal mr-1 ${unitF === c.un.name ? "text-stone-400" : "text-stone-400"}`
+    }, "عضواً")), /*#__PURE__*/React.createElement("div", {
+      className: `text-[12px] mt-1 truncate ${unitF === c.un.name ? "text-stone-400" : "text-stone-400"}`
+    }, c.leader ? `القائد: ${pa2Short(c.leader.name)}` : "بلا قائد")))), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3 mb-4 flex-wrap"
+    }, /*#__PURE__*/React.createElement("h2", {
+      className: "text-xl font-bold text-stone-900"
+    }, unitF === "all" ? "كل الأعضاء" : unitF === "__team" ? `فريق ${dept.shortName || dept.name}` : unitF, " ", /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-400 font-normal text-[15px]"
+    }, "· ", rowsAll.length)), /*#__PURE__*/React.createElement("div", {
+      className: "relative"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "search",
+      className: "w-4 h-4 absolute right-3.5 top-1/2 -translate-y-1/2 text-stone-400"
+    }), /*#__PURE__*/React.createElement("input", {
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "بحث بالاسم",
+      className: "h-10 w-56 rounded-full bg-white pr-10 pl-4 text-[14px] focus:outline-none focus:ring-2 focus:ring-stone-200"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, rowsAll.length === 0 && /*#__PURE__*/React.createElement("div", {
+      className: "px-5 py-8 text-center text-[14px] text-stone-400"
+    }, "لا يوجد أعضاء."), rowsAll.map(u => {
+      const active = sel?.id === u.id;
+      const ud = mxUserDeptIds(db, u);
+      const Tag = isHR ? "button" : "div";
+      return /*#__PURE__*/React.createElement(Tag, {
+        key: u.id,
+        onClick: isHR ? () => setSel(active ? null : {
+          kind: "cadre",
+          id: u.id
+        }) : undefined,
+        className: `w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : isHR ? "hover:bg-[#FBFAF8]" : ""}`
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: u
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[15px] font-medium text-stone-900 truncate"
+      }, pa2Short(u.name)), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, u.unit, u.jobTitle ? ` · ${u.jobTitle}` : "", u.deptTeamId ? ` · فريق ${mxDeptById(db, u.deptTeamId)?.shortName || ""}` : "")), /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:flex gap-1.5"
+      }, ud.length ? ud.map(id => /*#__PURE__*/React.createElement(MXDeptChip, {
+        key: id,
+        dept: mxDeptById(db, id),
+        idx: depts.findIndex(x => x.id === id)
+      })) : /*#__PURE__*/React.createElement("span", {
+        className: "text-[12px] text-stone-400"
+      }, "بلا إسنادات")), isHR && /*#__PURE__*/React.createElement("span", {
+        dir: "ltr",
+        className: "hidden md:block w-20 text-[13px] text-stone-400 text-left"
+      }, u.username));
+    }))), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "settings") {
+    const dirty = descDraft !== (dept.description || "");
+    const ruleRows = [["سقف الإسنادات", `${maxTasks} إسنادات`], ["الأنواع المسموحة", allowedTypes.map(t => MX_TYPE_META[t]?.label).join("، ") || "—"], ["نقاط الإنجاز المتأخر", `${rules.latePointsPct}%`], ["نسبة النجاح في الاختبار", `${rules.quizPassThresholdPct}%`], ["الأسابيع السابقة المتاحة للعضو", rules.allowLateSubmissions ? `${rules.maxPastWeeksEditable} أسابيع` : "غير مسموح"]];
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: dept.name,
+      title: "الإعدادات",
+      desc: "وصف الإدارة كما يراه الأعضاء، والقواعد المفعّلة من مدير المنصة."
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid lg:grid-cols-[1fr_380px] gap-6 items-start"
+    }, /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 sm:p-8 space-y-5"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "وصف الإدارة"), /*#__PURE__*/React.createElement("textarea", {
+      value: descDraft,
+      onChange: e => setDescDraft(e.target.value),
+      rows: 4,
+      className: `${pa2InputCls} h-auto py-3 resize-none`
+    })), /*#__PURE__*/React.createElement(PA2SaveFooter, {
+      dirty: dirty,
+      onSave: () => {
+        setDb(prev => ({
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            departments: (prev.systemConfig?.departments || DEFAULT_DEPARTMENTS).map(d => d.id === deptId ? {
+              ...d,
+              description: descDraft
+            } : d)
+          }
+        }));
+        showToast("تم حفظ الوصف");
+      }
+    })), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[15px] font-semibold text-stone-900 mb-1"
+    }, "القواعد المفعّلة"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-400 mb-4"
+    }, "يعدّلها مدير المنصة"), /*#__PURE__*/React.createElement("div", {
+      className: "divide-y divide-stone-100"
+    }, ruleRows.map(([l, v]) => /*#__PURE__*/React.createElement("div", {
+      key: l,
+      className: "py-3 flex items-start justify-between gap-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] text-stone-500"
+    }, l), /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] text-stone-900 text-left"
+    }, v)))))));
+  }
+  return /*#__PURE__*/React.createElement(MXShell, {
+    areaLabel: dept.shortName || dept.name,
+    chip: "إدارة تشغيلية",
+    modeSwitch: modeSwitch,
+    nav: nav,
+    active: view,
+    onNav: v => go(v),
+    user: me,
+    roleLabel: `مدير ${dept.shortName || dept.name}`,
+    onLogout: onLogout
+  }, main);
+}
+// ==== PART:OPS END ====
+
+// ==== PART:EXEC START ====
+// ---------- بوابة القيادة التنفيذية والمكتب التنفيذي ----------
+const MX_BULLETIN_CATEGORIES = ["تعميم إداري", "سياسة جديدة", "تذكير", "تعميم مشروع", "تهنئة"];
+function MXBulletinComposer({
+  db,
+  isHead = true,
+  onPublish,
+  onClose
+}) {
+  const depts = mxDepartments(db).filter(d => d.enabled !== false);
+  const units = mxUnits(db);
+  const [d, setD] = useState({
+    title: "",
+    content: "",
+    category: MX_BULLETIN_CATEGORIES[0],
+    targetType: "all",
+    targetDeptId: depts[0]?.id || "",
+    targetUnit: units[0]?.name || ""
+  });
+  const set = (k, v) => setD(p => ({
+    ...p,
+    [k]: v
+  }));
+  const reach = mxBulletinRecipients(db, {
+    ...d,
+    senderId: "__none"
+  }).length;
+  const ok = d.title.trim().length > 2 && d.content.trim().length > 4;
+  const targetOptions = isHead ? [{
+    value: "all",
+    label: "كل أفراد الحركة"
+  }, {
+    value: "exec_office",
+    label: "المكتب التنفيذي"
+  }, {
+    value: "unit_leaders",
+    label: "مديرو الوحدات"
+  }, {
+    value: "dept",
+    label: "إدارة"
+  }, {
+    value: "unit",
+    label: "وحدة"
+  }] : [{
+    value: "all",
+    label: "كل أفراد الحركة"
+  }, {
+    value: "unit_leaders",
+    label: "مديرو الوحدات"
+  }, {
+    value: "unit",
+    label: "وحدة"
+  }];
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: "تعميم جديد",
+    title: d.title || "بدون عنوان",
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3"
+    }, /*#__PURE__*/React.createElement("button", {
+      disabled: !ok,
+      onClick: () => ok && onPublish(d),
+      className: `h-11 px-6 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 ${ok ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "send",
+      className: "w-4 h-4"
+    }), "نشر التعميم"), /*#__PURE__*/React.createElement("span", {
+      className: "mr-auto text-[13px] text-stone-500"
+    }, "يصل إلى ", /*#__PURE__*/React.createElement("b", {
+      className: "text-stone-900 tabular-nums"
+    }, reach), " عضواً"))
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "العنوان"), /*#__PURE__*/React.createElement("input", {
+    value: d.title,
+    onChange: e => set("title", e.target.value),
+    className: pa2InputCls
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "النص"), /*#__PURE__*/React.createElement("textarea", {
+    value: d.content,
+    onChange: e => set("content", e.target.value),
+    rows: 5,
+    className: `${pa2InputCls} h-auto py-3 resize-none`
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "التصنيف"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2"
+  }, MX_BULLETIN_CATEGORIES.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    onClick: () => set("category", c),
+    className: `h-9 px-4 rounded-full text-[13px] transition ${d.category === c ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-600 hover:bg-stone-200"}`
+  }, c)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "الجمهور المستهدف"), /*#__PURE__*/React.createElement(PA2Segmented, {
+    value: d.targetType,
+    onChange: v => set("targetType", v),
+    options: targetOptions
+  }), d.targetType === "dept" && /*#__PURE__*/React.createElement("select", {
+    value: d.targetDeptId,
+    onChange: e => set("targetDeptId", e.target.value),
+    className: `${pa2InputCls} mt-3`
+  }, depts.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.name))), d.targetType === "unit" && /*#__PURE__*/React.createElement("select", {
+    value: d.targetUnit,
+    onChange: e => set("targetUnit", e.target.value),
+    className: `${pa2InputCls} mt-3`
+  }, units.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.name
+  }, x.name)))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-400"
+  }, "يُطلب من كل مستلم تأكيد «اطلعت واستوعبت»."));
+}
+function MXBulletinReachPanel({
+  db,
+  b,
+  onClose
+}) {
+  const rec = mxBulletinRecipients(db, b);
+  const acked = rec.filter(u => mxIsAcked(b, u.id));
+  const pending = rec.filter(u => !mxIsAcked(b, u.id));
+  const byUnit = mxUnits(db).map(un => {
+    const r = rec.filter(u => u.unit === un.name);
+    return {
+      label: un.name,
+      total: r.length,
+      done: r.filter(u => mxIsAcked(b, u.id)).length
+    };
+  }).filter(x => x.total > 0);
+  const byDept = mxDepartments(db).filter(d => d.enabled !== false).map(d => {
+    const r = rec.filter(u => u.departmentId === d.id || mxUserDeptIds(db, u).includes(d.id));
+    return {
+      label: d.name,
+      total: r.length,
+      done: r.filter(u => mxIsAcked(b, u.id)).length
+    };
+  }).filter(x => x.total > 0);
+  const Bars = ({
+    list
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, list.map(x => /*#__PURE__*/React.createElement("div", {
+    key: x.label
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between mb-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-stone-600 truncate"
+  }, x.label), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold tabular-nums"
+  }, x.done, " / ", x.total)), /*#__PURE__*/React.createElement(MXProgress, {
+    pct: x.total ? Math.round(x.done / x.total * 100) : 0
+  }))));
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: `${b.category || "تعميم"} · ${mxBulletinTargetLabel(db, b)}`,
+    title: b.title,
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-600 leading-relaxed whitespace-pre-line"
+  }, b.content), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] px-4 py-3 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-stone-500"
+  }, "اطلع وأكّد"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[20px] font-bold tabular-nums"
+  }, acked.length, /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] text-stone-400 font-normal"
+  }, " / ", rec.length))), byDept.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "حسب الإدارة"), /*#__PURE__*/React.createElement(Bars, {
+    list: byDept
+  })), byUnit.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "حسب الوحدة"), /*#__PURE__*/React.createElement(Bars, {
+    list: byUnit
+  })), pending.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: `${pending.length}`
+  }, "لم يطّلعوا بعد"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5"
+  }, pending.map(u => /*#__PURE__*/React.createElement("span", {
+    key: u.id,
+    className: "h-7 px-3 rounded-full bg-[#F4F2EE] text-[12px] text-stone-600 inline-flex items-center"
+  }, pa2Short(u.name))))));
+}
+function MXDirectiveComposer({
+  db,
+  targets,
+  onSend,
+  onClose
+}) {
+  const [to, setTo] = useState(targets[0]?.user.id || "");
+  const [text, setText] = useState("");
+  const ok = to && text.trim().length > 3;
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: "توجيه جديد",
+    title: "توجيه مباشر",
+    onClose: onClose,
+    footer: /*#__PURE__*/React.createElement("button", {
+      disabled: !ok,
+      onClick: () => ok && onSend(to, text.trim()),
+      className: `h-11 px-6 rounded-full text-[14px] font-semibold inline-flex items-center gap-2 ${ok ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "send",
+      className: "w-4 h-4"
+    }), "إرسال")
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "إلى"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5 max-h-[300px] overflow-y-auto"
+  }, targets.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.user.id + t.role,
+    onClick: () => setTo(t.user.id),
+    className: `w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-right transition ${to === t.user.id ? "bg-stone-900 text-white" : "bg-[#F4F2EE] hover:bg-stone-200"}`
+  }, /*#__PURE__*/React.createElement(PA2Avatar, {
+    user: t.user,
+    size: "w-8 h-8"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block text-[14px] truncate"
+  }, pa2Short(t.user.name)), /*#__PURE__*/React.createElement("span", {
+    className: `block text-[12px] truncate ${to === t.user.id ? "text-stone-400" : "text-stone-500"}`
+  }, t.role)))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "نص التوجيه"), /*#__PURE__*/React.createElement("textarea", {
+    value: text,
+    onChange: e => setText(e.target.value),
+    rows: 4,
+    className: `${pa2InputCls} h-auto py-3 resize-none`,
+    placeholder: "يظهر للمستلم في أعلى مساحته حتى يؤكد اطلاعه"
+  })));
+}
+function MXMemberRankList({
+  title,
+  rows,
+  empty
+}) {
+  return /*#__PURE__*/React.createElement(MXCard, {
+    className: "p-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[15px] font-semibold text-stone-900 mb-3"
+  }, title), rows.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-400 py-4"
+  }, empty) : /*#__PURE__*/React.createElement("div", {
+    className: "divide-y divide-stone-100"
+  }, rows.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.user.id,
+    className: "flex items-center gap-3 py-2.5"
+  }, /*#__PURE__*/React.createElement(PA2Avatar, {
+    user: r.user,
+    size: "w-8 h-8"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block text-[14px] text-stone-800 truncate"
+  }, pa2Short(r.user.name)), /*#__PURE__*/React.createElement("span", {
+    className: "block text-[12px] text-stone-400 truncate"
+  }, r.user.unit)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] font-semibold tabular-nums"
+  }, r.pct, "%")))));
+}
+function ExecutivePortalV3({
+  db,
+  setDb,
+  currentUser,
+  isHead = true,
+  modeSwitch = null,
+  onPreviewUser,
+  onLogout,
+  showToast
+}) {
+  const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+  const rules = mxRules(db);
+  const [view, setView] = useState("pulse");
+  const [sel, setSel] = useState(null);
+  const [exKind, setExKind] = useState("dept");
+  const [exId, setExId] = useState(null);
+  const org = mxOrgStats(db);
+  const depts = mxDepartments(db).filter(d => d.enabled !== false);
+  const allDepts = mxDepartments(db);
+  const units = mxUnits(db);
+  const go = (v, s = null) => {
+    setView(v);
+    setSel(s);
+    window.scrollTo({
+      top: 0
+    });
+  };
+  const bulletins = [...(db.bulletins || [])].map((b, i) => ({
+    b,
+    i
+  })).sort((x, y) => (y.b.createdAtTs || 0) - (x.b.createdAtTs || 0) || y.i - x.i).map(x => x.b);
+  const directives = [...(db.directives || [])].sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+  const execPending = mxPendingExecApprovals(db, isHead);
+  const allExecDefs = mxExecTaskDefs(db, true).filter(t => isHead || t.targetGroup === "unit_leaders" || t.assignedBy === "exec_office");
+  const counts = {
+    committed: 0,
+    behind: 0,
+    not_started: 0
+  };
+  org.memberRows.forEach(r => counts[r.status.key]++);
+  const officeUsers = db.users.filter(u => (mxIsExecOfficeMember(u) || mxIsOperationalMgr(u)) && u.id !== me.id);
+  const unitLeaderUsers = units.map(un => ({
+    unit: un,
+    user: un.leaderUserId ? db.users.find(x => x.id === un.leaderUserId) : null
+  })).filter(x => x.user);
+  const targets = [...(isHead ? officeUsers.map(u => ({
+    user: u,
+    role: u.jobTitle || pa2RoleLabel(u)
+  })) : []), ...unitLeaderUsers.map(x => ({
+    user: x.user,
+    role: `مدير ${x.unit.name}`
+  }))];
+  const publish = d => {
+    const b = {
+      id: mxRandomId("bul"),
+      title: d.title.trim(),
+      content: d.content.trim(),
+      category: d.category,
+      senderId: me.id,
+      senderName: pa2Short(me.name),
+      senderRole: isHead ? "المدير التنفيذي" : "المكتب التنفيذي",
+      createdAt: mxNowStamp(),
+      createdAtTs: mxCoarseNow(),
+      targetType: d.targetType,
+      targetDeptId: d.targetType === "dept" ? d.targetDeptId : undefined,
+      targetUnit: d.targetType === "unit" ? d.targetUnit : undefined,
+      recipientIds: [],
+      acknowledgedBy: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      bulletins: [b, ...(prev.bulletins || [])]
+    }));
+    setSel({
+      kind: "bulletin",
+      id: b.id
+    });
+    showToast("نُشر التعميم");
+  };
+  const sendDirective = (toUserId, text) => {
+    const dv = {
+      id: mxRandomId("dir"),
+      fromUserId: me.id,
+      fromName: pa2Short(me.name),
+      toUserId,
+      text,
+      createdAt: mxNowStamp(),
+      createdAtTs: mxCoarseNow(),
+      readAt: null
+    };
+    setDb(prev => ({
+      ...prev,
+      directives: [dv, ...(prev.directives || [])]
+    }));
+    setSel(null);
+    showToast("أُرسل التوجيه");
+  };
+  const setWeight = (deptId, w) => setDb(prev => ({
+    ...prev,
+    systemConfig: {
+      ...prev.systemConfig,
+      deptWeights: {
+        ...(prev.systemConfig?.deptWeights || {}),
+        [deptId]: w
+      }
+    }
+  }));
+  const patchExecTasks = fn => setDb(prev => {
+    const sc = prev.systemConfig || {};
+    return {
+      ...prev,
+      systemConfig: {
+        ...sc,
+        execTasks: fn([...(sc.execTasks || [])])
+      }
+    };
+  });
+  const approveExecTask = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: p.rec.lateSubmit ? "late" : "on_time",
+      completedAt: mxCoarseNow(),
+      approvedBy: me.id
+    });
+    showToast("تم اعتماد الإسناد");
+  };
+  const rejectExecTask = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: "rejected",
+      rejectedBy: me.id
+    });
+    showToast("أُعيد للمراجعة");
+  };
+  const eyebrowLabel = isHead ? "المدير التنفيذي (قائد المكتب التنفيذي)" : "المكتب التنفيذي";
+  const nav = [{
+    id: "pulse",
+    label: "النبض العام",
+    icon: "chart"
+  }, {
+    id: "tasks",
+    label: "الإسنادات",
+    icon: "tasks",
+    badge: execPending.length || null
+  }, {
+    id: "bulletins",
+    label: "التعميمات",
+    icon: "megaphone"
+  }, {
+    id: "directives",
+    label: "التوجيهات",
+    icon: "send"
+  }, {
+    id: "explore",
+    label: "استعراض",
+    icon: "eye"
+  }];
+  let main = null,
+    panel = null;
+  if (view === "pulse") {
+    const ranked = [...org.memberRows].sort((a, b) => b.pct - a.pct || b.recentPct - a.recentPct);
+    const top = ranked.filter(r => r.pct > 0).slice(0, 5);
+    const bottom = [...ranked].reverse().slice(0, 5);
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: eyebrowLabel,
+      title: "النبض العام",
+      desc: `صورة الانضباط عبر ${depts.length} إدارات و${org.units.length} وحدات هذا الأسبوع.`,
+      actions: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXGhostBtn, {
+        onClick: () => go("tasks", {
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد جديد"), /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => go("bulletins", {
+          kind: "compose"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "تعميم جديد"))
+    }), execPending.length > 0 && /*#__PURE__*/React.createElement(MXAttention, {
+      title: "إسنادات قيادية بانتظار اعتمادك",
+      items: execPending.map(p => ({
+        key: `${p.user.id}:${p.task.id}:${p.week}`,
+        text: `${pa2Short(p.user.name)} — ${p.task.title} (الأسبوع ${p.week})`,
+        go: () => go("tasks", {
+          kind: "member",
+          id: p.user.id
+        }),
+        cta: "مراجعة واعتماد"
+      })),
+      primaryLabel: "مراجعة الإسنادات"
+    }), /*#__PURE__*/React.createElement(MXScoreCard, {
+      label: "مؤشر الانضباط العام",
+      pct: org.index,
+      caption: `مرجّح بأوزان الإدارات · ${org.memberRows.length} عضواً`,
+      bars: org.deptStats.filter(s => s.rows.length).map(s => ({
+        label: `${s.dept.name} · وزن ${s.weight}`,
+        value: `${s.avg}%`,
+        pct: s.avg,
+        tone: pa2DeptTone(s.dept, allDepts.findIndex(x => x.id === s.dept.id)).dot
+      })),
+      stats: [{
+        n: counts.committed,
+        l: "ملتزم"
+      }, {
+        n: counts.behind,
+        l: "متأخر"
+      }, {
+        n: counts.not_started,
+        l: "لم يبدأ"
+      }]
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "grid lg:grid-cols-[1.2fr_1fr] gap-6 mb-10 items-start"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MXSectionTitle, null, "ترتيب الوحدات"), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 space-y-4"
+    }, org.units.map((u, i) => /*#__PURE__*/React.createElement("button", {
+      key: u.unit.id,
+      onClick: () => {
+        setExKind("unit");
+        setExId(u.unit.id);
+        go("explore");
+      },
+      className: "w-full text-right block group"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between mb-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] text-stone-700 flex items-center gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-6 text-stone-400 tabular-nums"
+    }, i + 1), u.unit.name, /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] text-stone-400"
+    }, u.count, " عضواً")), /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] font-semibold tabular-nums"
+    }, u.pct, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "mr-9"
+    }, /*#__PURE__*/React.createElement(MXProgress, {
+      pct: u.pct
+    })))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MXSectionTitle, null, "أوزان الإدارات"), /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-[13px] text-stone-500 mb-4 leading-relaxed"
+    }, "كلما زاد الوزن زاد أثر الإدارة في المؤشر العام."), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-3"
+    }, org.deptStats.map(s => /*#__PURE__*/React.createElement("div", {
+      key: s.dept.id,
+      className: "flex items-center justify-between gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] text-stone-700 truncate"
+    }, s.dept.name), /*#__PURE__*/React.createElement(PA2Stepper, {
+      value: s.weight,
+      min: 1,
+      max: 3,
+      onChange: v => setWeight(s.dept.id, v)
+    }))))))), /*#__PURE__*/React.createElement("div", {
+      className: "grid md:grid-cols-2 gap-6"
+    }, /*#__PURE__*/React.createElement(MXMemberRankList, {
+      title: "الأكثر التزاماً هذا الأسبوع",
+      rows: top,
+      empty: "لا يوجد إنجاز بعد هذا الأسبوع."
+    }), /*#__PURE__*/React.createElement(MXMemberRankList, {
+      title: "يحتاجون دعماً",
+      rows: bottom,
+      empty: "—"
+    })));
+  }
+  if (view === "tasks") {
+    const selDef = sel?.kind === "task" ? sel.id === "__new" ? "__new" : allExecDefs.find(t => t.id === sel.id) : null;
+    const selUser = sel?.kind === "member" ? db.users.find(u => u.id === sel.id) : null;
+    if (selDef) {
+      panel = /*#__PURE__*/React.createElement(MXTaskDefPanel, {
+        key: sel.id,
+        db: db,
+        scopeMode: "exec",
+        isHead: isHead,
+        def: selDef === "__new" ? null : selDef,
+        isNew: selDef === "__new",
+        allowedTypes: ["agenda_minutes", "practical", "meeting", "reading", "lecture_quiz"],
+        onClose: () => setSel(null),
+        onDelete: () => {
+          patchExecTasks(list => list.filter(t => t.id !== selDef.id));
+          setSel(null);
+          showToast("حُذف الإسناد");
+        },
+        onSave: draft => {
+          const targetGroup = isHead ? draft.targetGroup || "unit_leaders" : "unit_leaders";
+          const assignedBy = isHead ? "exec_head" : "exec_office";
+          if (selDef === "__new") {
+            const id = mxRandomId("exec");
+            patchExecTasks(list => [...list, {
+              id,
+              ...draft,
+              targetGroup,
+              assignedBy,
+              enabled: true
+            }]);
+            setSel({
+              kind: "task",
+              id
+            });
+            showToast("أُضيف الإسناد بنجاح");
+          } else {
+            patchExecTasks(list => list.map(t => t.id === selDef.id ? {
+              ...t,
+              ...draft,
+              targetGroup
+            } : t));
+            showToast("تم حفظ إعدادات الإسناد");
+          }
+        }
+      });
+    } else if (selUser) {
+      panel = /*#__PURE__*/React.createElement(MXMemberFollowPanel, {
+        db: db,
+        customDefs: mxUserTasks(db, selUser).filter(t => t.deptId === "src_exec"),
+        customPending: execPending,
+        user: selUser,
+        onApprove: approveExecTask,
+        onReject: rejectExecTask,
+        onClose: () => setSel(null)
+      });
+    }
+    const recipientRows = [...(isHead ? officeUsers.map(u => ({
+      user: u,
+      roleLabel: u.jobTitle || "المكتب التنفيذي / مدير إدارة"
+    })) : []), ...unitLeaderUsers.map(x => ({
+      user: x.user,
+      roleLabel: `مدير ${x.unit.name}`
+    }))];
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: eyebrowLabel,
+      title: "الإسنادات القيادية وأجندات الوحدات",
+      desc: isHead ? "إسناد المهمات للمكتب التنفيذي ومديري الوحدات، ومراجعة أجندات الاجتماعات الأسبوعية المعتمدة." : "إسناد المهمات لمديري الوحدات ومتابعة أجندات اجتماعات الوحدات الأسبوعية.",
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => setSel({
+          kind: "task",
+          id: "__new"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "إسناد جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_440px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-8 min-w-0"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MXSectionTitle, null, "قائمة الإسنادات (", allExecDefs.length, ")"), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2"
+    }, allExecDefs.length === 0 && /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد إسنادات قيادية بعد",
+      text: "أضف أول إسناد ليظهر للمسؤولين في واجهة «إسناداتي»."
+    }), allExecDefs.map(t => {
+      const active = sel?.kind === "task" && sel?.id === t.id;
+      const off = t.enabled === false;
+      const targetText = t.targetGroup === "exec_office" ? "المكتب التنفيذي ومديرو الإدارات" : t.targetGroup === "all_leaders" ? "المكتب التنفيذي + مديرو الوحدات" : "مديرو الوحدات";
+      return /*#__PURE__*/React.createElement("div", {
+        key: t.id,
+        className: `flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : ""}`
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => setSel(active ? null : {
+          kind: "task",
+          id: t.id
+        }),
+        className: "flex-1 min-w-0 flex items-center gap-4 text-right"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "w-11 h-11 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center justify-center text-[18px] shrink-0"
+      }, MX_TYPE_META[t.type]?.icon), /*#__PURE__*/React.createElement("span", {
+        className: "min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: `block text-[15px] font-medium truncate ${off ? "text-stone-400" : "text-stone-900"}`
+      }, t.title), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, "موجه إلى: ", targetText, t.useStructuredAgenda ? " · أجندة مقسّمة (5 محاور)" : "", mxApproval(t) === "manager" ? " · باعتماد القيادة" : " · اعتماد فوري"))), /*#__PURE__*/React.createElement(PA2Switch, {
+        checked: !off,
+        onChange: v => patchExecTasks(list => list.map(x => x.id === t.id ? {
+          ...x,
+          enabled: v
+        } : x))
+      }));
+    }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MXSectionTitle, null, "متابعة المسند إليهم وأجندات الوحدات (", recipientRows.length, ")"), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, recipientRows.map(({
+      user: u,
+      roleLabel
+    }) => {
+      const week = mxCurrentWeek(u);
+      const uTasks = mxUserTasks(db, u).filter(t => t.deptId === "src_exec");
+      const doneCount = uTasks.filter(t => mxTaskState(t, mxRec(u, week, t.id), rules).done).length;
+      const pct = uTasks.length ? Math.round(doneCount / uTasks.length * 100) : 0;
+      const uPend = execPending.filter(p => p.user.id === u.id).length;
+      const agendaRec = mxRec(u, week, "exec_unit_agenda");
+      const hasAgenda = agendaRec?.agendaFields && Object.values(agendaRec.agendaFields).some(v => (v || "").trim().length > 0);
+      const active = sel?.kind === "member" && sel?.id === u.id;
+      return /*#__PURE__*/React.createElement("button", {
+        key: u.id,
+        onClick: () => setSel(active ? null : {
+          kind: "member",
+          id: u.id
+        }),
+        className: `w-full text-right flex items-center gap-4 px-4 py-3 rounded-[20px] transition ${active ? "bg-[#F4F2EE]" : "hover:bg-[#FBFAF8]"}`
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: u
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[15px] font-medium text-stone-900 truncate"
+      }, pa2Short(u.name)), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, roleLabel)), hasAgenda && /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:inline-flex h-7 px-2.5 rounded-full bg-orange-50 text-orange-700 text-[12px] items-center"
+      }, "أجندة اللقاء مرفقة"), uPend > 0 && /*#__PURE__*/React.createElement("span", {
+        className: "h-7 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] text-[12px] inline-flex items-center"
+      }, uPend, " للاعتماد"), /*#__PURE__*/React.createElement("span", {
+        className: "text-[13px] font-semibold text-stone-700 tabular-nums"
+      }, doneCount, " / ", uTasks.length), /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:block"
+      }, /*#__PURE__*/React.createElement(MXStatusPill, {
+        pct: pct
+      })));
+    })))), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "bulletins") {
+    const selB = sel?.kind === "bulletin" ? bulletins.find(b => b.id === sel.id) : null;
+    if (sel?.kind === "compose") panel = /*#__PURE__*/React.createElement(MXBulletinComposer, {
+      db: db,
+      isHead: isHead,
+      onPublish: publish,
+      onClose: () => setSel(null)
+    });else if (selB) panel = /*#__PURE__*/React.createElement(MXBulletinReachPanel, {
+      db: db,
+      b: selB,
+      onClose: () => setSel(null)
+    });
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: eyebrowLabel,
+      title: "التعميمات",
+      desc: "انشر لكل أفراد الحركة أو للمكتب التنفيذي أو لمديري الوحدات، وتابع من اطّلع.",
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => setSel({
+          kind: "compose"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "تعميم جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 min-w-0"
+    }, bulletins.length === 0 && /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد تعميمات",
+      text: "انشر أول تعميم ليصل للأعضاء."
+    }), bulletins.map(b => {
+      const r = mxBulletinRecipients(db, b);
+      const a = r.filter(u => mxIsAcked(b, u.id)).length;
+      const pct = r.length ? Math.round(a / r.length * 100) : 0;
+      const active = sel?.id === b.id;
+      return /*#__PURE__*/React.createElement("button", {
+        key: b.id,
+        onClick: () => setSel(active ? null : {
+          kind: "bulletin",
+          id: b.id
+        }),
+        className: `w-full text-right flex items-center gap-4 px-5 py-4 rounded-[22px] bg-white transition ${active ? "ring-2 ring-stone-900" : "hover:bg-[#FBFAF8]"}`
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "w-11 h-11 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center justify-center shrink-0"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "megaphone",
+        className: "w-5 h-5"
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[15px] font-medium text-stone-900 truncate"
+      }, b.title), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[13px] text-stone-400 truncate"
+      }, mxBulletinTargetLabel(db, b), " · ", b.createdAt)), /*#__PURE__*/React.createElement("span", {
+        className: "hidden sm:block w-28"
+      }, /*#__PURE__*/React.createElement(MXProgress, {
+        pct: pct
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "text-[13px] text-stone-600 tabular-nums whitespace-nowrap"
+      }, a, " / ", r.length));
+    })), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "directives") {
+    if (sel?.kind === "compose") panel = /*#__PURE__*/React.createElement(MXDirectiveComposer, {
+      db: db,
+      targets: targets,
+      onSend: sendDirective,
+      onClose: () => setSel(null)
+    });
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: eyebrowLabel,
+      title: "التوجيهات",
+      desc: "ملاحظة مباشرة لمدير إدارة أو قائد وحدة، تظهر في أعلى مساحته حتى يؤكد اطلاعه.",
+      actions: /*#__PURE__*/React.createElement(MXPrimaryBtn, {
+        onClick: () => setSel({
+          kind: "compose"
+        })
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "plus",
+        className: "w-4 h-4"
+      }), "توجيه جديد")
+    }), /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${panel ? "lg:grid-cols-[1fr_420px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 min-w-0"
+    }, directives.length === 0 && /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لم تُرسل توجيهات بعد",
+      text: "التوجيه أداة هادئة لتنبيه مسؤول بعينه دون تعميم."
+    }), directives.map(dv => {
+      const to = db.users.find(u => u.id === dv.toUserId);
+      return /*#__PURE__*/React.createElement(MXCard, {
+        key: dv.id,
+        className: "px-5 py-4"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-3"
+      }, /*#__PURE__*/React.createElement(PA2Avatar, {
+        user: to,
+        size: "w-9 h-9"
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "flex-1 min-w-0"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "block text-[14px] font-medium text-stone-900 truncate"
+      }, pa2Short(to?.name) || "—"), /*#__PURE__*/React.createElement("span", {
+        className: "block text-[12px] text-stone-400"
+      }, dv.createdAt)), dv.readAt ? /*#__PURE__*/React.createElement("span", {
+        className: "h-7 px-3 rounded-full bg-emerald-50 text-emerald-700 text-[12px] inline-flex items-center"
+      }, "اطّلع", dv.readAtLabel ? ` · ${dv.readAtLabel}` : "") : /*#__PURE__*/React.createElement("span", {
+        className: "h-7 px-3 rounded-full bg-stone-100 text-stone-500 text-[12px] inline-flex items-center"
+      }, "لم يطّلع بعد")), /*#__PURE__*/React.createElement("p", {
+        className: "text-[14px] text-stone-600 mt-3 leading-relaxed whitespace-pre-line"
+      }, dv.text));
+    })), panel && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, panel)));
+  }
+  if (view === "explore") {
+    const list = exKind === "dept" ? depts.map(d => ({
+      id: d.id,
+      label: d.name
+    })) : units.map(u => ({
+      id: u.id,
+      label: u.name
+    }));
+    const curId = list.some(x => x.id === exId) ? exId : list[0]?.id;
+    let rows = [],
+      summary = null;
+    if (exKind === "dept" && curId) {
+      const s = org.deptStats.find(x => x.dept.id === curId) || mxDeptStats(db, curId);
+      const mgr = mxDeptManager(db, curId);
+      rows = s.rows.map(r => ({
+        user: r.user,
+        pct: r.pct,
+        status: r.status
+      }));
+      summary = {
+        pct: s.avg,
+        caption: `المدير: ${mgr ? pa2Short(mgr.name) : "غير معيّن"}`,
+        bars: s.byTask.map(b => ({
+          label: b.task.title,
+          value: `${b.done} / ${b.total}`,
+          pct: b.total ? Math.round(b.done / b.total * 100) : 0
+        })),
+        stats: [{
+          n: s.counts.committed,
+          l: "ملتزم"
+        }, {
+          n: s.counts.behind,
+          l: "متأخر"
+        }, {
+          n: s.counts.not_started,
+          l: "لم يبدأ"
+        }]
+      };
+    } else if (curId) {
+      const un = units.find(u => u.id === curId);
+      const leader = un?.leaderUserId ? db.users.find(u => u.id === un.leaderUserId) : null;
+      rows = org.memberRows.filter(r => r.user.unit === un?.name).map(r => ({
+        user: r.user,
+        pct: r.pct,
+        status: r.status
+      }));
+      const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+      const c = {
+        committed: 0,
+        behind: 0,
+        not_started: 0
+      };
+      rows.forEach(r => c[r.status.key]++);
+      summary = {
+        pct: avg,
+        caption: `القائد: ${leader ? pa2Short(leader.name) : "غير معيّن"}`,
+        bars: depts.map(d => {
+          const ds = org.deptStats.find(x => x.dept.id === d.id);
+          const rr = (ds?.rows || []).filter(x => x.user.unit === un?.name);
+          const p = rr.length ? Math.round(rr.reduce((a, x) => a + x.pct, 0) / rr.length) : 0;
+          return {
+            label: d.name,
+            value: rr.length ? `${p}%` : "—",
+            pct: p,
+            tone: pa2DeptTone(d, allDepts.findIndex(x => x.id === d.id)).dot
+          };
+        }),
+        stats: [{
+          n: c.committed,
+          l: "ملتزم"
+        }, {
+          n: c.behind,
+          l: "متأخر"
+        }, {
+          n: c.not_started,
+          l: "لم يبدأ"
+        }]
+      };
+    }
+    rows.sort((a, b) => b.pct - a.pct);
+    main = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: eyebrowLabel,
+      title: "استعراض",
+      desc: "نظرة للقراءة فقط على أي إدارة أو وحدة."
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3 flex-wrap mb-6"
+    }, /*#__PURE__*/React.createElement(PA2Segmented, {
+      value: exKind,
+      onChange: v => {
+        setExKind(v);
+        setExId(null);
+      },
+      options: [{
+        value: "dept",
+        label: "الإدارات"
+      }, {
+        value: "unit",
+        label: "الوحدات"
+      }]
+    }), /*#__PURE__*/React.createElement("select", {
+      value: curId || "",
+      onChange: e => setExId(e.target.value),
+      className: "h-9 rounded-full bg-white px-4 text-[14px] text-stone-700 focus:outline-none"
+    }, list.map(x => /*#__PURE__*/React.createElement("option", {
+      key: x.id,
+      value: x.id
+    }, x.label)))), summary && /*#__PURE__*/React.createElement(MXScoreCard, {
+      label: list.find(x => x.id === curId)?.label,
+      pct: summary.pct,
+      caption: summary.caption,
+      bars: summary.bars,
+      stats: summary.stats
+    }), /*#__PURE__*/React.createElement(MXSectionTitle, null, "الأعضاء ", /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-400 font-normal text-[15px]"
+    }, "· ", rows.length)), /*#__PURE__*/React.createElement("div", {
+      className: "bg-white rounded-[28px] p-2"
+    }, rows.length === 0 && /*#__PURE__*/React.createElement("div", {
+      className: "px-5 py-8 text-center text-[14px] text-stone-400"
+    }, "لا يوجد أعضاء."), rows.map(r => /*#__PURE__*/React.createElement("div", {
+      key: r.user.id,
+      className: "flex items-center gap-4 px-4 py-3 rounded-[20px] hover:bg-[#FBFAF8] group"
+    }, /*#__PURE__*/React.createElement(PA2Avatar, {
+      user: r.user
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 min-w-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "block text-[15px] font-medium text-stone-900 truncate"
+    }, pa2Short(r.user.name)), /*#__PURE__*/React.createElement("span", {
+      className: "block text-[13px] text-stone-400 truncate"
+    }, r.user.unit)), /*#__PURE__*/React.createElement("span", {
+      className: "hidden md:block w-28"
+    }, /*#__PURE__*/React.createElement(MXProgress, {
+      pct: r.pct
+    })), /*#__PURE__*/React.createElement("span", {
+      className: "w-12 text-left text-[14px] font-semibold tabular-nums"
+    }, r.pct, "%"), /*#__PURE__*/React.createElement("span", {
+      className: "hidden sm:block"
+    }, /*#__PURE__*/React.createElement(MXStatusPill, {
+      status: r.status
+    })), onPreviewUser && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onPreviewUser(r.user.id),
+      title: "معاينة مساحته",
+      className: "w-9 h-9 rounded-full text-stone-400 hover:text-stone-900 hover:bg-[#F4F2EE] inline-flex items-center justify-center"
+    }, /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "eye",
+      className: "w-4 h-4"
+    }))))));
+  }
+  return /*#__PURE__*/React.createElement(MXShell, {
+    areaLabel: isHead ? "المدير التنفيذي" : "المكتب التنفيذي",
+    chip: isHead ? "قائد المكتب التنفيذي" : "قيادة تنفيذية",
+    modeSwitch: modeSwitch,
+    nav: nav,
+    active: view,
+    onNav: v => go(v),
+    user: me,
+    roleLabel: isHead ? "قائد المكتب التنفيذي" : "المكتب التنفيذي",
+    onLogout: onLogout
+  }, main);
+}
+// ==== PART:EXEC END ====
+
+// ==== PART:CADRE START ====
+// ---------- مساحة العضو: إسناداتي + أرشيف التعميمات + حسابي ----------
+const mxDeptToneById = (db, deptId) => {
+  if (deptId === "src_exec") return PA2_PASTELS[2];
+  if (deptId && deptId.startsWith("src_unit_")) return PA2_PASTELS[3];
+  const list = mxDepartments(db);
+  const idx = Math.max(0, list.findIndex(d => d.id === deptId));
+  const d = list[idx];
+  return d ? pa2DeptTone(d, idx) : PA2_PASTELS[4];
+};
+const mxSourceLabel = (db, deptId, fallback) => {
+  if (deptId === "src_exec") return "القيادة التنفيذية";
+  if (deptId && deptId.startsWith("src_unit_")) {
+    const uid = deptId.replace("src_unit_", "");
+    return mxUnits(db).find(u => u.id === uid)?.name || fallback || "الوحدة";
+  }
+  const d = mxDeptById(db, deptId);
+  return d?.shortName || d?.name || fallback || deptId;
+};
+const mxFirstName = name => pa2Short(name).replace(/^(د\.|أ\.|م\.)\s*/, "").split(" ")[0] || "";
+function MXStateTag({
+  st
+}) {
+  const map = {
+    done: "bg-emerald-50 text-emerald-700",
+    late: "bg-amber-50 text-amber-700",
+    submitted: "bg-[#ECE7FA] text-[#4F3E8F]",
+    rejected: "bg-rose-50 text-rose-700",
+    partial: "bg-orange-50 text-orange-700",
+    pending: "bg-stone-100 text-stone-500"
+  };
+  return /*#__PURE__*/React.createElement("span", {
+    className: `inline-flex items-center h-7 px-3 rounded-full text-[12px] whitespace-nowrap ${map[st.key] || map.pending}`
+  }, st.label);
+}
+
+// شريط التعميم غير المقروء
+function MXBulletinStrip({
+  bulletin,
+  more,
+  onAck,
+  onOpenAll
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-[24px] bg-[#ECE7FA] px-6 py-5 mb-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-start gap-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-11 h-11 rounded-full bg-white text-[#4F3E8F] inline-flex items-center justify-center shrink-0"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "megaphone",
+    className: "w-5 h-5"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-medium text-[#4F3E8F]"
+  }, "تعميم جديد · ", bulletin.senderName || "الإدارة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[17px] font-semibold text-stone-900 mt-0.5"
+  }, bulletin.title), /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-600 mt-1.5 leading-relaxed"
+  }, bulletin.content), more > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: onOpenAll,
+    className: "text-[13px] text-[#4F3E8F] mt-2 hover:underline"
+  }, "و", more, " ", more === 1 ? "تعميم آخر" : "تعميمات أخرى", " بانتظار اطلاعك")), /*#__PURE__*/React.createElement("button", {
+    onClick: onAck,
+    className: "h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800 shrink-0"
+  }, "اطلعت واستوعبت")));
+}
+
+// لوحة تنفيذ الإسناد (تتكيف حسب نوع الإسناد: سلسلة متتابعة / محاضرة بأسئلة أو بدون / اختبار بعشوائية / أجندة مقسمة / 3 مستويات اعتماد)
+function MXTaskPanel({
+  db,
+  me,
+  def,
+  dept,
+  rec,
+  rules,
+  week,
+  isPast,
+  curriculum,
+  onPatch,
+  onClose,
+  showToast
+}) {
+  const st = mxTaskState(def, rec, rules);
+  const approval = def.type === "lecture_quiz" || def.type === "daily_habit" ? "self" : mxApproval(def);
+  const needsReview = approval === "manager" || approval === "person";
+  const approverUser = approval === "person" && def.approverUserId ? db.users.find(u => u.id === def.approverUserId) : null;
+  const doneStatus = isPast ? "late" : "on_time";
+  const sInfo = mxSeriesInfo(def, me, week);
+  const [epIdx, setEpIdx] = useState(() => sInfo ? sInfo.activeIdx : 0);
+  const activeEp = sInfo ? sInfo.items[epIdx] || sInfo.items[0] : null;
+  const [note, setNote] = useState(() => activeEp && rec.seriesNotes && rec.seriesNotes[activeEp.id] || rec.note || "");
+  const [agendaFields, setAgendaFields] = useState(() => ({
+    faithThought: "",
+    adminUpdates: "",
+    lastWeekReview: "",
+    unitChallenge: "",
+    nextWeekAssignments: "",
+    ...(rec.agendaFields || {})
+  }));
+  const [answers, setAnswers] = useState({});
+  const [attempt, setAttempt] = useState(() => rec.quizAttempts || 0);
+  const [quizMsg, setQuizMsg] = useState(null);
+  const meta = MX_TYPE_META[def.type] || {
+    label: "إسناد"
+  };
+  const locked = st.done && needsReview;
+  const sourceLabel = def.sourceName || dept?.shortName || dept?.name || mxSourceLabel(db, def.deptId);
+  const selectEpisode = idx => {
+    if (!sInfo || idx >= sInfo.unlockedCount) return;
+    setEpIdx(idx);
+    const ep = sInfo.items[idx];
+    setNote(ep && rec.seriesNotes && rec.seriesNotes[ep.id] || rec.note || "");
+    setAnswers({});
+    setQuizMsg(null);
+  };
+  const buildSeriesPatch = (extra = {}) => {
+    if (!activeEp) return extra;
+    return {
+      ...extra,
+      seriesDone: {
+        ...(rec.seriesDone || {}),
+        [activeEp.id]: {
+          at: mxCoarseNow(),
+          week
+        }
+      },
+      seriesNotes: note ? {
+        ...(rec.seriesNotes || {}),
+        [activeEp.id]: note
+      } : rec.seriesNotes
+    };
+  };
+  const complete = (extra = {}) => {
+    const merged = buildSeriesPatch(extra);
+    if (needsReview) onPatch({
+      status: "submitted",
+      submittedAt: mxCoarseNow(),
+      lateSubmit: isPast,
+      note,
+      ...merged
+    });else onPatch({
+      status: doneStatus,
+      completedAt: mxCoarseNow(),
+      note,
+      ...merged
+    });
+  };
+
+  // شريط سلسلة الإسنادات المتتابعة (إن كانت مفعّلة)
+  const seriesHeader = sInfo ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-[#F4F2EE] p-4 space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-stone-900"
+  }, "سلسلة إسنادات متتابعة (تبدأ من الأولى بالترتيب)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-500 tabular-nums"
+  }, sInfo.completedCount, " / ", sInfo.totalCount, " مكتملة")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5"
+  }, sInfo.items.map((ep, i) => {
+    const isUnlocked = i < sInfo.unlockedCount;
+    const isDone = Boolean(sInfo.doneMap[ep.id]);
+    const isCurrent = i === epIdx;
+    return /*#__PURE__*/React.createElement("button", {
+      key: ep.id,
+      type: "button",
+      disabled: !isUnlocked,
+      onClick: () => selectEpisode(i),
+      className: `h-8 px-3 rounded-full text-[12px] inline-flex items-center gap-1.5 transition ${isCurrent ? "bg-stone-900 text-white font-semibold" : isDone ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : isUnlocked ? "bg-white text-stone-700 hover:bg-stone-100" : "bg-stone-200/70 text-stone-400 cursor-not-allowed"}`
+    }, isDone ? /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: "w-3.5 h-3.5"
+    }) : !isUnlocked ? /*#__PURE__*/React.createElement("span", null, "🔒") : null, /*#__PURE__*/React.createElement("span", null, "الحلقة ", i + 1));
+  })), activeEp && /*#__PURE__*/React.createElement("div", {
+    className: "pt-1 border-t border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] font-semibold text-stone-900"
+  }, activeEp.title), activeEp.instructions && /*#__PURE__*/React.createElement("p", {
+    className: "text-[13px] text-stone-500 mt-0.5 leading-relaxed"
+  }, activeEp.instructions))) : null;
+  let body = null;
+  if (def.type === "daily_habit") {
+    const target = mxTargetDays(def, rules);
+    const days = Array.isArray(rec.daysCompleted) ? rec.daysCompleted : [];
+    const toggle = i => {
+      const next = days.includes(i) ? days.filter(x => x !== i) : [...days, i].sort((a, b) => a - b);
+      const reached = next.length >= target;
+      onPatch({
+        daysCompleted: next,
+        status: reached ? doneStatus : "pending",
+        completedAt: reached ? rec.completedAt || mxCoarseNow() : null
+      });
+    };
+    body = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+      hint: `الهدف ${target} أيام`
+    }, "الأيام التي أنجزتها هذا الأسبوع"), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-4 sm:grid-cols-7 gap-2"
+    }, MX_DAYS.map((d, i) => /*#__PURE__*/React.createElement("button", {
+      key: d,
+      onClick: () => toggle(i),
+      className: `h-14 rounded-2xl text-[13px] transition flex flex-col items-center justify-center gap-0.5 ${days.includes(i) ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-600 hover:bg-stone-200"}`
+    }, days.includes(i) ? /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: "w-4 h-4"
+    }) : /*#__PURE__*/React.createElement("span", {
+      className: "w-4 h-4"
+    }), d))), /*#__PURE__*/React.createElement("div", {
+      className: "mt-4"
+    }, /*#__PURE__*/React.createElement(MXProgress, {
+      pct: Math.min(100, Math.round(days.length / target * 100))
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-500 mt-2"
+    }, days.length, " من ", target, " أيام · يُحفظ تلقائياً"));
+  } else if (def.type === "lecture_quiz") {
+    const lectureMode = def.lectureMode || "lecture_and_quiz"; // lecture_and_quiz | lecture_only | quiz_only
+    const showVideo = lectureMode !== "quiz_only";
+    const showQuiz = lectureMode !== "lecture_only";
+    const rawVideoUrl = activeEp && activeEp.videoUrl || def.videoUrl || curriculum?.videoUrl || "";
+    const videoUrl = typeof sanitizeMediaUrl === "function" ? sanitizeMediaUrl(rawVideoUrl) : rawVideoUrl;
+    const videoType = def.videoType || curriculum?.videoType || "mp4";
+    const embed = videoUrl ? getYoutubeEmbedUrl(videoUrl) : "";
+    const lecTitle = activeEp && activeEp.title || def.lectureTitle || curriculum?.lectureTitle || "";
+    const lecDesc = activeEp && activeEp.instructions || def.lectureDesc || curriculum?.lectureDesc || "";
+    const poolTotal = activeEp && Array.isArray(activeEp.questions) && activeEp.questions.length ? activeEp.questions.length : Array.isArray(def.questionPool) && def.questionPool.length ? def.questionPool.length : (curriculum?.questions || []).length;
+    const qs = showQuiz ? mxDrawQuestions(def, curriculum, me.id, week, attempt, activeEp) : [];
+    const epAlreadyDone = activeEp ? Boolean(sInfo?.doneMap[activeEp.id]) : st.done;
+    const submitQuiz = () => {
+      if (!showQuiz || qs.length === 0) {
+        complete();
+        return;
+      }
+      if (qs.some(q => answers[q.id] === undefined)) {
+        setQuizMsg({
+          ok: false,
+          text: "أجب عن كل الأسئلة المعروضة أولاً"
+        });
+        return;
+      }
+      const score = qs.filter(q => answers[q.id] === q.correctIndex).length;
+      const pct = qs.length ? Math.round(score / qs.length * 100) : 100;
+      const pass = pct >= (parseInt(rules.quizPassThresholdPct, 10) || 60);
+      const quizSubmission = {
+        score,
+        total: qs.length,
+        answers,
+        pct,
+        at: mxCoarseNow(),
+        episodeId: activeEp?.id
+      };
+      if (pass) {
+        onPatch(buildSeriesPatch({
+          status: doneStatus,
+          completedAt: mxCoarseNow(),
+          quizSubmission,
+          quizAttempts: attempt
+        }));
+        setQuizMsg({
+          ok: true,
+          text: `أحسنت، نتيجتك ${score} من ${qs.length}`
+        });
+      } else {
+        const nextAttempt = attempt + 1;
+        setAttempt(nextAttempt);
+        setAnswers({});
+        onPatch({
+          quizSubmission,
+          quizAttempts: nextAttempt
+        });
+        setQuizMsg({
+          ok: false,
+          text: `نتيجتك ${score} من ${qs.length} — نسبة النجاح ${rules.quizPassThresholdPct}%، أعد المحاولة`
+        });
+      }
+    };
+    body = /*#__PURE__*/React.createElement("div", {
+      className: "space-y-5"
+    }, seriesHeader, !sInfo && lecTitle && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[16px] font-semibold text-stone-900"
+    }, lecTitle), lecDesc && /*#__PURE__*/React.createElement("p", {
+      className: "text-[14px] text-stone-500 mt-1 leading-relaxed"
+    }, lecDesc)), showVideo && videoUrl && /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl overflow-hidden bg-stone-900 aspect-video"
+    }, /*#__PURE__*/React.createElement(MXSafeMediaPlayer, {
+      videoUrl: videoUrl,
+      videoType: videoType,
+      title: lecTitle || def.title
+    })), epAlreadyDone && st.done ? /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl bg-emerald-50 px-4 py-3 text-[14px] text-emerald-800"
+    }, showQuiz ? `اجتزت الاختبار${rec.quizSubmission ? ` بنتيجة ${rec.quizSubmission.score} من ${rec.quizSubmission.total}` : ""}.` : "أتممت مشاهدة المحاضرة بنجاح.") : showQuiz && qs.length > 0 ? /*#__PURE__*/React.createElement("div", {
+      className: "space-y-4"
+    }, qs.map((q, qi) => /*#__PURE__*/React.createElement("div", {
+      key: q.id
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[14px] font-medium text-stone-800 mb-2"
+    }, qi + 1, ". ", q.text), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, (q.options || []).map((op, oi) => /*#__PURE__*/React.createElement("button", {
+      key: oi,
+      onClick: () => {
+        setAnswers(a => ({
+          ...a,
+          [q.id]: oi
+        }));
+        setQuizMsg(null);
+      },
+      className: `w-full text-right px-4 py-2.5 rounded-2xl text-[14px] transition ${answers[q.id] === oi ? "bg-stone-900 text-white" : "bg-[#F4F2EE] text-stone-700 hover:bg-stone-200"}`
+    }, op))))), quizMsg && /*#__PURE__*/React.createElement("div", {
+      className: `rounded-2xl px-4 py-3 text-[14px] ${quizMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`
+    }, quizMsg.text)) : quizMsg && /*#__PURE__*/React.createElement("div", {
+      className: `rounded-2xl px-4 py-3 text-[14px] ${quizMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"}`
+    }, quizMsg.text));
+    if (!(epAlreadyDone && st.done)) {
+      return /*#__PURE__*/React.createElement(PA2PanelShell, {
+        eyebrow: `${meta.label} · ${sourceLabel}`,
+        title: def.title,
+        onClose: onClose,
+        footer: /*#__PURE__*/React.createElement("button", {
+          onClick: submitQuiz,
+          className: "h-11 px-6 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800"
+        }, showQuiz && qs.length > 0 ? "تسليم الاختبار" : "تأكيد إتمام المحاضرة")
+      }, def.instructions && /*#__PURE__*/React.createElement("p", {
+        className: "text-[14px] text-stone-500 leading-relaxed"
+      }, def.instructions), body);
+    }
+  } else if (def.type === "agenda_minutes" && def.useStructuredAgenda) {
+    const disabled = st.done || st.key === "submitted";
+    const filledCount = MX_AGENDA_PROMPTS.filter(p => (agendaFields[p.key] || "").trim().length > 0).length;
+    const canSubmit = filledCount >= 1;
+    const formatSummaryNote = fields => MX_AGENDA_PROMPTS.map((p, i) => `${i + 1}. ${p.label}\n${(fields[p.key] || "").trim() || "—"}`).join("\n\n");
+    const saveDraftOnly = () => {
+      onPatch({
+        agendaFields,
+        note: formatSummaryNote(agendaFields)
+      });
+      if (showToast) showToast("تم حفظ مسودة الأجندة في مساحتك");
+    };
+    const submitAgenda = () => {
+      if (!canSubmit) return;
+      const summaryNote = formatSummaryNote(agendaFields);
+      if (needsReview) {
+        onPatch({
+          status: "submitted",
+          submittedAt: mxCoarseNow(),
+          lateSubmit: isPast,
+          agendaFields,
+          note: summaryNote
+        });
+      } else {
+        onPatch({
+          status: doneStatus,
+          completedAt: mxCoarseNow(),
+          agendaFields,
+          note: summaryNote
+        });
+      }
+      if (showToast) showToast("تم حفظ الأجندة وإرسالها للمسؤول");
+    };
+    body = /*#__PURE__*/React.createElement("div", {
+      className: "space-y-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl bg-[#F4F2EE] px-4 py-3 text-[13px] text-stone-600 leading-relaxed"
+    }, "تُحفظ هذه الخانات المقسّمة في مساحتك للرجوع إليها أثناء إدارة اللقاء، وتُرسل في الوقت نفسه للشخص المسؤول عنك."), MX_AGENDA_PROMPTS.map((p, idx) => /*#__PURE__*/React.createElement("div", {
+      key: p.key
+    }, /*#__PURE__*/React.createElement(PA2Label, {
+      hint: `المحور ${idx + 1}`
+    }, p.label), /*#__PURE__*/React.createElement("textarea", {
+      value: agendaFields[p.key] || "",
+      onChange: e => setAgendaFields(prev => ({
+        ...prev,
+        [p.key]: e.target.value
+      })),
+      disabled: disabled,
+      rows: 3,
+      className: `${pa2InputCls} h-auto py-3 resize-y disabled:opacity-70`,
+      placeholder: p.placeholder
+    }))), !disabled && /*#__PURE__*/React.createElement("div", {
+      className: "pt-1 flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: saveDraftOnly,
+      className: "h-9 px-4 rounded-full bg-[#F4F2EE] text-stone-700 text-[13px] font-medium hover:bg-stone-200"
+    }, "حفظ المسودة في مساحتي"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] text-stone-400"
+    }, "مُلئ ", filledCount, " من ", MX_AGENDA_PROMPTS.length, " محاور")));
+    if (!st.done && st.key !== "submitted") {
+      return /*#__PURE__*/React.createElement(PA2PanelShell, {
+        eyebrow: `${meta.label} · ${sourceLabel}`,
+        title: def.title,
+        onClose: onClose,
+        footer: /*#__PURE__*/React.createElement("div", {
+          className: "flex items-center gap-3"
+        }, /*#__PURE__*/React.createElement("button", {
+          onClick: submitAgenda,
+          disabled: !canSubmit,
+          className: `h-11 px-6 rounded-full text-[14px] font-semibold transition ${canSubmit ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+        }, needsReview ? "حفظ وإرسال للاعتماد" : "حفظ وإرسال الأجندة"), /*#__PURE__*/React.createElement("span", {
+          className: "mr-auto text-[12px] text-stone-400"
+        }, approval === "person" && approverUser ? `يعتمدها: ${pa2Short(approverUser.name)}` : approval === "manager" ? "تُرسل للمسؤول للاعتماد" : "تُحفظ وتُرسل للمسؤول"))
+      }, def.instructions && /*#__PURE__*/React.createElement("p", {
+        className: "text-[14px] text-stone-500 leading-relaxed"
+      }, def.instructions), st.key === "rejected" && /*#__PURE__*/React.createElement("div", {
+        className: "rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700"
+      }, "أعادها المسؤول للمراجعة", rec.rejectNote ? `: ${rec.rejectNote}` : "", ". عدّل وأعد الإرسال."), body);
+    }
+  } else {
+    const needsNote = def.type === "agenda_minutes" || def.type === "reading";
+    body = /*#__PURE__*/React.createElement("div", {
+      className: "space-y-4"
+    }, seriesHeader, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+      hint: needsNote ? "" : "اختياري"
+    }, def.type === "agenda_minutes" ? "النص أو الرابط" : def.type === "reading" ? "أهم فائدة خرجت بها" : "ملاحظة للمسؤول"), /*#__PURE__*/React.createElement("textarea", {
+      value: note,
+      onChange: e => setNote(e.target.value),
+      disabled: st.done || st.key === "submitted",
+      rows: 4,
+      className: `${pa2InputCls} h-auto py-3 resize-none disabled:opacity-70`,
+      placeholder: "اكتب هنا…"
+    })));
+  }
+
+  // تذييل عام
+  let footer = null;
+  if (def.type !== "daily_habit") {
+    if (st.key === "submitted") {
+      footer = /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-3"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] text-[#4F3E8F]"
+      }, approval === "person" && approverUser ? `أُرسلت للاعتماد، بانتظار ${pa2Short(approverUser.name)}` : "أُرسلت للاعتماد، بانتظار المسؤول"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => onPatch({
+          status: "pending",
+          submittedAt: null
+        }),
+        className: "mr-auto text-[13px] text-stone-500 hover:text-stone-800"
+      }, "سحب الإرسال"));
+    } else if (st.done) {
+      footer = /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-3"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[14px] text-emerald-700 inline-flex items-center gap-1.5"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "check",
+        className: "w-4 h-4"
+      }), locked ? "تم اعتماد الإسناد" : st.label), !locked && /*#__PURE__*/React.createElement("span", {
+        className: "mr-auto"
+      }, /*#__PURE__*/React.createElement(PA2DangerAction, {
+        label: "التراجع عن الإنجاز",
+        confirmLabel: "تأكيد التراجع",
+        onConfirm: () => onPatch({
+          status: "pending",
+          completedAt: null,
+          quizSubmission: def.type === "lecture_quiz" ? null : rec.quizSubmission
+        })
+      })));
+    } else if (def.type !== "lecture_quiz") {
+      const needsNote = def.type === "agenda_minutes" || def.type === "reading";
+      const can = !needsNote || note.trim().length > 0;
+      footer = /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-3"
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => can && complete(),
+        disabled: !can,
+        className: `h-11 px-6 rounded-full text-[14px] font-semibold transition ${can ? "bg-stone-900 text-white hover:bg-stone-800" : "bg-stone-100 text-stone-400 cursor-not-allowed"}`
+      }, needsReview ? "إرسال للاعتماد" : "تأكيد الإنجاز"), /*#__PURE__*/React.createElement("span", {
+        className: "mr-auto text-[12px] text-stone-400"
+      }, isPast ? `تُحتسب متأخرة (${rules.latePointsPct}%)` : approval === "person" && approverUser ? `يعتمدها: ${pa2Short(approverUser.name)}` : approval === "manager" ? "يعتمدها مدير الإدارة" : ""));
+    }
+  }
+  return /*#__PURE__*/React.createElement(PA2PanelShell, {
+    eyebrow: `${meta.label} · ${sourceLabel}`,
+    title: def.title,
+    onClose: onClose,
+    footer: footer
+  }, def.instructions && /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-500 leading-relaxed"
+  }, def.instructions), st.key === "rejected" && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700"
+  }, "أعادها المسؤول للمراجعة", rec.rejectNote ? `: ${rec.rejectNote}` : "", ". عدّل وأعد الإرسال."), body);
+}
+function MXAccountCard({
+  me,
+  rules,
+  db,
+  isUsernameTaken,
+  onSave
+}) {
+  const [name, setName] = useState(me.name || "");
+  const [pw, setPw] = useState({
+    cur: "",
+    next: "",
+    again: ""
+  });
+  const [err, setErr] = useState("");
+  const nameDirty = rules.allowCadreNameEdit && name.trim() && name.trim() !== me.name;
+  const pwDirty = rules.allowCadrePasswordChange && pw.next.length > 0;
+  const save = () => {
+    setErr("");
+    const patch = {};
+    if (nameDirty) patch.name = name.trim();
+    if (pwDirty) {
+      if (!mxVerifyPw(pw.cur, me.password)) {
+        setErr("كلمة المرور الحالية غير صحيحة");
+        return;
+      }
+      if (pw.next.length < 4) {
+        setErr("كلمة المرور الجديدة قصيرة (4 أحرف على الأقل)");
+        return;
+      }
+      if (pw.next !== pw.again) {
+        setErr("كلمتا المرور غير متطابقتين");
+        return;
+      }
+      patch.password = mxHashPw(pw.next);
+      patch.mustChangePassword = false;
+    }
+    onSave(patch);
+    setPw({
+      cur: "",
+      next: "",
+      again: ""
+    });
+  };
+  const depts = mxUserDeptIds(db, me).map(id => mxDeptById(db, id)).filter(Boolean);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid lg:grid-cols-[1fr_340px] gap-6 items-start"
+  }, /*#__PURE__*/React.createElement(MXCard, {
+    className: "p-6 sm:p-8 space-y-6"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, {
+    hint: rules.allowCadreNameEdit ? "" : "يعدّله مسؤول الموارد البشرية"
+  }, "الاسم"), /*#__PURE__*/React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    disabled: !rules.allowCadreNameEdit,
+    className: `${pa2InputCls} disabled:opacity-60`
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(PA2Label, null, "اسم المستخدم"), /*#__PURE__*/React.createElement("div", {
+    className: `${pa2InputCls} flex items-center text-stone-500`,
+    dir: "ltr"
+  }, me.username)), rules.allowCadrePasswordChange ? /*#__PURE__*/React.createElement("div", {
+    className: "pt-2 border-t border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[15px] font-semibold text-stone-900 mt-4 mb-4"
+  }, "تغيير كلمة المرور"), /*#__PURE__*/React.createElement("div", {
+    className: "grid sm:grid-cols-3 gap-3"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: pw.cur,
+    onChange: e => setPw(p => ({
+      ...p,
+      cur: e.target.value
+    })),
+    placeholder: "الحالية",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: pw.next,
+    onChange: e => setPw(p => ({
+      ...p,
+      next: e.target.value
+    })),
+    placeholder: "الجديدة",
+    className: pa2InputCls
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: pw.again,
+    onChange: e => setPw(p => ({
+      ...p,
+      again: e.target.value
+    })),
+    placeholder: "تأكيد الجديدة",
+    className: pa2InputCls
+  }))) : /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-400"
+  }, "تغيير كلمة المرور يتم عبر مسؤول الموارد البشرية."), err && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl bg-rose-50 px-4 py-3 text-[14px] text-rose-700"
+  }, err), /*#__PURE__*/React.createElement(PA2SaveFooter, {
+    dirty: Boolean(nameDirty || pwDirty),
+    onSave: save
+  })), /*#__PURE__*/React.createElement(MXCard, {
+    className: "p-6 space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement(PA2Avatar, {
+    user: me,
+    size: "w-12 h-12"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[16px] font-semibold text-stone-900 truncate"
+  }, pa2Short(me.name)), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 truncate"
+  }, me.jobTitle || pa2RoleLabel(me)))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-600 flex justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, "الوحدة"), /*#__PURE__*/React.createElement("span", null, me.unit || "—")), /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-600 flex justify-between items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, "إسنادات من"), /*#__PURE__*/React.createElement("span", {
+    className: "flex gap-1.5 flex-wrap justify-end"
+  }, depts.length ? depts.map(d => /*#__PURE__*/React.createElement(MXDeptChip, {
+    key: d.id,
+    dept: d,
+    idx: mxDepartments(db).findIndex(x => x.id === d.id)
+  })) : "القيادة التنفيذية")), me.joinedAt && /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] text-stone-600 flex justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, "تاريخ الانضمام"), /*#__PURE__*/React.createElement("span", null, formatDateAr(me.joinedAt)))));
+}
+function MXBulletinCard({
+  db,
+  b,
+  me,
+  onAck
+}) {
+  const acked = mxIsAcked(b, me.id);
+  return /*#__PURE__*/React.createElement(MXCard, {
+    className: "p-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 flex-wrap text-[12px]"
+  }, b.category && /*#__PURE__*/React.createElement("span", {
+    className: "h-6 px-2.5 rounded-full bg-[#ECE7FA] text-[#4F3E8F] inline-flex items-center"
+  }, b.category), /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, b.senderName, b.createdAt ? ` · ${b.createdAt}` : "", " · ", mxBulletinTargetLabel(db, b))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[17px] font-semibold text-stone-900 mt-3"
+  }, b.title), /*#__PURE__*/React.createElement("p", {
+    className: "text-[14px] text-stone-600 mt-1.5 leading-relaxed whitespace-pre-line"
+  }, b.content), /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 flex items-center"
+  }, acked ? /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] text-emerald-700 inline-flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement(PA2Icon, {
+    name: "check",
+    className: "w-4 h-4"
+  }), "اطلعت · ", b.acknowledgedBy[me.id]) : /*#__PURE__*/React.createElement("button", {
+    onClick: onAck,
+    className: "h-10 px-5 rounded-full bg-stone-900 text-white text-[14px] font-semibold hover:bg-stone-800"
+  }, "اطلعت واستوعبت")));
+}
+function CadrePortalV3({
+  db,
+  setDb,
+  currentUser,
+  isUsernameTaken,
+  onAcknowledgeBulletin,
+  onLogout,
+  showToast,
+  modeSwitch
+}) {
+  const me = db.users.find(u => u.id === currentUser.id) || currentUser;
+  const rules = mxRules(db);
+  const depts = mxDepartments(db);
+  const curWeek = mxCurrentWeek(me);
+  const [view, setView] = useState("tasks");
+  const [week, setWeek] = useState(curWeek);
+  const [deptFilter, setDeptFilter] = useState("all");
+  const [openKey, setOpenKey] = useState(null);
+  const [bulFilter, setBulFilter] = useState("all");
+  const bulletins = mxBulletinsForUser(db, me);
+  const unread = bulletins.filter(b => !mxIsAcked(b, me.id));
+  const sum = mxWeekSummary(db, me, week);
+  const sourceIds = [...new Set(sum.tasks.map(t => t.deptId))];
+  const reviewerPending = mxPendingForReviewer(db, me.id);
+  const minWeek = rules.allowLateSubmissions ? Math.max(1, curWeek - (parseInt(rules.maxPastWeeksEditable, 10) || 0)) : curWeek;
+  const isPast = week < curWeek;
+  const curriculum = db.weeklyCurriculums && (db.weeklyCurriculums[week] || db.weeklyCurriculums.default) || INITIAL_STATE.weeklyCurriculums.default;
+  const tasks = sum.tasks.filter(t => deptFilter === "all" || t.deptId === deptFilter).map(t => ({
+    def: t,
+    rec: mxRec(me, week, t.id),
+    st: mxTaskState(t, mxRec(me, week, t.id), rules)
+  }));
+  const open = tasks.find(t => `${t.def.deptId}:${t.def.id}` === openKey) || null;
+  const remainingList = tasks.filter(t => !t.st.done);
+  const doneList = tasks.filter(t => t.st.done);
+  const ack = b => onAcknowledgeBulletin(b.id, me.id);
+  const myDirectives = (db.directives || []).filter(d => d.toUserId === me.id && !d.readAt).sort((a, b) => (b.createdAtTs || 0) - (a.createdAtTs || 0));
+  const curRemaining = sum.week === curWeek ? sum.remaining : mxWeekSummary(db, me, curWeek).remaining;
+  const nav = [{
+    id: "tasks",
+    label: "إسناداتي",
+    icon: "tasks",
+    badge: curRemaining + reviewerPending.length || null
+  }, {
+    id: "bulletins",
+    label: "التعميمات",
+    icon: "megaphone",
+    badge: unread.length || null
+  }, {
+    id: "account",
+    label: "حسابي",
+    icon: "user"
+  }];
+  const roleLabel = modeSwitch ? pa2RoleLabel(me) : me.jobTitle || "عضو";
+  const approveAsReviewer = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: p.rec.lateSubmit ? "late" : "on_time",
+      completedAt: mxCoarseNow(),
+      approvedBy: me.id
+    });
+    showToast("تم اعتماد الإسناد");
+  };
+  const rejectAsReviewer = p => {
+    mxPatchRecord(setDb, p.user.id, p.week, p.task.id, {
+      status: "rejected",
+      rejectedBy: me.id
+    });
+    showToast("أُعيد الإسناد للمراجعة");
+  };
+  const renderRow = ({
+    def,
+    st
+  }) => {
+    const key = `${def.deptId}:${def.id}`;
+    const dept = mxDeptById(db, def.deptId);
+    const tone = mxDeptToneById(db, def.deptId);
+    const active = openKey === key;
+    const sInfo = mxSeriesInfo(def, me, week);
+    const approverUser = def.approval === "person" && def.approverUserId ? db.users.find(u => u.id === def.approverUserId) : null;
+    return /*#__PURE__*/React.createElement("button", {
+      key: key,
+      onClick: () => setOpenKey(active ? null : key),
+      className: `w-full text-right flex items-center gap-4 px-4 sm:px-5 py-4 rounded-[22px] transition ${active ? "bg-white ring-2 ring-stone-900" : "bg-white hover:bg-[#FBFAF8]"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `w-11 h-11 rounded-full ${tone.bg} inline-flex items-center justify-center text-[18px] shrink-0 ${st.done ? "opacity-60" : ""}`
+    }, st.done ? /*#__PURE__*/React.createElement(PA2Icon, {
+      name: "check",
+      className: `w-5 h-5 ${tone.ink}`
+    }) : MX_TYPE_META[def.type]?.icon || "•"), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 min-w-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `block text-[15px] font-medium truncate ${st.done ? "text-stone-400" : "text-stone-900"}`
+    }, def.title), /*#__PURE__*/React.createElement("span", {
+      className: "flex items-center gap-2 mt-1 text-[13px] text-stone-400 flex-wrap"
+    }, sourceIds.length > 1 && /*#__PURE__*/React.createElement(MXDeptChip, {
+      dept: dept,
+      label: def.sourceName || mxSourceLabel(db, def.deptId),
+      idx: Math.max(0, depts.findIndex(d => d.id === def.deptId))
+    }), /*#__PURE__*/React.createElement("span", null, MX_TYPE_META[def.type]?.label), sInfo && /*#__PURE__*/React.createElement("span", {
+      className: "text-orange-700 font-medium"
+    }, "· سلسلة (الحلقة ", sInfo.activeIdx + 1, " من ", sInfo.totalCount, ")"), def.useStructuredAgenda && /*#__PURE__*/React.createElement("span", null, "· 5 محاور مقسّمة"), mxApproval(def) === "manager" && def.type !== "lecture_quiz" && def.type !== "daily_habit" && /*#__PURE__*/React.createElement("span", null, "· يعتمدها المسؤول"), mxApproval(def) === "person" && /*#__PURE__*/React.createElement("span", null, "· يعتمدها ", approverUser ? pa2Short(approverUser.name) : "مُراجِع مختص"))), /*#__PURE__*/React.createElement(MXStateTag, {
+      st: st
+    }));
+  };
+  let content;
+  if (view === "bulletins") {
+    const list = bulFilter === "unread" ? unread : bulletins;
+    content = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: "التعميمات",
+      title: "أرشيف التعميمات",
+      desc: "كل ما وصلك من القيادة التنفيذية والمكتب التنفيذي والإدارات، الأحدث أولاً."
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "mb-6"
+    }, /*#__PURE__*/React.createElement(PA2Segmented, {
+      options: [{
+        value: "all",
+        label: `الكل · ${bulletins.length}`
+      }, {
+        value: "unread",
+        label: `بانتظار اطلاعك · ${unread.length}`
+      }],
+      value: bulFilter,
+      onChange: setBulFilter
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-4 max-w-3xl"
+    }, list.length === 0 ? /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد تعميمات هنا",
+      text: "ستظهر هنا التعميمات فور نشرها."
+    }) : list.map(b => /*#__PURE__*/React.createElement(MXBulletinCard, {
+      key: b.id,
+      db: db,
+      b: b,
+      me: me,
+      onAck: () => ack(b)
+    }))));
+  } else if (view === "account") {
+    content = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: "حسابي",
+      title: "بياناتي",
+      desc: "ما يمكنك تعديله يحدده مدير المنصة."
+    }), /*#__PURE__*/React.createElement(MXAccountCard, {
+      key: me.id + (me.password || ""),
+      me: me,
+      rules: rules,
+      db: db,
+      isUsernameTaken: isUsernameTaken,
+      onSave: patch => {
+        setDb(prev => ({
+          ...prev,
+          users: prev.users.map(u => u.id === me.id ? {
+            ...u,
+            ...patch
+          } : u)
+        }));
+        showToast("تم حفظ بياناتك");
+      }
+    }));
+  } else {
+    content = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MXHeader, {
+      eyebrow: `مساحتي · الأسبوع ${week}${isPast ? " (سابق)" : ""}`,
+      title: `أهلاً، ${mxFirstName(me.name)}`,
+      desc: sum.tasks.length ? "إسناداتك المطلوبة منك في قائمة واحدة منظمة. افتح أي إسناد لتنجزه." : "تتابع من هنا التعميمات الواردة وأي إسنادات تُوكل إليك.",
+      actions: minWeek < curWeek ? /*#__PURE__*/React.createElement("div", {
+        className: "inline-flex items-center h-11 rounded-full bg-white p-1"
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => {
+          setWeek(w => Math.min(curWeek, w + 1));
+          setOpenKey(null);
+        },
+        disabled: week >= curWeek,
+        className: "w-9 h-9 rounded-full hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center rotate-180"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "chevron",
+        className: "w-4 h-4"
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "px-3 text-[14px] text-stone-700 tabular-nums min-w-[110px] text-center"
+      }, week === curWeek ? "الأسبوع الحالي" : `الأسبوع ${week}`), /*#__PURE__*/React.createElement("button", {
+        onClick: () => {
+          setWeek(w => Math.max(minWeek, w - 1));
+          setOpenKey(null);
+        },
+        disabled: week <= minWeek,
+        className: "w-9 h-9 rounded-full hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center"
+      }, /*#__PURE__*/React.createElement(PA2Icon, {
+        name: "chevron",
+        className: "w-4 h-4"
+      }))) : null
+    }), me.mustChangePassword && rules.allowCadrePasswordChange && /*#__PURE__*/React.createElement(MXAttention, {
+      title: "أمان الحساب",
+      items: [{
+        key: "pw",
+        text: "ما زلت تستخدم كلمة مرور مؤقتة، غيّرها من «حسابي».",
+        go: () => setView("account"),
+        cta: "تغيير"
+      }],
+      primaryLabel: "تغيير كلمة المرور"
+    }), /*#__PURE__*/React.createElement(MXDirectiveStrip, {
+      directives: myDirectives,
+      onRead: id => mxMarkDirectiveRead(setDb, id)
+    }), unread.length > 0 && /*#__PURE__*/React.createElement(MXBulletinStrip, {
+      bulletin: unread[0],
+      more: unread.length - 1,
+      onAck: () => ack(unread[0]),
+      onOpenAll: () => setView("bulletins")
+    }), reviewerPending.length > 0 && /*#__PURE__*/React.createElement(MXCard, {
+      className: "p-6 mb-8"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between mb-4"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] font-medium text-[#4F3E8F]"
+    }, "مراجعة واعتماد"), /*#__PURE__*/React.createElement("h2", {
+      className: "text-[18px] font-bold text-stone-900 mt-0.5"
+    }, "إسنادات موكلة إليك لاعتمادها (", reviewerPending.length, ")"))), /*#__PURE__*/React.createElement("div", {
+      className: "grid sm:grid-cols-2 gap-3"
+    }, reviewerPending.map(p => /*#__PURE__*/React.createElement("div", {
+      key: `${p.user.id}:${p.week}:${p.task.id}`,
+      className: "rounded-2xl bg-[#ECE7FA]/60 px-4 py-3.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[14px] font-semibold text-stone-900"
+    }, pa2Short(p.user.name)), /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] text-stone-500"
+    }, p.user.unit || "", " · الأسبوع ", p.week)), /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-[#4F3E8F] font-medium mt-1"
+    }, p.task.title), p.rec.note && /*#__PURE__*/React.createElement("p", {
+      className: "text-[13px] text-stone-600 mt-1.5 leading-relaxed whitespace-pre-line"
+    }, "«", p.rec.note, "»"), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 mt-3"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => approveAsReviewer(p),
+      className: "h-8 px-4 rounded-full bg-stone-900 text-white text-[12px] font-semibold"
+    }, "اعتماد"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => rejectAsReviewer(p),
+      className: "h-8 px-3 rounded-full text-[12px] text-rose-600 hover:bg-rose-50"
+    }, "إعادة للمراجعة")))))), sum.tasks.length > 0 && /*#__PURE__*/React.createElement(MXScoreCard, {
+      label: isPast ? `أين وصلت في الأسبوع ${week}؟` : "أين وصلت هذا الأسبوع؟",
+      pct: sum.pct,
+      caption: `${sum.done} من ${sum.total} إسنادات مكتملة`,
+      bars: sourceIds.map(id => {
+        const b = sum.byDept[id] || {
+          done: 0,
+          total: 0,
+          pct: 0,
+          label: mxSourceLabel(db, id)
+        };
+        return {
+          label: b.label || mxSourceLabel(db, id),
+          value: `${b.done} / ${b.total}`,
+          pct: b.pct,
+          tone: mxDeptToneById(db, id).dot
+        };
+      }),
+      stats: [{
+        n: sum.done,
+        l: "مكتملة"
+      }, {
+        n: sum.submitted,
+        l: "بانتظار الاعتماد"
+      }, {
+        n: sum.remaining,
+        l: "متبقية"
+      }]
+    }), sum.tasks.length > 0 ? /*#__PURE__*/React.createElement("div", {
+      className: `grid gap-6 items-start ${open ? "lg:grid-cols-[1fr_440px]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-3 mb-4 flex-wrap"
+    }, /*#__PURE__*/React.createElement("h2", {
+      className: "text-xl font-bold text-stone-900"
+    }, "الإسنادات"), sourceIds.length > 1 && /*#__PURE__*/React.createElement(PA2Segmented, {
+      size: "sm",
+      value: deptFilter,
+      onChange: v => {
+        setDeptFilter(v);
+        setOpenKey(null);
+      },
+      options: [{
+        value: "all",
+        label: "الكل"
+      }, ...sourceIds.map(id => ({
+        value: id,
+        label: mxSourceLabel(db, id, sum.byDept[id]?.label)
+      }))]
+    })), remainingList.length > 0 ? /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2"
+    }, remainingList.map(renderRow)) : /*#__PURE__*/React.createElement("div", {
+      className: "rounded-[22px] bg-[#E3F1E8] px-5 py-4 text-[15px] text-emerald-800"
+    }, "أنجزت كل إسنادات هذا الأسبوع. بارك الله فيك."), doneList.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-[13px] text-stone-400 mt-8 mb-3"
+    }, "المنجزة · ", doneList.length), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2"
+    }, doneList.map(renderRow)))), open && /*#__PURE__*/React.createElement("div", {
+      className: "lg:sticky lg:top-6"
+    }, /*#__PURE__*/React.createElement(MXTaskPanel, {
+      key: `${openKey}:${week}`,
+      db: db,
+      me: me,
+      def: open.def,
+      dept: mxDeptById(db, open.def.deptId),
+      rec: open.rec,
+      rules: rules,
+      week: week,
+      isPast: isPast,
+      curriculum: curriculum,
+      showToast: showToast,
+      onClose: () => setOpenKey(null),
+      onPatch: patch => mxPatchRecord(setDb, me.id, week, open.def.id, patch)
+    }))) : /*#__PURE__*/React.createElement(PA2EmptyPanel, {
+      title: "لا توجد إسنادات مطلوبة منك هذا الأسبوع",
+      text: "ستظهر هنا أي إسنادات تُوكل إليك من القيادة التنفيذية أو الإدارات أو وحدتك."
+    }));
+  }
+  return /*#__PURE__*/React.createElement(MXShell, {
+    areaLabel: "مساحتي",
+    modeSwitch: modeSwitch,
+    nav: nav,
+    active: view,
+    onNav: v => {
+      setView(v);
+      setOpenKey(null);
+    },
+    user: me,
+    roleLabel: roleLabel,
+    onLogout: onLogout
+  }, content);
+}
+// ==== PART:CADRE END ====
+
+// ============================================================================
+// 10. EXECUTIVE OFFICE MEMBER PORTAL (بوابة عضو المكتب التنفيذي - النشرة الإدارية)
+// ============================================================================
+function ExecutivePortal({
+  db,
+  setDb,
+  currentUser,
+  onLogout,
+  showToast
+}) {
+  const cadres = useMemo(() => db.users.filter(u => u.roleType === "cadre"), [db.users]);
+  const units = useMemo(() => Array.from(new Set(cadres.map(c => c.unit).filter(Boolean))), [cadres]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [category, setCategory] = useState("سياسة جديدة");
+  const [targetType, setTargetType] = useState("all"); // 'all' | 'custom'
+  const [selectedIds, setSelectedIds] = useState([]);
+  const toggleRecipient = id => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const selectByUnit = unitName => {
+    const unitUserIds = cadres.filter(c => c.unit === unitName).map(c => c.id);
+    setSelectedIds(prev => Array.from(new Set([...prev, ...unitUserIds])));
+  };
+  const handlePublishBulletin = e => {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) {
+      showToast("يرجى كتابة عنوان ونص التعميم الإداري أولاً.");
+      return;
+    }
+    if (targetType === "custom" && selectedIds.length === 0) {
+      showToast("يرجى اختيار كادر واحد على الأقل لإرسال التعميم المخصص.");
+      return;
+    }
+    const now = new Date();
+    const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    const newBulletin = {
+      id: "bul_" + Date.now(),
+      title: title.trim(),
+      content: content.trim(),
+      category,
+      senderName: currentUser.name,
+      senderRole: currentUser.jobTitle || "عضو المكتب التنفيذي",
+      createdAt: `اليوم • ${timeStr}`,
+      targetType,
+      recipientIds: targetType === "all" ? [] : selectedIds,
+      acknowledgedBy: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      bulletins: [newBulletin, ...(prev.bulletins || [])]
+    }));
+    setTitle("");
+    setContent("");
+    showToast("تم نشر وإرسال التعميم في النشرة الإدارية بنجاح 📢");
+  };
+  const deleteBulletin = id => {
+    setDb(prev => ({
+      ...prev,
+      bulletins: (prev.bulletins || []).filter(b => b.id !== id)
+    }));
+    showToast("تم حذف التعميم من النشرة الإدارية");
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "min-h-screen bg-[#F7F7F5]"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "bg-white border-b border-stone-200 sticky top-0 z-30"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-w-5xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement(MadyanWordmark, {
+    size: "text-2xl sm:text-3xl"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black px-3 py-1 rounded-full madyan-gradient text-white shadow-sm"
+  }, "🏛️ بوابة عضو المكتب التنفيذي • النشرة الإدارية")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-600 hidden sm:inline"
+  }, currentUser.name, " (", currentUser.jobTitle, ")"), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "px-4 py-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold transition"
+  }, "تسجيل الخروج")))), /*#__PURE__*/React.createElement("main", {
+    className: "max-w-5xl mx-auto px-4 pt-6 space-y-6"
+  }, /*#__PURE__*/React.createElement(BulletinPublisherPanel, {
+    cadres: cadres,
+    units: units,
+    title: title,
+    setTitle: setTitle,
+    content: content,
+    setContent: setContent,
+    category: category,
+    setCategory: setCategory,
+    targetType: targetType,
+    setTargetType: setTargetType,
+    selectedIds: selectedIds,
+    setSelectedIds: setSelectedIds,
+    toggleRecipient: toggleRecipient,
+    selectByUnit: selectByUnit,
+    onSubmit: handlePublishBulletin,
+    bulletins: db.bulletins || [],
+    onDelete: deleteBulletin
+  })));
+}
+
+// مكون مشترك لإصدار النشرة الإدارية وتحديد المستلمين ومتابعة الاستيعاب
+function BulletinPublisherPanel({
+  cadres,
+  units,
+  title,
+  setTitle,
+  content,
+  setContent,
+  category,
+  setCategory,
+  targetType,
+  setTargetType,
+  selectedIds,
+  setSelectedIds,
+  toggleRecipient,
+  selectByUnit,
+  onSubmit,
+  bulletins,
+  onDelete
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 lg:grid-cols-12 gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-5 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4 h-fit"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "إصدار تعميم لحظي (One-Way)"), /*#__PURE__*/React.createElement("h2", {
+    className: "text-lg font-black text-stone-900"
+  }, "إرسال نشرة إدارية أو سياسة جديدة"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-500 mt-0.5"
+  }, "حدد محتوى الرسالة واختر بدقة من تصل إليه ومن لا تصل إليه من الكوادر.")), /*#__PURE__*/React.createElement("form", {
+    onSubmit: onSubmit,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "تصنيف النشرة"), /*#__PURE__*/React.createElement("select", {
+    value: category,
+    onChange: e => setCategory(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "سياسة جديدة"
+  }, "📜 سياسة جديدة"), /*#__PURE__*/React.createElement("option", {
+    value: "تعميم مشروع"
+  }, "🚀 تعميم مشروع"), /*#__PURE__*/React.createElement("option", {
+    value: "توجيه عاجل"
+  }, "⚡ توجيه عاجل"), /*#__PURE__*/React.createElement("option", {
+    value: "معلومة إدارية"
+  }, "💡 معلومة إدارية"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "عنوان التعميم / السياسة"), /*#__PURE__*/React.createElement("input", {
+    value: title,
+    onChange: e => setTitle(e.target.value),
+    placeholder: "مثال: اعتماد لائحة الاجتماعات الأسبوعية الجديدة...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "تفاصيل التعميم المطلوب استيعابه"), /*#__PURE__*/React.createElement("textarea", {
+    rows: "4",
+    value: content,
+    onChange: e => setContent(e.target.value),
+    placeholder: "اكتب النص الكامل للتعميم أو القرار الإداري ليظهر في الصفحة الرئيسية للمستلمين...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-xs leading-relaxed"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-800"
+  }, "🎯 تحديد المستلمين (توصل لمين ومتوصلش لمين)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2 text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setTargetType("all"),
+    className: `py-2 px-3 rounded-xl border transition ${targetType === "all" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-600"}`
+  }, "🌐 جميع الكوادر (", cadres.length, ")"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setTargetType("custom"),
+    className: `py-2 px-3 rounded-xl border transition ${targetType === "custom" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-600"}`
+  }, "🎯 تحديد مخصص (", selectedIds.length, ")")), targetType === "custom" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5 pt-2 border-t border-stone-200/70"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] font-bold text-stone-500"
+  }, "تحديد سريع لوحدة:"), units.map(uName => /*#__PURE__*/React.createElement("button", {
+    key: uName,
+    type: "button",
+    onClick: () => selectByUnit(uName),
+    className: "text-[10px] font-bold px-2 py-0.5 rounded-lg bg-orange-100 text-orange-800 hover:bg-orange-200"
+  }, "+ ", uName)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setSelectedIds([]),
+    className: "text-[10px] font-bold px-2 py-0.5 rounded-lg bg-stone-200 text-stone-600"
+  }, "إلغاء الكل")), /*#__PURE__*/React.createElement("div", {
+    className: "max-h-40 overflow-y-auto space-y-1.5 pr-1"
+  }, cadres.map(c => {
+    const checked = selectedIds.includes(c.id);
+    return /*#__PURE__*/React.createElement("label", {
+      key: c.id,
+      onClick: () => toggleRecipient(c.id),
+      className: `flex items-center justify-between p-2 rounded-xl border cursor-pointer text-xs transition ${checked ? "bg-orange-50 border-orange-400 font-black" : "bg-white border-stone-200 text-stone-500"}`
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-800"
+    }, c.name), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] text-stone-400 mr-1.5"
+    }, "(", c.unit, ")")), /*#__PURE__*/React.createElement("span", {
+      className: `text-[10px] px-2 py-0.5 rounded-md ${checked ? "bg-emerald-600 text-white" : "bg-stone-100 text-stone-500"}`
+    }, checked ? "تصل له ✓" : "مستثنى ✕"));
+  })))), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-lg shadow-orange-500/20 hover:opacity-95"
+  }, "📢 إرسال ونشر التعميم اللحظي الآن"))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-7 bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "متابعة الاستيعاب اللحظي"), /*#__PURE__*/React.createElement("h2", {
+    className: "text-lg font-black text-stone-900"
+  }, "سجل النشرات والتعميمات الصادرة (", bulletins.length, ")"))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, bulletins.map(bul => {
+    const targetCadres = bul.targetType === "all" ? cadres : cadres.filter(c => (bul.recipientIds || []).includes(c.id));
+    const ackCount = targetCadres.filter(c => bul.acknowledgedBy?.[c.id]).length;
+    const ackPct = targetCadres.length > 0 ? Math.round(ackCount / targetCadres.length * 100) : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: bul.id,
+      className: "p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-black px-2.5 py-0.5 rounded-full bg-orange-100 text-orange-800"
+    }, bul.category), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-bold text-stone-500"
+    }, bul.createdAt), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold px-2 py-0.5 rounded-full bg-stone-200 text-stone-700"
+    }, bul.targetType === "all" ? "🌐 موجه للجميع" : `🎯 مخصص لـ ${targetCadres.length} كوادر`)), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onDelete(bul.id),
+      className: "text-[11px] font-bold text-rose-600 hover:underline"
+    }, "حذف التعميم")), /*#__PURE__*/React.createElement("h3", {
+      className: "text-sm font-black text-stone-900"
+    }, bul.title), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-stone-600 leading-relaxed whitespace-pre-line"
+    }, bul.content), /*#__PURE__*/React.createElement("div", {
+      className: "pt-2 border-t border-stone-200/70 space-y-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between text-xs font-bold"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-700"
+    }, "نسبة الاطلاع والاستيعاب:"), /*#__PURE__*/React.createElement("span", {
+      className: "text-emerald-700"
+    }, ackCount, " من ", targetCadres.length, " (", ackPct, "%)")), /*#__PURE__*/React.createElement("div", {
+      className: "w-full h-2 rounded-full bg-stone-200 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${ackPct}%`
+      },
+      className: "h-full bg-emerald-600 transition-all"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1.5 pt-1"
+    }, targetCadres.map(c => {
+      const isAck = Boolean(bul.acknowledgedBy?.[c.id]);
+      return /*#__PURE__*/React.createElement("span", {
+        key: c.id,
+        className: `text-[10px] font-bold px-2 py-0.5 rounded-lg border ${isAck ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-white text-stone-400 border-stone-200"}`
+      }, c.name, ": ", isAck ? "استوعب ✓" : "لم يطلع بعد");
+    }))));
+  }))));
+}
+
+// ============================================================================
+// 11. ISOLATED OPERATIONAL DEPARTMENT PORTAL (واجهة إدارة الموارد البشرية + واجهة الإدارة التربوية)
+// ============================================================================
+function AdminPortal({
+  db,
+  setDb,
+  currentUser,
+  onLogout,
+  showToast
+}) {
+  const departments = db.systemConfig?.departments || DEFAULT_DEPARTMENTS;
+  const units = db.systemConfig?.organizationalUnits || DEFAULT_UNITS;
+  const teams = db.systemConfig?.crossFunctionalTeams || DEFAULT_TEAMS;
+
+  // تحديد الإدارة التشغيلية الحالية المعزولة لهذا المدير
+  const currentDeptId = currentUser.departmentId || "dept_hr";
+  const currentDept = departments.find(d => d.id === currentDeptId) || departments[0] || DEFAULT_DEPARTMENTS[0];
+  const isHr = currentDept.id === "dept_hr";
+  const isTarbawi = currentDept.id === "dept_tarbawi";
+
+  // الشاشات الأربع المستقلة في القائمة الجانبية الثابتة (حسب الإجابة ١٦)
+  const [activeScreen, setActiveScreen] = useState("overview"); // 'overview' | 'cadres' | 'tasks' | 'reports'
+
+  // فلاتر جدول الكوادر
+  const [unitFilter, setUnitFilter] = useState("all");
+  const [teamFilter, setTeamFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all"); // 'all' | 'urgent' | 'active' | 'done'
+
+  // التحكم في اللوحة الجانبية المنزلقة (Slide-over Drawer) لكافة الإجراءات
+  const [drawerMode, setDrawerMode] = useState(null);
+  // القيم الممكنة:
+  // 'evaluate_cadre' | 'add_task' | 'edit_task' | 'curriculum_builder' | 'tarbawi_compass' | 'dept_directive'
+  // + حصرياً للموارد البشرية: 'hr_add_cadre' | 'hr_bulk_import' | 'hr_unit_invites'
+  const [selectedCadreId, setSelectedCadreId] = useState(null);
+  const [editingTaskKey, setEditingTaskKey] = useState(null);
+
+  // الكوادر الخاضعون لمسار هذه الإدارة فقط (عزل تام)
+  const deptCadres = useMemo(() => {
+    return db.users.filter(u => {
+      if (u.roleType !== "cadre") return false;
+      const assigned = Array.isArray(u.assignedDepartments) && u.assignedDepartments.length > 0 ? u.assignedDepartments : ["dept_hr", "dept_tarbawi"];
+      return assigned.includes(currentDept.id);
+    });
+  }, [db.users, currentDept.id]);
+  const selectedCadre = deptCadres.find(c => c.id === selectedCadreId) || null;
+
+  // التعميم السياسي الأحدث من الإدارة العليا (البؤرة الأولى)
+  const latestExecutiveBulletin = useMemo(() => {
+    return (db.bulletins || []).find(b => !b.departmentId) || (db.bulletins || [])[0] || null;
+  }, [db.bulletins]);
+
+  // التوجيهات الفنية الخاصة بمسار هذه الإدارة فقط (معزولة لا تراها الإدارات الأخرى)
+  const deptDirectives = useMemo(() => {
+    return (db.bulletins || []).filter(b => b.departmentId === currentDept.id);
+  }, [db.bulletins, currentDept.id]);
+
+  // تجميع المهمات الخاصة بهذه الإدارة فقط مع إعدادات التقييم (ذاتي مقابل المدير) وتاريخ الاستحقاق
+  const deptTasksList = useMemo(() => {
+    if (isHr) {
+      const coreKeys = [{
+        key: "lecture",
+        defaultTemplate: "lecture_quiz",
+        defaultEval: "self",
+        icon: "🎬",
+        dueDate: "مسار نشط مستمر"
+      }, {
+        key: "agenda",
+        defaultTemplate: "agenda_minutes",
+        defaultEval: "self",
+        icon: "📝",
+        dueDate: "قبل اللقاء بـ ٢٤ ساعة"
+      }, {
+        key: "attendance",
+        defaultTemplate: "meeting",
+        defaultEval: "manager",
+        icon: "🤝",
+        dueDate: "يوم اللقاء المعتمد"
+      }, {
+        key: "minutes",
+        defaultTemplate: "agenda_minutes",
+        defaultEval: "self",
+        icon: "📋",
+        dueDate: "خلال ٢٤ ساعة بعد اللقاء"
+      }];
+      const baseTasks = coreKeys.map(item => {
+        const def = db.systemConfig?.taskDefinitions?.[item.key] || INITIAL_STATE.systemConfig.taskDefinitions[item.key] || {};
+        return {
+          id: item.key,
+          isCoreAdmin: true,
+          title: def.title || item.key,
+          subtitle: def.subtitle || "",
+          instructions: def.instructions || "",
+          icon: def.icon || item.icon,
+          templateType: def.templateType || item.defaultTemplate,
+          evalMode: def.evalMode || item.defaultEval,
+          // 'self' | 'manager'
+          dueDate: def.dueDate || item.dueDate,
+          targetScope: def.targetScope || "all",
+          targetUnit: def.targetUnit || "",
+          targetTeamId: def.targetTeamId || "",
+          targetUserIds: def.targetUserIds || [],
+          durationMinutes: def.durationMinutes || 25,
+          enabled: def.enabled !== false
+        };
+      }).filter(t => t.enabled !== false);
+      const extraHr = (db.systemConfig?.departmentCustomTasks?.dept_hr || []).filter(t => t.enabled !== false);
+      return [...baseTasks, ...extraHr];
+    }
+    if (isTarbawi) {
+      const rawTarbawi = (db.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS).filter(t => t.enabled !== false);
+      return rawTarbawi.map(t => ({
+        ...t,
+        isCoreAdmin: false,
+        templateType: t.templateType || (t.trackType === "daily_days" ? "daily_habit" : "reading"),
+        evalMode: t.evalMode || "self",
+        dueDate: t.dueDate || "مسار نشط مستمر",
+        targetScope: t.targetScope || "all",
+        targetUnit: t.targetUnit || "",
+        targetTeamId: t.targetTeamId || "",
+        targetUserIds: t.targetUserIds || []
+      }));
+    }
+    return (db.systemConfig?.departmentCustomTasks?.[currentDept.id] || []).filter(t => t.enabled !== false);
+  }, [db.systemConfig, isHr, isTarbawi, currentDept.id]);
+
+  // حساب درجة ومؤشرات الكادر في مسار هذه الإدارة فقط (دون كشف أو خلط درجات الإدارات الأخرى)
+  const getCadreDeptMetrics = cadre => {
+    const full = computeCadreMetrics(cadre, db.systemConfig);
+    const totalWeeks = calculateWeeksSinceJoin(cadre.joinedAt);
+    const currentPeriodRec = cadre.tasksRecord?.[totalWeeks] || {};
+
+    // المهمات المنطبقة على هذا الكادر في هذه الإدارة
+    const applicableTasks = deptTasksList.filter(t => {
+      if (!t.targetScope || t.targetScope === "all") return true;
+      if (t.targetScope === "unit") return t.targetUnit === cadre.unit;
+      if (t.targetScope === "team") return (cadre.crossTeams || []).includes(t.targetTeamId);
+      if (t.targetScope === "custom") return Array.isArray(t.targetUserIds) && t.targetUserIds.includes(cadre.id);
+      return true;
+    });
+    let completedCount = 0;
+    let lateCount = 0;
+    let pendingManagerEvalCount = 0;
+    let pendingCount = 0;
+    applicableTasks.forEach(t => {
+      const rec = currentPeriodRec[t.id] || {
+        status: "pending"
+      };
+      if (rec.status === "on_time") {
+        completedCount++;
+      } else if (rec.status === "late") {
+        completedCount++;
+        lateCount++;
+      } else {
+        pendingCount++;
+        if (t.evalMode === "manager") {
+          pendingManagerEvalCount++;
+        }
+      }
+    });
+    const scorePct = isHr ? full.adminScorePct : isTarbawi ? full.tarbawiScorePct : applicableTasks.length > 0 ? Math.round(completedCount / applicableTasks.length * 100) : 100;
+
+    // تحديد أولوية الهيت ماب الثلاثية للكادر (١. عاجل/متأخر أو ينتظر تقييم المدير، ٢. قيد الإنجاز، ٣. مكتمل هادئ)
+    const priorityLevel = scorePct < 60 || pendingManagerEvalCount > 0 || lateCount > 0 ? "urgent" : pendingCount > 0 ? "active" : "done";
+    return {
+      scorePct,
+      totalWeeks,
+      applicableTasks,
+      currentPeriodRec,
+      completedCount,
+      lateCount,
+      pendingCount,
+      pendingManagerEvalCount,
+      priorityLevel,
+      avgQuizPct: full.avgQuizPct
+    };
+  };
+  const cadresWithDeptMetrics = useMemo(() => {
+    return deptCadres.map(c => ({
+      cadre: c,
+      deptMetrics: getCadreDeptMetrics(c)
+    })).sort((a, b) => {
+      const order = {
+        urgent: 0,
+        active: 1,
+        done: 2
+      };
+      if (order[a.deptMetrics.priorityLevel] !== order[b.deptMetrics.priorityLevel]) {
+        return order[a.deptMetrics.priorityLevel] - order[b.deptMetrics.priorityLevel];
+      }
+      return a.deptMetrics.scorePct - b.deptMetrics.scorePct;
+    });
+  }, [deptCadres, deptTasksList, db.systemConfig]);
+  const deptAveragePct = useMemo(() => {
+    if (cadresWithDeptMetrics.length === 0) return 0;
+    const sum = cadresWithDeptMetrics.reduce((acc, item) => acc + item.deptMetrics.scorePct, 0);
+    return Math.round(sum / cadresWithDeptMetrics.length);
+  }, [cadresWithDeptMetrics]);
+  const urgentCadresCount = cadresWithDeptMetrics.filter(x => x.deptMetrics.priorityLevel === "urgent").length;
+
+  // فلاتر جدول الكوادر
+  const filteredCadres = cadresWithDeptMetrics.filter(({
+    cadre,
+    deptMetrics
+  }) => {
+    if (unitFilter !== "all" && cadre.unit !== unitFilter) return false;
+    if (teamFilter !== "all" && !(cadre.crossTeams || []).includes(teamFilter)) return false;
+    if (priorityFilter !== "all" && deptMetrics.priorityLevel !== priorityFilter) return false;
+    return true;
+  });
+
+  // حالات اللوحة المنزلقة: إضافة أو تعديل مهمة في الإدارة
+  const allowedTemplates = TASK_TEMPLATES_LIBRARY.filter(t => (currentDept.allowedTaskTypes || ["lecture_quiz", "meeting", "practical"]).includes(t.id));
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskSubtitle, setTaskSubtitle] = useState("");
+  const [taskInstructions, setTaskInstructions] = useState("");
+  const [taskIcon, setTaskIcon] = useState(isTarbawi ? "🌱" : "📋");
+  const [taskTemplateType, setTaskTemplateType] = useState(allowedTemplates[0]?.id || "practical");
+  const [taskEvalMode, setTaskEvalMode] = useState("self"); // 'self' | 'manager'
+  const [taskDueDate, setTaskDueDate] = useState("٢٠ نوفمبر ٢٠٢٦");
+  const [taskTargetScope, setTaskTargetScope] = useState("all"); // 'all' | 'unit' | 'team' | 'custom'
+  const [taskTargetUnit, setTaskTargetUnit] = useState(units[0]?.name || "");
+  const [taskTargetTeamId, setTaskTargetTeamId] = useState(teams[0]?.id || "");
+  const [taskTargetUserIds, setTaskTargetUserIds] = useState([]);
+  const [taskTargetDays, setTaskTargetDays] = useState(5);
+  const openAddTaskDrawer = () => {
+    if (deptTasksList.length >= (currentDept.maxTotalTasks || 6)) {
+      showToast(`بلغت الإدارة الحد الأقصى المسموح به للمهمات (${currentDept.maxTotalTasks || 6} مهمات).`);
+      return;
+    }
+    setEditingTaskKey(null);
+    setTaskTitle("");
+    setTaskSubtitle("");
+    setTaskInstructions("");
+    setTaskIcon(isTarbawi ? "🌱" : "📋");
+    setTaskTemplateType(allowedTemplates[0]?.id || "practical");
+    setTaskEvalMode("self");
+    setTaskDueDate("٢٠ نوفمبر ٢٠٢٦");
+    setTaskTargetScope("all");
+    setTaskTargetUnit(units[0]?.name || "");
+    setTaskTargetTeamId(teams[0]?.id || "");
+    setTaskTargetUserIds([]);
+    setDrawerMode("add_task");
+  };
+  const openEditTaskDrawer = task => {
+    setEditingTaskKey(task.id);
+    setTaskTitle(task.title || "");
+    setTaskSubtitle(task.subtitle || "");
+    setTaskInstructions(task.instructions || "");
+    setTaskIcon(task.icon || "📋");
+    setTaskTemplateType(task.templateType || "practical");
+    setTaskEvalMode(task.evalMode || "self");
+    setTaskDueDate(task.dueDate || "مسار نشط مستمر");
+    setTaskTargetScope(task.targetScope || "all");
+    setTaskTargetUnit(task.targetUnit || units[0]?.name || "");
+    setTaskTargetTeamId(task.targetTeamId || teams[0]?.id || "");
+    setTaskTargetUserIds(Array.isArray(task.targetUserIds) ? task.targetUserIds : []);
+    setTaskTargetDays(task.targetDays || 5);
+    setDrawerMode("edit_task");
+  };
+  const handleSaveDeptTask = e => {
+    e.preventDefault();
+    if (!taskTitle.trim()) {
+      showToast("يرجى إدخال عنوان المهمة.");
+      return;
+    }
+
+    // التحقق من حصة المهمات الإجمالية وحصة النوع الواحد للفرد (الإجابة ٤)
+    if (!editingTaskKey) {
+      const maxTotal = currentDept.maxTotalTasks || 6;
+      if (deptTasksList.length >= maxTotal) {
+        showToast(`لا يمكن تجاوز الحد الأقصى لإجمالي مهمات الإدارة (${maxTotal} مهمات).`);
+        return;
+      }
+      const sameTypeCount = deptTasksList.filter(t => t.templateType === taskTemplateType).length;
+      const maxPerType = currentDept.maxPerTypePerCadre || 2;
+      if (sameTypeCount >= maxPerType) {
+        showToast(`وصلت للحد الأقصى المسموح إسناده للفرد من هذا النوع (${maxPerType} مهمات).`);
+        return;
+      }
+    }
+    if (isHr && editingTaskKey && ["lecture", "agenda", "attendance", "minutes"].includes(editingTaskKey)) {
+      setDb(prev => ({
+        ...prev,
+        systemConfig: {
+          ...prev.systemConfig,
+          taskDefinitions: {
+            ...(prev.systemConfig?.taskDefinitions || {}),
+            [editingTaskKey]: {
+              ...(prev.systemConfig?.taskDefinitions?.[editingTaskKey] || {}),
+              title: taskTitle.trim(),
+              subtitle: taskSubtitle.trim(),
+              instructions: taskInstructions.trim(),
+              icon: taskIcon,
+              templateType: taskTemplateType,
+              evalMode: taskEvalMode,
+              dueDate: taskDueDate.trim(),
+              targetScope: taskTargetScope,
+              targetUnit: taskTargetScope === "unit" ? taskTargetUnit : "",
+              targetTeamId: taskTargetScope === "team" ? taskTargetTeamId : "",
+              targetUserIds: taskTargetScope === "custom" ? taskTargetUserIds : []
+            }
+          }
+        }
+      }));
+      setDrawerMode(null);
+      showToast("تم تحديث المهمة الإدارية وطريقة تقييمها بنجاح ✓");
+      return;
+    }
+    const payload = {
+      id: editingTaskKey || `${currentDept.id}_task_` + Date.now(),
+      title: taskTitle.trim(),
+      subtitle: taskSubtitle.trim() || `مهمة ضمن ${currentDept.name}`,
+      instructions: taskInstructions.trim() || "أتم المهمة وفق التوجيهات المعتمدة.",
+      icon: taskIcon || "📋",
+      badge: currentDept.shortName,
+      templateType: taskTemplateType,
+      trackType: taskTemplateType === "daily_habit" ? "daily_days" : "check",
+      targetDays: parseInt(taskTargetDays, 10) || 5,
+      evalMode: taskEvalMode,
+      // 'self' | 'manager'
+      dueDate: taskDueDate.trim() || "مسار نشط مستمر",
+      targetScope: taskTargetScope,
+      targetUnit: taskTargetScope === "unit" ? taskTargetUnit : "",
+      targetTeamId: taskTargetScope === "team" ? taskTargetTeamId : "",
+      targetUserIds: taskTargetScope === "custom" ? taskTargetUserIds : [],
+      enabled: true
+    };
+    if (isTarbawi) {
+      setDb(prev => {
+        const list = prev.systemConfig?.tarbawiTaskDefinitions || DEFAULT_TARBAWI_TASKS;
+        const nextList = editingTaskKey ? list.map(t => t.id === editingTaskKey ? {
+          ...t,
+          ...payload
+        } : t) : [...list, payload];
+        return {
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            tarbawiTaskDefinitions: nextList
+          }
+        };
+      });
+    } else {
+      setDb(prev => {
+        const deptMap = prev.systemConfig?.departmentCustomTasks || {};
+        const list = deptMap[currentDept.id] || [];
+        const nextList = editingTaskKey ? list.map(t => t.id === editingTaskKey ? {
+          ...t,
+          ...payload
+        } : t) : [...list, payload];
+        return {
+          ...prev,
+          systemConfig: {
+            ...prev.systemConfig,
+            departmentCustomTasks: {
+              ...deptMap,
+              [currentDept.id]: nextList
+            }
+          }
+        };
+      });
+    }
+    setDrawerMode(null);
+    showToast(editingTaskKey ? "تم تحديث المهمة بنجاح ✓" : "تمت إضافة المهمة الجديدة ضمن حصة الإدارة ✓");
+  };
+  const handleDeleteDeptTask = taskId => {
+    if (isHr && ["lecture", "agenda", "attendance", "minutes"].includes(taskId)) {
+      showToast("هذه مهمة تأسيسية؛ يمكنك تعديل عنوانها أو طريقة تقييمها أو نطاقها.");
+      return;
+    }
+    if (isTarbawi) {
+      setDb(prev => ({
+        ...prev,
+        systemConfig: {
+          ...prev.systemConfig,
+          tarbawiTaskDefinitions: (prev.systemConfig?.tarbawiTaskDefinitions || []).filter(t => t.id !== taskId)
+        }
+      }));
+    } else {
+      setDb(prev => ({
+        ...prev,
+        systemConfig: {
+          ...prev.systemConfig,
+          departmentCustomTasks: {
+            ...(prev.systemConfig?.departmentCustomTasks || {}),
+            [currentDept.id]: (prev.systemConfig?.departmentCustomTasks?.[currentDept.id] || []).filter(t => t.id !== taskId)
+          }
+        }
+      }));
+    }
+    setDrawerMode(null);
+    showToast("تم حذف المهمة من مسار الإدارة.");
+  };
+
+  // تقييم مدير القسم لمهمة كادر مباشرة من اللوحة المنزلقة (الإجابة ٦)
+  const handleManagerEvaluateTask = (cadreId, taskKey, nextStatus) => {
+    const target = db.users.find(u => u.id === cadreId);
+    if (!target) return;
+    const periodKey = calculateWeeksSinceJoin(target.joinedAt);
+    const now = new Date();
+    const stamp = nextStatus === "pending" ? null : `تقييم المدير • ${formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`)}`;
+    setDb(prev => ({
+      ...prev,
+      users: prev.users.map(u => {
+        if (u.id !== cadreId) return u;
+        const prevRec = u.tasksRecord?.[periodKey] || {};
+        const prevTask = prevRec[taskKey] || {};
+        return {
+          ...u,
+          tasksRecord: {
+            ...(u.tasksRecord || {}),
+            [periodKey]: {
+              ...prevRec,
+              [taskKey]: {
+                ...prevTask,
+                status: nextStatus,
+                completedAt: stamp,
+                evaluatedByManager: true
+              }
+            }
+          }
+        };
+      })
+    }));
+    showToast("تم حفظ تقييم مدير القسم للمهمة ✓");
+  };
+
+  // حالات اللوحة المنزلقة: إصدار توجيه فني خاص بكوادر مسار هذه الإدارة فقط (الإجابة ٧)
+  const [dirTitle, setDirTitle] = useState("");
+  const [dirContent, setDirContent] = useState("");
+  const [dirScope, setDirScope] = useState("all"); // 'all' | 'unit' | 'team' | 'custom'
+  const [dirUnit, setDirUnit] = useState(units[0]?.name || "");
+  const [dirTeamId, setDirTeamId] = useState(teams[0]?.id || "");
+  const [dirUserIds, setDirUserIds] = useState([]);
+  const handlePublishDirective = e => {
+    e.preventDefault();
+    if (!dirTitle.trim() || !dirContent.trim()) {
+      showToast("يرجى إدخال عنوان ونص التوجيه الفني.");
+      return;
+    }
+    let recipientIds = [];
+    if (dirScope === "unit") {
+      recipientIds = deptCadres.filter(c => c.unit === dirUnit).map(c => c.id);
+    } else if (dirScope === "team") {
+      recipientIds = deptCadres.filter(c => (c.crossTeams || []).includes(dirTeamId)).map(c => c.id);
+    } else if (dirScope === "custom") {
+      recipientIds = dirUserIds;
+    }
+    const now = new Date();
+    const timeStr = formatTimeAr(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    const createdBul = {
+      id: "dir_" + Date.now(),
+      departmentId: currentDept.id,
+      departmentName: currentDept.name,
+      title: dirTitle.trim(),
+      content: dirContent.trim(),
+      category: `توجيه ${currentDept.shortName}`,
+      senderName: currentUser.name,
+      senderRole: currentUser.jobTitle || `مدير ${currentDept.name}`,
+      createdAt: `اليوم • ${timeStr}`,
+      targetType: dirScope === "all" ? "all" : "custom",
+      recipientIds,
+      acknowledgedBy: {}
+    };
+    setDb(prev => ({
+      ...prev,
+      bulletins: [createdBul, ...(prev.bulletins || [])]
+    }));
+    setDirTitle("");
+    setDirContent("");
+    setDrawerMode(null);
+    showToast(`تم نشر التوجيه الفني لكوادر (${currentDept.shortName}) بنجاح ✓`);
+  };
+
+  // حالات اللوحة المنزلقة الخاصة بإدارة الموارد البشرية فقط: إنشاء حسابات الكوادر وتسكينهم (الإجابة ٢ و ٩)
+  const [hrCadreName, setHrCadreName] = useState("");
+  const [hrCadreTitle, setHrCadreTitle] = useState("");
+  const [hrCadreUnit, setHrCadreUnit] = useState(units[0]?.name || "وحدة التخطيط الاستراتيجي");
+  const [hrCadreTeams, setHrCadreTeams] = useState([]);
+  const [hrCadreUsername, setHrCadreUsername] = useState("");
+  const [hrCadrePassword, setHrCadrePassword] = useState("1234");
+  const [hrBulkText, setHrBulkText] = useState("");
+  const handleHrCreateCadre = e => {
+    e.preventDefault();
+    if (!hrCadreName.trim() || !hrCadreUsername.trim()) {
+      showToast("يرجى إدخال اسم الكادر واسم المستخدم.");
+      return;
+    }
+    const cleanU = hrCadreUsername.trim().toLowerCase();
+    if (db.users.some(u => u.username.toLowerCase() === cleanU)) {
+      showToast("اسم المستخدم مسجل مسبقاً.");
+      return;
+    }
+    const created = {
+      id: "u_hr_" + Date.now(),
+      username: hrCadreUsername.trim(),
+      password: hrCadrePassword.trim() || "1234",
+      roleType: "cadre",
+      assignedDepartments: ["dept_hr", "dept_tarbawi"],
+      crossTeams: hrCadreTeams,
+      mustChangePassword: true,
+      onboarded: false,
+      joinedAt: Date.now() - 24 * 3600 * 1000,
+      name: hrCadreName.trim(),
+      jobTitle: hrCadreTitle.trim() || "كادر تنظيمي",
+      unit: hrCadreUnit,
+      defaultSchedule: {
+        meetDay: 2,
+        meetTime: "19:00",
+        meetDuration: 90
+      },
+      weekOverrides: {},
+      tasksRecord: {
+        1: {
+          lecture: {
+            status: "pending"
+          },
+          agenda: {
+            status: "pending"
+          },
+          attendance: {
+            status: "pending"
+          },
+          minutes: {
+            status: "pending"
+          }
+        }
+      }
+    };
+    setDb(prev => ({
+      ...prev,
+      users: [...prev.users, created]
+    }));
+    setHrCadreName("");
+    setHrCadreTitle("");
+    setHrCadreUsername("");
+    setHrCadreTeams([]);
+    setDrawerMode(null);
+    showToast(`تم إنشاء حساب الكادر (${created.name}) وتسكينه في (${created.unit}) ✓`);
+  };
+  const handleHrBulkImport = e => {
+    e.preventDefault();
+    const lines = hrBulkText.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+    const added = [];
+    lines.forEach((line, idx) => {
+      const parts = line.split(/[،,\t]/).map(p => p.trim()).filter(Boolean);
+      const name = parts[0] || `كادر ${idx + 1}`;
+      const uname = (parts[1] || `cadre_${Date.now().toString().slice(-4)}_${idx + 1}`).toLowerCase();
+      const uNameUnit = parts[2] || hrCadreUnit || units[0]?.name || "وحدة التخطيط الاستراتيجي";
+      if (!db.users.some(u => u.username.toLowerCase() === uname)) {
+        added.push({
+          id: "u_hrb_" + Date.now() + "_" + idx,
+          username: uname,
+          password: "1234",
+          roleType: "cadre",
+          assignedDepartments: ["dept_hr", "dept_tarbawi"],
+          crossTeams: [],
+          mustChangePassword: true,
+          onboarded: false,
+          joinedAt: Date.now() - 24 * 3600 * 1000,
+          name,
+          jobTitle: "كادر تنظيمي",
+          unit: uNameUnit,
+          defaultSchedule: {
+            meetDay: 2,
+            meetTime: "19:00",
+            meetDuration: 90
+          },
+          weekOverrides: {},
+          tasksRecord: {
+            1: {
+              lecture: {
+                status: "pending"
+              },
+              agenda: {
+                status: "pending"
+              },
+              attendance: {
+                status: "pending"
+              },
+              minutes: {
+                status: "pending"
+              }
+            }
+          }
+        });
+      }
+    });
+    if (added.length > 0) {
+      setDb(prev => ({
+        ...prev,
+        users: [...prev.users, ...added]
+      }));
+      setHrBulkText("");
+      setDrawerMode(null);
+      showToast(`تم استيراد وتسكين (${added.length}) كوادر بنجاح ✓`);
+    }
+  };
+
+  // حالات اللوحة المنزلقة للبوصلة التربوية (خاص بالإدارة التربوية)
+  const tarbawiFocus = db.systemConfig?.tarbawiWeeklyFocus || INITIAL_STATE.systemConfig.tarbawiWeeklyFocus;
+  const [focusTitle, setFocusTitle] = useState(tarbawiFocus.title || "");
+  const [focusBook, setFocusBook] = useState(tarbawiFocus.bookTitle || "");
+  const [focusHint, setFocusHint] = useState(tarbawiFocus.hint || "");
+  const handleSaveTarbawiFocus = e => {
+    e.preventDefault();
+    setDb(prev => ({
+      ...prev,
+      systemConfig: {
+        ...prev.systemConfig,
+        tarbawiWeeklyFocus: {
+          title: focusTitle.trim(),
+          bookTitle: focusBook.trim(),
+          hint: focusHint.trim()
+        }
+      }
+    }));
+    setDrawerMode(null);
+    showToast("تم تحديث بوصلة الفترة والمقرر القرائي للإدارة التربوية ✓");
+  };
+
+  // حالات اللوحة المنزلقة لإعداد المحاضرة والاختبار
+  const defaultCurr = db.weeklyCurriculums?.default || INITIAL_STATE.weeklyCurriculums.default;
+  const [lecTitle, setLecTitle] = useState(defaultCurr.lectureTitle || "");
+  const [lecDesc, setLecDesc] = useState(defaultCurr.lectureDesc || "");
+  const [lecVideoType, setLecVideoType] = useState(defaultCurr.videoType || "youtube");
+  const [lecVideoUrl, setLecVideoUrl] = useState(defaultCurr.videoUrl || "");
+  const [lecQuestions, setLecQuestions] = useState(defaultCurr.questions || []);
+  const handleSaveCurriculumDrawer = e => {
+    e.preventDefault();
+    const updatedCurr = {
+      lectureTitle: lecTitle.trim(),
+      lectureDesc: lecDesc.trim(),
+      videoType: lecVideoType,
+      videoUrl: lecVideoUrl.trim(),
+      questions: lecQuestions
+    };
+    setDb(prev => ({
+      ...prev,
+      weeklyCurriculums: {
+        ...(prev.weeklyCurriculums || {}),
+        default: updatedCurr
+      }
+    }));
+    setDrawerMode(null);
+    showToast("تم حفظ واعتماد مادة المحاضرة واختبار الاستيعاب ✓");
+  };
+
+  // عناصر القائمة الجانبية الثابتة (الشاشات الأربع المستقلة حسب الإجابة ١٦)
+  const navItems = [{
+    id: "overview",
+    icon: "🧭",
+    label: "١. نظرة عامة وتنبيهات",
+    sub: `${urgentCadresCount} حالات تحتاج متابعة`
+  }, {
+    id: "cadres",
+    icon: "👥",
+    label: "٢. جدول الكوادر والتقييم",
+    sub: `${deptCadres.length} كوادر في مسارك`
+  }, {
+    id: "tasks",
+    icon: isTarbawi ? "🌱" : "📋",
+    label: "٣. إدارة المحتوى والمهام",
+    sub: `${deptTasksList.length} من ${currentDept.maxTotalTasks || 6} مهمات نشطة`
+  }, {
+    id: "reports",
+    icon: "📊",
+    label: "٤. التقارير",
+    sub: `متوسط المسار ${deptAveragePct}٪`
+  }];
+  const accentBadgeClass = isTarbawi ? "bg-emerald-800 text-white" : "bg-stone-900 text-white";
+  const accentBarClass = isTarbawi ? "bg-emerald-500" : "bg-orange-500";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "min-h-screen bg-[#F6F5F2] flex flex-col lg:flex-row"
+  }, /*#__PURE__*/React.createElement("aside", {
+    className: "w-full lg:w-72 bg-white border-b lg:border-b-0 lg:border-l border-stone-200/80 lg:min-h-screen lg:sticky lg:top-0 lg:h-screen flex flex-col justify-between p-5 sm:p-6 z-30"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between lg:block space-y-2"
+  }, /*#__PURE__*/React.createElement(MadyanWordmark, {
+    size: "text-2xl sm:text-3xl"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: `inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black ${accentBadgeClass}`
+  }, /*#__PURE__*/React.createElement("span", null, currentDept.icon), /*#__PURE__*/React.createElement("span", null, "بوابة ", currentDept.name))), /*#__PURE__*/React.createElement("nav", {
+    className: "grid grid-cols-2 lg:grid-cols-1 gap-2"
+  }, navItems.map(item => {
+    const active = activeScreen === item.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: item.id,
+      onClick: () => setActiveScreen(item.id),
+      className: `text-right p-3.5 rounded-2xl transition flex items-start gap-3 border ${active ? isTarbawi ? "bg-emerald-900 text-white border-emerald-900 shadow-md" : "bg-stone-900 text-white border-stone-900 shadow-md" : "bg-stone-50/80 text-stone-700 border-stone-200/60 hover:bg-stone-100"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-lg leading-none mt-0.5"
+    }, item.icon), /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-black truncate"
+    }, item.label), /*#__PURE__*/React.createElement("div", {
+      className: `text-[10px] mt-0.5 truncate ${active ? "text-stone-300" : "text-stone-400"}`
+    }, item.sub)));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "hidden lg:flex flex-col gap-3 pt-6 border-t border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[10px] font-bold text-stone-400"
+  }, "نطاق الرؤية والصلاحية"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-800"
+  }, currentDept.icon, " معزول تماماً لـ ", currentDept.shortName)), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-bold text-stone-600 truncate"
+  }, currentUser.name), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-black transition"
+  }, "خروج")))), /*#__PURE__*/React.createElement("main", {
+    className: "flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10"
+  }, activeScreen === "overview" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8"
+  }, /*#__PURE__*/React.createElement("section", {
+    className: "bg-stone-900 text-white rounded-[32px] p-6 sm:p-8 shadow-lg space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-start justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5 max-w-2xl"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-block text-xs font-black px-3 py-1 rounded-full bg-orange-500/20 text-orange-300 border border-orange-400/30"
+  }, "📢 التعميم السياسي الأحدث من الإدارة العليا"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-lg sm:text-xl font-black text-white"
+  }, latestExecutiveBulletin ? latestExecutiveBulletin.title : "لا توجد تعميمات سياسية نشطة حالياً"), latestExecutiveBulletin && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs sm:text-sm text-stone-300 leading-relaxed"
+  }, latestExecutiveBulletin.content)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("dept_directive"),
+    className: "px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-black border border-white/15 transition"
+  }, "+ إصدار توجيه فني لمسار ", currentDept.shortName)), /*#__PURE__*/React.createElement("div", {
+    className: "pt-5 border-t border-white/10 space-y-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-300"
+  }, "شريط التقدم العام لـ «", currentDept.name, "» للفترة الحالية (منفصل تماماً عن باقي الإدارات)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-white font-black"
+  }, deptAveragePct, "٪")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-3 rounded-full bg-white/10 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${deptAveragePct}%`
+    },
+    className: `h-full rounded-full ${accentBarClass}`
+  })))), /*#__PURE__*/React.createElement("section", {
+    className: "grid grid-cols-1 md:grid-cols-3 gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "١. الحالات الحرجة والتقييم المطلوب"), /*#__PURE__*/React.createElement("div", {
+    className: `text-2xl font-black ${urgentCadresCount > 0 ? "text-rose-600" : "text-emerald-700"}`
+  }, urgentCadresCount > 0 ? `${urgentCadresCount} كوادر بحاجة لتدخل` : "لا توجد حالات متأخرة"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setPriorityFilter("urgent");
+      setActiveScreen("cadres");
+    },
+    className: "text-xs font-black text-rose-600 hover:text-rose-700 text-right"
+  }, "فرز الحالات العاجلة وتقييمها ←")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "٢. حصة المهمات النشطة في الإدارة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-black text-stone-900"
+  }, deptTasksList.length, " من ", currentDept.maxTotalTasks || 6, " مهمات"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setActiveScreen("tasks"),
+    className: "text-xs font-black text-orange-600 hover:text-orange-700 text-right"
+  }, "إدارة المحتوى والمهام ←")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-4"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "٣. الكوادر الخاضعون لإدارتك"), /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-black text-stone-900"
+  }, deptCadres.length, " كادر مسجل"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setPriorityFilter("all");
+      setActiveScreen("cadres");
+    },
+    className: "text-xs font-black text-stone-900 hover:text-orange-600 text-right"
+  }, "فتح جدول الكوادر والتقييم ←"))), /*#__PURE__*/React.createElement("section", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "نظام الأولويات الثلاث لتوجيه الانتباه"), /*#__PURE__*/React.createElement("h2", {
+    className: "text-lg font-black text-stone-900"
+  }, "🎯 متابعة كوادر «", currentDept.name, "» حسب الأولوية"))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, cadresWithDeptMetrics.map(({
+    cadre,
+    deptMetrics
+  }) => {
+    const isUrgent = deptMetrics.priorityLevel === "urgent";
+    const isActive = deptMetrics.priorityLevel === "active";
+
+    // تطبيق الإجابة ١٨ حرفياً:
+    // ١. إبراز بصري قوي للمتأخر والعاجل
+    // ٢. بروز متوسط للمطلوب اليوم
+    // ٣. تهدئة بصرية كاملة (لون باهت هادئ) لكل ما تم إنجازه وانتهى
+    const cardStyle = isUrgent ? "bg-white border-2 border-rose-400 shadow-md" : isActive ? "bg-white border border-stone-300 shadow-sm" : "bg-stone-100/70 border border-stone-200/60 opacity-65";
+    return /*#__PURE__*/React.createElement("div", {
+      key: cadre.id,
+      className: `rounded-3xl p-5 transition flex flex-wrap items-center justify-between gap-4 ${cardStyle}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 flex-wrap"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-sm font-black text-stone-900"
+    }, cadre.name), /*#__PURE__*/React.createElement("span", {
+      className: `text-[10px] font-black px-2.5 py-0.5 rounded-full ${isUrgent ? "bg-rose-100 text-rose-800" : isActive ? "bg-amber-100 text-amber-900" : "bg-stone-200 text-stone-600"}`
+    }, isUrgent ? deptMetrics.pendingManagerEvalCount > 0 ? `ينتظر تقييم المدير (${deptMetrics.pendingManagerEvalCount})` : "متأخر - يتطلب متابعة" : isActive ? `قيد الإنجاز (${deptMetrics.pendingCount} متبقية)` : "✓ مكتمل بالكامل")), /*#__PURE__*/React.createElement("div", {
+      className: "text-xs text-stone-500"
+    }, cadre.unit, " • ", cadre.jobTitle)), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3 min-w-[180px]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 h-2.5 rounded-full bg-stone-200 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${deptMetrics.scorePct}%`
+      },
+      className: `h-full rounded-full ${isUrgent ? "bg-rose-500" : isTarbawi ? "bg-emerald-600" : "bg-orange-500"}`
+    })), /*#__PURE__*/React.createElement("span", {
+      className: "text-sm font-black text-stone-900"
+    }, deptMetrics.scorePct, "٪")), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        setSelectedCadreId(cadre.id);
+        setDrawerMode("evaluate_cadre");
+      },
+      className: `px-4 py-2 rounded-2xl text-xs font-black transition ${isUrgent ? "bg-rose-600 text-white hover:bg-rose-700" : "bg-stone-900 text-white hover:bg-stone-800"}`
+    }, "📋 تقييم وفحص المهام"));
+  })))), activeScreen === "cadres" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "تقييم ومتابعة المسار المعزول"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-xl font-black text-stone-900"
+  }, "👥 جدول كوادر «", currentDept.name, "» (", filteredCadres.length, ")")), isHr && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("hr_add_cadre"),
+    className: "px-4 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-sm"
+  }, "+ إضافة كادر وتسكينه"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("hr_bulk_import"),
+    className: "px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+  }, "📥 استيراد جماعي"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("hr_unit_invites"),
+    className: "px-4 py-2.5 rounded-2xl bg-white border border-stone-300 text-stone-800 text-xs font-black"
+  }, "🔗 رموز انضمام الوحدات"))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-4 border border-stone-200/80 shadow-sm flex flex-wrap items-center justify-between gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5"
+  }, [{
+    id: "all",
+    label: "كل الأولويات"
+  }, {
+    id: "urgent",
+    label: "🔴 عاجل / ينتظر تقييم المدير"
+  }, {
+    id: "active",
+    label: "🔵 مطلوب اليوم"
+  }, {
+    id: "done",
+    label: "⚪ مكتمل"
+  }].map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.id,
+    onClick: () => setPriorityFilter(p.id),
+    className: `px-3 py-1.5 rounded-xl text-xs font-black transition ${priorityFilter === p.id ? "bg-stone-900 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`
+  }, p.label))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: unitFilter,
+    onChange: e => setUnitFilter(e.target.value),
+    className: "rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-bold text-stone-700"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "جميع الوحدات الأساسية"), units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name))), /*#__PURE__*/React.createElement("select", {
+    value: teamFilter,
+    onChange: e => setTeamFilter(e.target.value),
+    className: "rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-bold text-stone-700"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "جميع فرق العمل العابرة"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl border border-stone-200/80 shadow-sm overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-right text-xs"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "bg-stone-50 border-b border-stone-200 text-stone-500 font-black"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-4 px-4"
+  }, "الكادر والوحدة"), /*#__PURE__*/React.createElement("th", {
+    className: "py-4 px-4"
+  }, "فرق العمل العابرة"), /*#__PURE__*/React.createElement("th", {
+    className: "py-4 px-4"
+  }, "إنجاز مهمات الفترة"), /*#__PURE__*/React.createElement("th", {
+    className: "py-4 px-4"
+  }, "درجة ", currentDept.shortName, " فقط"), /*#__PURE__*/React.createElement("th", {
+    className: "py-4 px-4 text-left"
+  }, "الإجراء"))), /*#__PURE__*/React.createElement("tbody", {
+    className: "divide-y divide-stone-100"
+  }, filteredCadres.map(({
+    cadre,
+    deptMetrics
+  }) => {
+    const cadreTeams = teams.filter(t => (cadre.crossTeams || []).includes(t.id));
+    const isDone = deptMetrics.priorityLevel === "done";
+    return /*#__PURE__*/React.createElement("tr", {
+      key: cadre.id,
+      className: `hover:bg-stone-50/80 transition ${isDone ? "opacity-70" : ""}`
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "py-4 px-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-black text-stone-900 text-sm"
+    }, cadre.name), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] text-stone-500 mt-0.5"
+    }, cadre.unit, " • ", cadre.jobTitle)), /*#__PURE__*/React.createElement("td", {
+      className: "py-4 px-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1"
+    }, cadreTeams.length > 0 ? cadreTeams.map(t => /*#__PURE__*/React.createElement("span", {
+      key: t.id,
+      className: "px-2.5 py-0.5 rounded-lg bg-orange-50 text-orange-800 border border-orange-200 text-[11px] font-bold"
+    }, "🤝 ", t.name)) : /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-400"
+    }, "وحدة أساسية فقط"))), /*#__PURE__*/React.createElement("td", {
+      className: "py-4 px-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-black text-stone-800"
+    }, deptMetrics.completedCount, " من ", deptMetrics.applicableTasks.length, " مهمات"), deptMetrics.pendingManagerEvalCount > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "mr-2 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-black"
+    }, deptMetrics.pendingManagerEvalCount, " بانتظار تقييمك")), /*#__PURE__*/React.createElement("td", {
+      className: "py-4 px-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `text-sm font-black px-3 py-1 rounded-full ${deptMetrics.scorePct >= 80 ? "bg-emerald-100 text-emerald-800" : deptMetrics.scorePct >= 50 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800"}`
+    }, deptMetrics.scorePct, "٪")), /*#__PURE__*/React.createElement("td", {
+      className: "py-4 px-4 text-left"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        setSelectedCadreId(cadre.id);
+        setDrawerMode("evaluate_cadre");
+      },
+      className: "px-4 py-2 rounded-xl bg-stone-900 text-white font-black hover:bg-orange-600 transition"
+    }, "📋 تقييم وفحص")));
+  })))))), activeScreen === "tasks" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8"
+  }, /*#__PURE__*/React.createElement("section", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "مكتبة المهمات وحصة الإدارة المعتمدة من المنصة"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-xl font-black text-stone-900"
+  }, currentDept.icon, " إدارة المحتوى والمهام — ", currentDept.name)), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2"
+  }, isTarbawi && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("tarbawi_compass"),
+    className: "px-4 py-2.5 rounded-2xl bg-emerald-50 text-emerald-900 border border-emerald-200 text-xs font-black hover:bg-emerald-100"
+  }, "🧭 بوصلة الفترة والمقرر القرائي"), (currentDept.allowedTaskTypes || []).includes("lecture_quiz") && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDrawerMode("curriculum_builder"),
+    className: "px-4 py-2.5 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800"
+  }, "🎬 إعداد المحاضرة والاختبار"), /*#__PURE__*/React.createElement("button", {
+    onClick: openAddTaskDrawer,
+    className: "px-5 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-sm"
+  }, "+ إضافة مهمة جديدة للمسار"))), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-800"
+  }, "حصة المهمات المستخدمة: ", deptTasksList.length, " من أصل ", currentDept.maxTotalTasks || 6, " مهمات مسموحة للإدارة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-stone-500"
+  }, "الحد الأقصى المسموح إسناده للفرد الواحد من كل نوع مهمة: ", currentDept.maxPerTypePerCadre || 2, " مهمات")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5"
+  }, allowedTemplates.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t.id,
+    className: "text-[11px] font-bold px-2.5 py-1 rounded-xl bg-white border border-stone-200 text-stone-700"
+  }, t.icon, " ", t.title))))), /*#__PURE__*/React.createElement("section", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-6"
+  }, deptTasksList.map(task => {
+    const tpl = TASK_TEMPLATES_LIBRARY.find(t => t.id === task.templateType);
+    const isManagerEval = task.evalMode === "manager";
+    return /*#__PURE__*/React.createElement("div", {
+      key: task.id,
+      className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm flex flex-col justify-between space-y-5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start justify-between gap-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start gap-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-2xl"
+    }, task.icon || "📋"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+      className: "text-base font-black text-stone-900"
+    }, task.title), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-stone-500 mt-0.5"
+    }, task.subtitle))), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 flex-shrink-0"
+    }, "📅 ", task.dueDate || "مسار مستمر")), /*#__PURE__*/React.createElement("div", {
+      className: "p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 flex flex-wrap items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `text-xs font-black px-3 py-1 rounded-xl ${isManagerEval ? "bg-orange-100 text-orange-900 border border-orange-200" : "bg-emerald-50 text-emerald-900 border border-emerald-200"}`
+    }, isManagerEval ? "🛡️ يقيمها مدير القسم بنفسه" : "👤 يرصدها الكادر بنفسه"), /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] font-bold text-stone-500"
+    }, tpl ? `${tpl.icon} ${tpl.title}` : "مهمة تخصصية", task.targetScope === "unit" && ` • ${task.targetUnit}`, task.targetScope === "team" && " • فريق عابر")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between pt-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => openEditTaskDrawer(task),
+      className: "px-4 py-2 rounded-2xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800 transition"
+    }, "⚙️ تعديل المهمة وطريقة التقييم"), !task.isCoreAdmin && /*#__PURE__*/React.createElement("button", {
+      onClick: () => handleDeleteDeptTask(task.id),
+      className: "px-3 py-2 rounded-xl bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100"
+    }, "حذف")));
+  }))), activeScreen === "reports" && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-8"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-orange-600"
+  }, "تقارير الأداء المعزولة"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-xl font-black text-stone-900"
+  }, "📊 تقارير وإحصائيات «", currentDept.name, "»")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-3 gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "متوسط إنجاز المسار العام"), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl font-black text-stone-900"
+  }, deptAveragePct, "٪"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-stone-500"
+  }, "خاص بمهمات ", currentDept.shortName, " حصراً")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "الكوادر المكملون لمهام الفترة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl font-black text-emerald-700"
+  }, cadresWithDeptMetrics.filter(x => x.deptMetrics.priorityLevel === "done").length, " من ", deptCadres.length), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-stone-500"
+  }, "أتموا جميع واجبات المسار الحالية")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-stone-400"
+  }, "التوجيهات الفنية الصادرة"), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl font-black text-orange-600"
+  }, deptDirectives.length, " توجيهات"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-stone-500"
+  }, "خاصة بكوادر ", currentDept.shortName))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "text-base font-black text-stone-900"
+  }, "🗂️ أداء الوحدات التنظيمية في ", currentDept.shortName), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, units.map(u => {
+    const unitCadres = cadresWithDeptMetrics.filter(x => x.cadre.unit === u.name);
+    const avg = unitCadres.length ? Math.round(unitCadres.reduce((s, x) => s + x.deptMetrics.scorePct, 0) / unitCadres.length) : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: u.id,
+      className: "p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between text-xs font-black"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-800"
+    }, u.name, " (", unitCadres.length, " كوادر)"), /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-900"
+    }, avg, "٪")), /*#__PURE__*/React.createElement("div", {
+      className: "w-full h-2.5 rounded-full bg-stone-200 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${avg}%`
+      },
+      className: `h-full rounded-full ${accentBarClass}`
+    })));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl p-6 border border-stone-200/80 shadow-sm space-y-4"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "text-base font-black text-stone-900"
+  }, "📋 نسب الإنجاز حسب كل مهمة في ", currentDept.shortName), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, deptTasksList.map(task => {
+    const totalAssigned = cadresWithDeptMetrics.filter(x => x.deptMetrics.applicableTasks.some(t => t.id === task.id));
+    const doneCount = totalAssigned.filter(x => {
+      const st = x.deptMetrics.currentPeriodRec?.[task.id]?.status;
+      return st === "on_time" || st === "late";
+    }).length;
+    const rate = totalAssigned.length ? Math.round(doneCount / totalAssigned.length * 100) : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: task.id,
+      className: "p-4 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between text-xs font-black"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-800"
+    }, task.icon, " ", task.title), /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-900"
+    }, rate, "٪ (", doneCount, "/", totalAssigned.length, ")")), /*#__PURE__*/React.createElement("div", {
+      className: "w-full h-2.5 rounded-full bg-stone-200 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${rate}%`
+      },
+      className: `h-full rounded-full ${accentBarClass}`
+    })));
+  })))))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "evaluate_cadre" && Boolean(selectedCadre),
+    onClose: () => setDrawerMode(null),
+    badge: `سجل وتقييم ${currentDept.name}`,
+    title: selectedCadre ? `${selectedCadre.name} (${selectedCadre.unit})` : ""
+  }, selectedCadre && (() => {
+    const m = getCadreDeptMetrics(selectedCadre);
+    return /*#__PURE__*/React.createElement("div", {
+      className: "space-y-5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "p-4 rounded-2xl bg-stone-900 text-white flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs text-stone-300"
+    }, "درجة الكادر في ", currentDept.shortName), /*#__PURE__*/React.createElement("div", {
+      className: "text-2xl font-black mt-0.5"
+    }, m.scorePct, "٪")), /*#__PURE__*/React.createElement("div", {
+      className: "text-left text-xs text-stone-300"
+    }, /*#__PURE__*/React.createElement("div", null, "منجز: ", m.completedCount, " من ", m.applicableTasks.length), m.avgQuizPct !== null && isHr && /*#__PURE__*/React.createElement("div", null, "متوسط الاختبار: ", m.avgQuizPct, "٪"))), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-black text-stone-900"
+    }, "مهام الكادر في «", currentDept.name, "» (قيّم أو راجع الإنجاز):"), m.applicableTasks.map(task => {
+      const rec = m.currentPeriodRec?.[task.id] || {
+        status: "pending"
+      };
+      const isManagerEval = task.evalMode === "manager";
+      return /*#__PURE__*/React.createElement("div", {
+        key: task.id,
+        className: "p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-3"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-start justify-between gap-2"
+      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "text-xs font-black text-stone-900"
+      }, task.icon, " ", task.title), /*#__PURE__*/React.createElement("div", {
+        className: "text-[11px] text-stone-500 mt-0.5"
+      }, isManagerEval ? "🛡️ مهمة يقيمها مدير القسم بنفسه" : "👤 مهمة يرصدها الكادر بنفسه")), /*#__PURE__*/React.createElement("span", {
+        className: `text-[10px] font-black px-2.5 py-0.5 rounded-full ${rec.status === "on_time" ? "bg-emerald-100 text-emerald-800" : rec.status === "late" ? "bg-amber-100 text-amber-800" : "bg-stone-200 text-stone-600"}`
+      }, rec.status === "on_time" ? "✓ في الموعد" : rec.status === "late" ? "⏳ متأخر" : "• غير منجز")), rec.note && /*#__PURE__*/React.createElement("div", {
+        className: "text-[11px] bg-white p-2.5 rounded-xl border border-stone-200 text-stone-700"
+      }, "📌 ملاحظة الكادر: ", rec.note), /*#__PURE__*/React.createElement("div", {
+        className: "grid grid-cols-3 gap-1.5 pt-1"
+      }, /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => handleManagerEvaluateTask(selectedCadre.id, task.id, "on_time"),
+        className: `py-2 rounded-xl text-[11px] font-black border transition ${rec.status === "on_time" ? "bg-emerald-700 text-white border-emerald-700" : "bg-white text-stone-700 border-stone-200 hover:bg-emerald-50"}`
+      }, "✓ في الموعد"), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => handleManagerEvaluateTask(selectedCadre.id, task.id, "late"),
+        className: `py-2 rounded-xl text-[11px] font-black border transition ${rec.status === "late" ? "bg-amber-600 text-white border-amber-600" : "bg-white text-stone-700 border-stone-200 hover:bg-amber-50"}`
+      }, "⏳ متأخر"), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => handleManagerEvaluateTask(selectedCadre.id, task.id, "pending"),
+        className: `py-2 rounded-xl text-[11px] font-black border transition ${rec.status === "pending" ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-200 hover:bg-stone-100"}`
+      }, "• غير منجز")));
+    })), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setDrawerMode(null),
+      className: "w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+    }, "إغلاق لوحة التقييم ✓"));
+  })()), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "add_task" || drawerMode === "edit_task",
+    onClose: () => setDrawerMode(null),
+    badge: `مكتبة مهمات ${currentDept.name}`,
+    title: editingTaskKey ? "تعديل المهمة وطريقة التقييم" : "إضافة مهمة جديدة للمسار"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleSaveDeptTask,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-black text-stone-800 mb-1"
+  }, "١. نوع المهمة من المكتبة المتاحة لإدارتك"), /*#__PURE__*/React.createElement("select", {
+    value: taskTemplateType,
+    onChange: e => setTaskTemplateType(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+  }, allowedTemplates.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.icon, " ", t.title)))), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-2xl bg-orange-50/70 border border-orange-200 space-y-2.5"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-black text-orange-950"
+  }, "٢. طريقة رصد وتقييم هذه المهمة:"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 gap-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: `flex items-center justify-between p-3 rounded-xl border cursor-pointer ${taskEvalMode === "self" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black"
+  }, "👤 الكادر يعلم عليها بنفسه عند الإنجاز (رصد ذاتي)"), /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "taskEvalMode",
+    checked: taskEvalMode === "self",
+    onChange: () => setTaskEvalMode("self"),
+    className: "accent-orange-500"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: `flex items-center justify-between p-3 rounded-xl border cursor-pointer ${taskEvalMode === "manager" ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200"}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black"
+  }, "🛡️ مدير القسم هو من يقيمها بنفسه للكادر"), /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "taskEvalMode",
+    checked: taskEvalMode === "manager",
+    onChange: () => setTaskEvalMode("manager"),
+    className: "accent-orange-500"
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-4 gap-2"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الأيقونة"), /*#__PURE__*/React.createElement("select", {
+    value: taskIcon,
+    onChange: e => setTaskIcon(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-base text-center"
+  }, ["📋", "🎬", "📖", "📚", "🌿", "✨", "🤝", "📝", "🎯"].map(ic => /*#__PURE__*/React.createElement("option", {
+    key: ic,
+    value: ic
+  }, ic)))), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-3"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "عنوان المهمة"), /*#__PURE__*/React.createElement("input", {
+    value: taskTitle,
+    onChange: e => setTaskTitle(e.target.value),
+    placeholder: "عنوان واضح للمهمة...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold",
+    required: true
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الوصف المختصر"), /*#__PURE__*/React.createElement("input", {
+    value: taskSubtitle,
+    onChange: e => setTaskSubtitle(e.target.value),
+    placeholder: "سطر توضيحي يظهر للكادر...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "تاريخ الاستحقاق الفعلي (مسار مستمر بالتاريخ)"), /*#__PURE__*/React.createElement("input", {
+    value: taskDueDate,
+    onChange: e => setTaskDueDate(e.target.value),
+    placeholder: "مثال: ٢٥ نوفمبر ٢٠٢٦ أو مستمر يومياً",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "نطاق الإسناد (لمن توجه هذه المهمة؟)"), /*#__PURE__*/React.createElement("select", {
+    value: taskTargetScope,
+    onChange: e => setTaskTargetScope(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "جميع كوادر المسار"), /*#__PURE__*/React.createElement("option", {
+    value: "unit"
+  }, "وحدة تنظيمية محددة"), /*#__PURE__*/React.createElement("option", {
+    value: "team"
+  }, "فريق عمل عابر للوحدات"), /*#__PURE__*/React.createElement("option", {
+    value: "custom"
+  }, "كوادر محددين بالاسم"))), taskTargetScope === "unit" && /*#__PURE__*/React.createElement("select", {
+    value: taskTargetUnit,
+    onChange: e => setTaskTargetUnit(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+  }, units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name))), taskTargetScope === "team" && /*#__PURE__*/React.createElement("select", {
+    value: taskTargetTeamId,
+    onChange: e => setTaskTargetTeamId(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+  }, teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), taskTargetScope === "custom" && /*#__PURE__*/React.createElement("div", {
+    className: "max-h-36 overflow-y-auto space-y-1.5 p-2 rounded-2xl bg-stone-50 border border-stone-200"
+  }, deptCadres.map(c => {
+    const checked = taskTargetUserIds.includes(c.id);
+    return /*#__PURE__*/React.createElement("label", {
+      key: c.id,
+      className: "flex items-center justify-between p-2 rounded-xl bg-white border border-stone-200 text-xs font-bold cursor-pointer"
+    }, /*#__PURE__*/React.createElement("span", null, c.name, " (", c.unit, ")"), /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: checked,
+      onChange: () => {
+        setTaskTargetUserIds(prev => checked ? prev.filter(x => x !== c.id) : [...prev, c.id]);
+      },
+      className: "w-4 h-4 accent-stone-900"
+    }));
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+  }, "حفظ واعتماد المهمة ✓"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "dept_directive",
+    onClose: () => setDrawerMode(null),
+    badge: `توجيه فني معزول — ${currentDept.name}`,
+    title: "إصدار توجيه أو تكليف لكوادر مسارك"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handlePublishDirective,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "عنوان التوجيه الفني"), /*#__PURE__*/React.createElement("input", {
+    value: dirTitle,
+    onChange: e => setDirTitle(e.target.value),
+    placeholder: "عنوان التوجيه أو الإعلان...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "نص التوجيه"), /*#__PURE__*/React.createElement("textarea", {
+    rows: "4",
+    value: dirContent,
+    onChange: e => setDirContent(e.target.value),
+    placeholder: "اكتب تفاصيل التوجيه الفني الخاص بكوادر إدارتك...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs leading-relaxed",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "توجيه إلى:"), /*#__PURE__*/React.createElement("select", {
+    value: dirScope,
+    onChange: e => setDirScope(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-black"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "جميع كوادر ", currentDept.shortName), /*#__PURE__*/React.createElement("option", {
+    value: "unit"
+  }, "وحدة تنظيمية محددة"), /*#__PURE__*/React.createElement("option", {
+    value: "team"
+  }, "فريق عمل عابر للوحدات"))), dirScope === "unit" && /*#__PURE__*/React.createElement("select", {
+    value: dirUnit,
+    onChange: e => setDirUnit(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+  }, units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name))), dirScope === "team" && /*#__PURE__*/React.createElement("select", {
+    value: dirTeamId,
+    onChange: e => setDirTeamId(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-white px-3.5 py-2 text-xs font-bold"
+  }, teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black"
+  }, "📢 نشر التوجيه الفني لكوادر المسار"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "curriculum_builder",
+    onClose: () => setDrawerMode(null),
+    badge: "إدارة المادة المعرفية والاختبار",
+    title: "🎬 إعداد المحاضرة وأسئلة الاستيعاب"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleSaveCurriculumDrawer,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "عنوان المحاضرة"), /*#__PURE__*/React.createElement("input", {
+    value: lecTitle,
+    onChange: e => setLecTitle(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "وصف المحاضرة"), /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: lecDesc,
+    onChange: e => setLecDesc(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-2"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المصدر"), /*#__PURE__*/React.createElement("select", {
+    value: lecVideoType,
+    onChange: e => setLecVideoType(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-2 py-2.5 text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "youtube"
+  }, "يوتيوب غير مدرج"), /*#__PURE__*/React.createElement("option", {
+    value: "gdrive"
+  }, "جوجل درايف"), /*#__PURE__*/React.createElement("option", {
+    value: "mp4"
+  }, "ملف مباشر"))), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "رابط الفيديو"), /*#__PURE__*/React.createElement("input", {
+    value: lecVideoUrl,
+    onChange: e => setLecVideoUrl(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-xs font-mono",
+    dir: "ltr",
+    required: true
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2.5 pt-2 border-t border-stone-100"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-stone-900"
+  }, "أسئلة الاختبار (", lecQuestions.length, ")"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setLecQuestions(prev => [...prev, {
+      id: "q_" + Date.now(),
+      text: "سؤال استيعاب جديد؟",
+      options: ["خيار ١", "خيار ٢", "خيار ٣", "خيار ٤"],
+      correctIndex: 0
+    }]),
+    className: "px-3 py-1 rounded-xl bg-stone-100 text-stone-800 text-[11px] font-black"
+  }, "+ سؤال")), lecQuestions.map((q, qIdx) => /*#__PURE__*/React.createElement("div", {
+    key: q.id || qIdx,
+    className: "p-3 rounded-2xl bg-stone-50 border border-stone-200 space-y-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: q.text,
+    onChange: e => setLecQuestions(prev => prev.map((item, idx) => idx === qIdx ? {
+      ...item,
+      text: e.target.value
+    } : item)),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-bold"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-1.5"
+  }, (q.options || []).map((opt, oIdx) => /*#__PURE__*/React.createElement("label", {
+    key: oIdx,
+    className: "flex items-center gap-1.5 bg-white p-1.5 rounded-lg border border-stone-200 text-[11px]"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: `lec_q_${qIdx}`,
+    checked: Number(q.correctIndex) === oIdx,
+    onChange: () => setLecQuestions(prev => prev.map((item, idx) => idx === qIdx ? {
+      ...item,
+      correctIndex: oIdx
+    } : item))
+  }), /*#__PURE__*/React.createElement("input", {
+    value: opt,
+    onChange: e => {
+      const val = e.target.value;
+      setLecQuestions(prev => prev.map((item, idx) => {
+        if (idx !== qIdx) return item;
+        const nextOpts = [...(item.options || [])];
+        nextOpts[oIdx] = val;
+        return {
+          ...item,
+          options: nextOpts
+        };
+      }));
+    },
+    className: "w-full bg-transparent focus:outline-none"
+  }))))))), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+  }, "حفظ واعتماد المحاضرة والاختبار ✓"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "tarbawi_compass",
+    onClose: () => setDrawerMode(null),
+    badge: "الإدارة التربوية",
+    title: "🧭 بوصلة الفترة والمقرر القرائي"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleSaveTarbawiFocus,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "القيمة التربوية الحالية"), /*#__PURE__*/React.createElement("input", {
+    value: focusTitle,
+    onChange: e => setFocusTitle(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المقرر القرائي المعتمد"), /*#__PURE__*/React.createElement("input", {
+    value: focusBook,
+    onChange: e => setFocusBook(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "رسالة تذكيرية للكوادر"), /*#__PURE__*/React.createElement("textarea", {
+    rows: "3",
+    value: focusHint,
+    onChange: e => setFocusHint(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3 text-xs"
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl tarbawi-gradient text-white text-xs font-black"
+  }, "حفظ البوصلة التربوية ✓"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "hr_add_cadre",
+    onClose: () => setDrawerMode(null),
+    badge: "صلاحية إدارة الموارد البشرية",
+    title: "إضافة كادر جديد وتسكينه"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleHrCreateCadre,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الاسم الكامل للكادر"), /*#__PURE__*/React.createElement("input", {
+    value: hrCadreName,
+    onChange: e => setHrCadreName(e.target.value),
+    placeholder: "مثال: خالد العتيبي",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-bold",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المسمى الوظيفي"), /*#__PURE__*/React.createElement("input", {
+    value: hrCadreTitle,
+    onChange: e => setHrCadreTitle(e.target.value),
+    placeholder: "منسق وحدة",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "الوحدة الأساسية"), /*#__PURE__*/React.createElement("select", {
+    value: hrCadreUnit,
+    onChange: e => setHrCadreUnit(e.target.value),
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold"
+  }, units.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.name
+  }, u.name))))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-black text-stone-800"
+  }, "ضمه لفرق عمل أو لجان عابرة للوحدات (اختياري):"), teams.map(t => {
+    const checked = hrCadreTeams.includes(t.id);
+    return /*#__PURE__*/React.createElement("label", {
+      key: t.id,
+      className: "flex items-center justify-between p-3 rounded-2xl bg-stone-50 border border-stone-200 cursor-pointer"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-bold text-stone-800"
+    }, "🤝 ", t.name), /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: checked,
+      onChange: () => {
+        setHrCadreTeams(prev => checked ? prev.filter(x => x !== t.id) : [...prev, t.id]);
+      },
+      className: "w-4 h-4 accent-orange-600"
+    }));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-700 mb-1"
+  }, "اسم المستخدم"), /*#__PURE__*/React.createElement("input", {
+    value: hrCadreUsername,
+    onChange: e => setHrCadreUsername(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold",
+    dir: "ltr",
+    required: true
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-[11px] font-bold text-stone-700 mb-1"
+  }, "كلمة المرور المؤقتة"), /*#__PURE__*/React.createElement("input", {
+    value: hrCadrePassword,
+    onChange: e => setHrCadrePassword(e.target.value),
+    className: "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-mono font-bold",
+    dir: "ltr",
+    required: true
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl madyan-gradient text-white text-xs font-black"
+  }, "+ إنشاء حساب الكادر وتسكينه"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "hr_bulk_import",
+    onClose: () => setDrawerMode(null),
+    badge: "إدارة الموارد البشرية",
+    title: "استيراد جماعي للكوادر وتسكينهم"
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: handleHrBulkImport,
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-stone-600 leading-relaxed"
+  }, "أدخل كل كادر في سطر مستقل بالصيغة التالية:", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "الاسم الكامل ، اسم المستخدم ، اسم الوحدة")), /*#__PURE__*/React.createElement("textarea", {
+    rows: "7",
+    value: hrBulkText,
+    onChange: e => setHrBulkText(e.target.value),
+    placeholder: "سعد الدوسري، saad، وحدة التخطيط الاستراتيجي\nمعاذ الشمري، muath، وحدة العمل الميداني",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 p-3.5 text-xs font-bold"
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    className: "w-full py-3.5 rounded-2xl bg-stone-900 text-white text-xs font-black"
+  }, "📥 استيراد وتوليد الحسابات"))), /*#__PURE__*/React.createElement(SlideOverDrawer, {
+    isOpen: drawerMode === "hr_unit_invites",
+    onClose: () => setDrawerMode(null),
+    badge: "إدارة الموارد البشرية",
+    title: "رموز وروابط انضمام الوحدات"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, units.map(u => /*#__PURE__*/React.createElement("div", {
+    key: u.id,
+    className: "p-4 rounded-2xl bg-stone-50 border border-stone-200 flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-900"
+  }, u.name), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-mono font-bold text-orange-700 mt-1",
+    dir: "ltr"
+  }, u.inviteCode)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      navigator.clipboard.writeText(`${window.location.origin}/?join=${u.inviteCode}`);
+      showToast(`تم نسخ رابط انضمام (${u.name}) ✓`);
+    },
+    className: "px-3.5 py-2 rounded-xl bg-stone-900 text-white text-xs font-black"
+  }, "نسخ الرابط"))))));
+}
+
+// ============================================================================
+// 15. CLOUD DATABASE SETUP MODAL
+// ============================================================================
+function CloudSetupModal({
+  isOpen,
+  onClose,
+  cloudConfig,
+  cloudStatus,
+  cloudError,
+  lastSyncAt,
+  onSaveConfig,
+  onDisconnect,
+  showToast
+}) {
+  const [url, setUrl] = useState(cloudConfig?.supabaseUrl || "");
+  const [anonKey, setAnonKey] = useState(cloudConfig?.supabaseAnonKey || "");
+  useEffect(() => {
+    if (isOpen) {
+      setUrl(cloudConfig?.supabaseUrl || "");
+      setAnonKey(cloudConfig?.supabaseAnonKey || "");
+    }
+  }, [isOpen, cloudConfig]);
+  if (!isOpen) return null;
+  const copySql = () => {
+    navigator.clipboard.writeText(SQL_SCHEMA_SNIPPET);
+    showToast("تم نسخ كود إنشاء جدول SQL! الصقه في Supabase SQL Editor واضغط Run ✓");
+  };
+  return /*#__PURE__*/React.createElement(ModalContainer, {
+    isOpen: isOpen,
+    onClose: onClose,
+    badge: "Full-Stack Cloud Architecture (Supabase + GitHub + Netlify)",
+    title: "☁️ إعداد ومزامنة قاعدة البيانات الحقيقية (Supabase PostgreSQL)",
+    maxWidth: "max-w-2xl"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `p-4 rounded-2xl border text-xs space-y-1 ${cloudStatus === "connected" ? "bg-emerald-50 border-emerald-300 text-emerald-900" : cloudStatus === "error" ? "bg-rose-50 border-rose-300 text-rose-900" : "bg-stone-50 border-stone-200 text-stone-700"}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-black text-sm"
+  }, cloudStatus === "connected" ? `✅ متصل فعلياً بقاعدة بيانات Supabase (آخر مزامنة: ${lastSyncAt || "الآن"})` : cloudStatus === "error" ? "⚠️ تعذر إتمام المزامنة مع Supabase" : "ℹ️ يعمل التطبيق حالياً بالذاكرة المحلية أو عبر متغيرات البيئة في Netlify"), cloudError && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-rose-700 mt-1"
+  }, cloudError)), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-black text-stone-900"
+  }, "1️⃣ الخطوة الأولى: تهيئة الجدول في Supabase SQL Editor"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: copySql,
+    className: "px-3 py-1.5 rounded-xl bg-stone-900 text-white text-[11px] font-bold hover:bg-orange-600 transition"
+  }, "📋 نسخ كود الـ SQL")), /*#__PURE__*/React.createElement("pre", {
+    className: "text-[11px] bg-stone-900 text-emerald-300 p-3 rounded-xl overflow-x-auto font-mono",
+    dir: "ltr"
+  }, SQL_SCHEMA_SNIPPET)), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-black text-stone-900"
+  }, "2️⃣ الخطوة الثانية: أدخل بيانات مشروعك من (Supabase Project Settings → API)"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "رابط المشروع (Supabase Project URL)"), /*#__PURE__*/React.createElement("input", {
+    value: url,
+    onChange: e => setUrl(e.target.value),
+    placeholder: "https://xxxxxxxxxxxx.supabase.co",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono font-bold",
+    dir: "ltr"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-bold text-stone-700 mb-1"
+  }, "المفتاح العام (Supabase anon / public Key)"), /*#__PURE__*/React.createElement("input", {
+    value: anonKey,
+    onChange: e => setAnonKey(e.target.value),
+    placeholder: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    className: "w-full rounded-2xl border border-stone-200 bg-stone-50 px-3.5 py-2.5 text-xs font-mono font-bold",
+    dir: "ltr"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-stone-100"
+  }, cloudConfig?.supabaseUrl ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onDisconnect,
+    className: "px-4 py-2.5 rounded-2xl bg-rose-50 text-rose-700 text-xs font-bold"
+  }, "فصل الاتصال السحابي") : /*#__PURE__*/React.createElement("div", null), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClose,
+    className: "px-4 py-2.5 rounded-2xl bg-stone-100 text-stone-700 text-xs font-bold"
+  }, "إغلاق"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      if (!url.trim() || !anonKey.trim()) {
+        showToast("يرجى إدخال Project URL و Anon Key أولاً.");
+        return;
+      }
+      onSaveConfig(url, anonKey);
+      onClose();
+    },
+    className: "px-6 py-2.5 rounded-2xl madyan-gradient text-white text-xs font-black shadow-md"
+  }, "☁️ حفظ الاتصال ومزامنة البيانات الآن")))));
+}
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(/*#__PURE__*/React.createElement(ErrorBoundary, null, /*#__PURE__*/React.createElement(App, null)));
